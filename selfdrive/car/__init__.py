@@ -7,7 +7,8 @@ from common.numpy_fast import clip, interp
 from typing import Dict
 
 # kg of standard extra cargo to count for drive, gas, etc...
-STD_CARGO_KG = 136.
+# STD_CARGO_KG = 136.
+STD_CARGO_KG = 120.
 
 ButtonType = car.CarState.ButtonEvent.Type
 EventName = car.CarEvent.EventName
@@ -43,7 +44,8 @@ def gen_empty_fingerprint():
 class CivicParams:
   MASS = 1326. + STD_CARGO_KG
   WHEELBASE = 2.70
-  CENTER_TO_FRONT = WHEELBASE * 0.4
+#   CENTER_TO_FRONT = WHEELBASE * 0.4
+  CENTER_TO_FRONT = WHEELBASE * 0.51 # weight distribution of RWD is 48:52
   CENTER_TO_REAR = WHEELBASE - CENTER_TO_FRONT
   ROTATIONAL_INERTIA = 2500
   TIRE_STIFFNESS_FRONT = 192150
