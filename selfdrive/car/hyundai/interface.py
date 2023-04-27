@@ -187,9 +187,11 @@ class CarInterface(CarInterfaceBase):
       ret.steerRatio = 16.
       tire_stiffness_factor = 0.65
     elif candidate == CAR.IONIQ_5:
-      ret.mass = 2012 + STD_CARGO_KG
+      # ret.mass = 2012 + STD_CARGO_KG
+      ret.mass = 2085 + STD_CARGO_KG # AWD 2085kg from https://www.hyundai.com/kr/ko/e/vehicles/ioniq5/spec
       ret.wheelbase = 3.0
-      ret.steerRatio = 16.
+      # ret.steerRatio = 16.
+      ret.steerRatio = 14.3 # 14.26 from https://www.hyundainews.com/assets/documents/original/48957-2022IONIQ5ProductGuidespecsv2120621.pdf
       tire_stiffness_factor = 0.65
     elif candidate == CAR.KIA_SPORTAGE_HYBRID_5TH_GEN:
       ret.mass = 1767. + STD_CARGO_KG  # SX Prestige trim support only
