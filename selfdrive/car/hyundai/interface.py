@@ -133,6 +133,13 @@ class CarInterface(CarInterfaceBase):
       ret.mass = 1870. + STD_CARGO_KG  # weight from Limited trim - the only supported trim
       ret.wheelbase = 3.000
       ret.steerRatio = 14.2  # steering ratio according to Hyundai News https://www.hyundainews.com/assets/documents/original/48035-2022SantaCruzProductGuideSpecsv2081521.pdf
+    elif candidate == CAR.IONIQ_5:
+      # ret.mass = 2012 + STD_CARGO_KG
+      ret.mass = 2085 + STD_CARGO_KG # AWD 2085kg from https://www.hyundai.com/kr/ko/e/vehicles/ioniq5/spec
+      ret.wheelbase = 3.0
+      # ret.steerRatio = 16.
+      ret.steerRatio = 14.26*1.1 # from https://www.hyundainews.com/assets/documents/original/48957-2022IONIQ5ProductGuidespecsv2120621.pdf
+      tire_stiffness_factor = 0.70 # 0.65
 
     # Kia
     elif candidate == CAR.KIA_SORENTO:
@@ -186,13 +193,6 @@ class CarInterface(CarInterfaceBase):
       ret.wheelbase = 2.9
       ret.steerRatio = 16.
       tire_stiffness_factor = 0.65
-    elif candidate == CAR.IONIQ_5:
-      # ret.mass = 2012 + STD_CARGO_KG
-      ret.mass = 2085 + STD_CARGO_KG # AWD 2085kg from https://www.hyundai.com/kr/ko/e/vehicles/ioniq5/spec
-      ret.wheelbase = 3.0
-      # ret.steerRatio = 16.
-      ret.steerRatio = 14.26*1.1 # from https://www.hyundainews.com/assets/documents/original/48957-2022IONIQ5ProductGuidespecsv2120621.pdf
-      tire_stiffness_factor = 0.70 # 0.65
     elif candidate == CAR.KIA_SPORTAGE_HYBRID_5TH_GEN:
       ret.mass = 1767. + STD_CARGO_KG  # SX Prestige trim support only
       ret.wheelbase = 2.756
@@ -295,8 +295,12 @@ class CarInterface(CarInterfaceBase):
       ret.flags |= HyundaiFlags.ALT_LIMITS.value
       ret.safetyConfigs[-1].safetyParam |= Panda.FLAG_HYUNDAI_ALT_LIMITS
 
-    ret.centerToFront = ret.wheelbase * 0.51 # 0.4
-
+    if candidate == CAR.IONIQ_5:
+      ret.centerToFront = ret.wheelbase * 0.51 
+      #CENTER_TO_FRONT = WHEELBASE * 0.51 # weight distribution of IONIQ5 RWD is 48:52
+    else:
+      ret.centerToFront = ret.wheelbase * 0.4
+  
     # TODO: start from empirically derived lateral slip stiffness for the civic and scale by
     # mass and CG position, so all cars will have approximately similar dyn behaviors
     ret.tireStiffnessFront, ret.tireStiffnessRear = scale_tire_stiffness(ret.mass, ret.wheelbase, ret.centerToFront,
