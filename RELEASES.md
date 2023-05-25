@@ -1,3 +1,7 @@
+Version 0.9.2.1 (2023-05-25)
+========================
+* Parameter tuning for IONIQ 5
+
 Version 0.9.2 (2023-05-22)
 ========================
 * New driving model
