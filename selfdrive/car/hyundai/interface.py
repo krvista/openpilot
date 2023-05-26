@@ -137,9 +137,8 @@ class CarInterface(CarInterfaceBase):
       # ret.mass = 2012 + STD_CARGO_KG
       ret.mass = 2085 + STD_CARGO_KG # AWD 2085kg from https://www.hyundai.com/kr/ko/e/vehicles/ioniq5/spec
       ret.wheelbase = 3.0
-      # ret.steerRatio = 16.
-      ret.steerRatio = 14.26*1.1 # from https://www.hyundainews.com/assets/documents/original/48957-2022IONIQ5ProductGuidespecsv2120621.pdf
-      tire_stiffness_factor = 0.65
+      ret.steerRatio = 16. # 14.26 from https://www.hyundainews.com/assets/documents/original/48957-2022IONIQ5ProductGuidespecsv2120621.pdf
+      tire_stiffness_factor = 0.60
 
     # Kia
     elif candidate == CAR.KIA_SORENTO:
