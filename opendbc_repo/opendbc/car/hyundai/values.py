@@ -349,7 +349,7 @@ class CAR(Platforms):
   )
   HYUNDAI_IONIQ_6_N = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Ioniq 6N 2026", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_q]))],
-    CarSpecs(mass=2175, wheelbase=2.97, steerRatio=12.54, tireStiffnessFactor=0.65),
+    CarSpecs(mass=2175, wheelbase=2.97, steerRatio=12.54, tireStiffnessFactor=0.75),
     flags=HyundaiFlags.EV | HyundaiFlags.CANFD_NO_RADAR_DISABLE,
     dbc_dict={Bus.pt: "hyundai_canfd_generated", Bus.radar: "hyundai_canfd_generated"},
   )
