@@ -108,11 +108,11 @@ class CarInterface(CarInterfaceBase):
         ret.flags |= HyundaiFlags.HAS_LDA_BUTTON.value
 
     # Common lateral control setup
-    # IONIQ 6 N 
+    # Hyundai IONIQ 6 N specific configuration
     if candidate == CAR.HYUNDAI_IONIQ_6_N:
-      ret.mass = 2175.0 
+      ret.mass = 2175.0 # Curb weight including battery and N-specific parts
       ret.wheelbase = 2.97
-      ret.steerRatio = 14.27  
+      ret.steerRatio = 12.54  
       ret.tireStiffnessFactor = 0.65
       
       # Force CAN-FD LKA steering flag for HDA2 compatibility
