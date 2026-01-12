@@ -142,6 +142,17 @@ class CarInterface(CarInterfaceBase):
     elif ret.flags & HyundaiFlags.FCEV:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.FCEV_GAS.value
 
+    # 아이오닉 6 N 전용 설정 추가
+    if candidate == CAR.HYUNDAI_IONIQ_6_N:
+      ret.mass = 2175.0  # 배터리 및 N 전용 부품 포함 공차중량 (로그 기반 수정 가능)
+      ret.wheelbase = 2.97
+      ret.steerRatio = 14.27  # N 모델의 빠른 조향비 반영
+      ret.tireStiffnessFactor = 0.65
+      
+      # HDA2 및 CAN-FD 조향을 위한 플래그 강제 설정 (필요 시)
+      # lka_steering이 정상 감지되지 않을 경우를 대비해 여기서 안전하게 설정합니다.
+      ret.flags |= HyundaiFlags.CANFD_LKA_STEERING.value
+      
     # Car specific configuration overrides
 
     if candidate == CAR.KIA_OPTIMA_G4_FL:
