@@ -1070,13 +1070,22 @@ FW_VERSIONS = {
   },
   CAR.HYUNDAI_IONIQ_6_N: {
     (Ecu.fwdRadar, 0x7d0, None): [
-      b'\xf1\x00CE__ RDR -----      1.00 1.01 99110-JD000         ', # from 2026MY HYUNDAI IONIQ 6 N (CE1N) 
+      b'\xf1\x00CE__ RDR -----      1.00 1.01 99110-JD000         ',
+      b'\xf1\x8b %\x11\x04', # from 2026MY HYUNDAI IONIQ 6 N (CE1N) 
     ],
     (Ecu.adas, 0x730, None): [
         b'\xf1\x00CENFFBL6 1.00 1.01 250925', # from 2026MY HYUNDAI IONIQ 6 N (CE1N) 
     ],
     (Ecu.fwdCamera, 0x7c4, None): [
       b'\xf1\x00CE  MFC  AT KOR LHD 1.00 1.00 99211-JD000 250716', # from 2026MY HYUNDAI IONIQ 6 N (CE1N)
+    ],
+    (Ecu.combinationMeter, 0x7c6, None): [
+      b'\xf1\x004B1',
+      b'\xf1\x10', # from 2026MY HYUNDAI IONIQ 6 N (CE1N) 
+    ],
+    (Ecu.hvac, 0x7b3, None): [
+      b"\xf1\x00CE1   97255-JD000CONTROL ASS'Y-DATC  1.01.10_R2.0_v24.11.01   ",
+      b'\xf1\x10\x07\x00\x00\x00', # from 2026MY HYUNDAI IONIQ 6 N (CE1N) 
     ],
   },
   CAR.HYUNDAI_TUCSON_4TH_GEN: {
