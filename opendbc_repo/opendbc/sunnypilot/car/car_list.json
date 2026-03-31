@@ -1567,6 +1567,14 @@
     ],
     "package": "Highway Driving Assist II"
   },
+  "Hyundai Ioniq 6 N (with HDA II) 2026": {
+      "platform": "HYUNDAI_IONIQ_6_N",
+      "make": "Hyundai",
+      "brand": "hyundai",
+      "model": "Ioniq 6 N (with HDA II)",
+      "year": ["2026"],
+      "package": "Smart Cruise Control (SCC)"
+  },  
   "Hyundai Ioniq Electric 2019": {
     "platform": "HYUNDAI_IONIQ_EV_LTD",
     "make": "Hyundai",
