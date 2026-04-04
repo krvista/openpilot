@@ -236,8 +236,13 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
 
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
-    ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
-    ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
+    if self.CP.flags & HyundaiFlags.CANFD_ALT_DOORS_BLINKERS:
+      ret.doorOpen = any([cp.vl["DOORS_ALT"]["DRIVER_DOOR"], cp.vl["DOORS_ALT"]["PASSENGER_DOOR"],
+                          cp.vl["DOORS_ALT"]["DRIVER_REAR_DOOR"], cp.vl["DOORS_ALT"]["PASSENGER_REAR_DOOR"]])
+      ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS_ALT"]["DRIVER_SEATBELT"] == 0
+    else:
+      ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
+      ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
 
     gear = cp.vl[self.gear_msg_canfd]["GEAR"]
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
@@ -265,8 +270,12 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       if not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
         self.msg_161, self.msg_162, self.msg_1b5 = map(copy.copy, (cp_cam.vl["CCNC_0x161"], cp_cam.vl["CCNC_0x162"], cp_cam.vl["FR_CMR_03_50ms"]))
         self.cruise_info = copy.copy((cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp).vl["SCC_CONTROL"])
-    ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS"][f"LEFT_LAMP{alt}"],
-                                                                      cp.vl["BLINKERS"][f"RIGHT_LAMP{alt}"])
+    if self.CP.flags & HyundaiFlags.CANFD_ALT_DOORS_BLINKERS:
+      ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS_ALT"]["LEFT_LAMP"],
+                                                                        cp.vl["BLINKERS_ALT"]["RIGHT_LAMP"])
+    else:
+      ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS"][f"LEFT_LAMP{alt}"],
+                                                                        cp.vl["BLINKERS"][f"RIGHT_LAMP{alt}"])
     if self.CP.enableBsm:
       ret.leftBlindspot = cp.vl["BLINDSPOTS_REAR_CORNERS"][f"FL_INDICATOR{alt}"] != 0
       ret.rightBlindspot = cp.vl["BLINDSPOTS_REAR_CORNERS"][f"FR_INDICATOR{alt}"] != 0
