@@ -337,10 +337,25 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
         # this message is 50Hz but the ECU frequently stops transmitting for ~0.5s
         ("CRUISE_BUTTONS", 1)
       ]
-    return {
+
+    # CCNC cars (Ioniq 5 N, Ioniq 6 N, etc.): ACCELERATOR and MANUAL_SPEED_LIMIT_ASSIST
+    # use +2 counter increment instead of +1, causing counter validation failure.
+    # Register them here so we can disable counter checking before CarState accesses them.
+    if CP.flags & HyundaiFlags.CCNC:
+      msgs += [("ACCELERATOR", 50), ("MANUAL_SPEED_LIMIT_ASSIST", 5)]
+
+    parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
     }
+
+    if CP.flags & HyundaiFlags.CCNC:
+      for addr in [0x35, 0x2E0]:  # ACCELERATOR, MANUAL_SPEED_LIMIT_ASSIST
+        if addr in parsers[Bus.pt].message_states:
+          parsers[Bus.pt].message_states[addr].ignore_counter = True
+          parsers[Bus.pt].message_states[addr].ignore_alive = True
+
+    return parsers
 
   def get_can_parsers(self, CP, CP_SP):
     if CP.flags & HyundaiFlags.CANFD:
