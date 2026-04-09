@@ -195,9 +195,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
+    # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
     if self.frame % 5 == 0 and lka_steering:
+      suppress_lanes = not bool(self.CP.flags & HyundaiFlags.CCNC)
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
-                                                        self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT))
+                                                        self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT,
+                                                        suppress_lanes=suppress_lanes))
 
     # LFA and HDA icons
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):

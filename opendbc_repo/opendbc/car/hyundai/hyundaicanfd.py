@@ -69,7 +69,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   return ret
 
 
-def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt):
+def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt, suppress_lanes=True):
   suppress_msg = "CAM_0x362" if lka_steering_alt else "CAM_0x2a4"
   msg_bytes = 32 if lka_steering_alt else 24
 
@@ -77,8 +77,13 @@ def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt):
   values["COUNTER"] = lfa_block_msg["COUNTER"]
   values["SET_ME_0"] = 0
   values["SET_ME_0_2"] = 0
-  values["LEFT_LANE_LINE"] = 0
-  values["RIGHT_LANE_LINE"] = 0
+  if suppress_lanes:
+    values["LEFT_LANE_LINE"] = 0
+    values["RIGHT_LANE_LINE"] = 0
+  else:
+    # Forward camera's lane detection to ADAS DRV so it accepts LKAS_ALT commands
+    values["LEFT_LANE_LINE"] = lfa_block_msg["LEFT_LANE_LINE"]
+    values["RIGHT_LANE_LINE"] = lfa_block_msg["RIGHT_LANE_LINE"]
   return packer.make_can_msg(suppress_msg, CAN.ACAN, values)
 
 
