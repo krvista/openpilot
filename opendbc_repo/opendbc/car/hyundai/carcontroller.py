@@ -1,7 +1,9 @@
+import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
+from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -68,6 +70,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
 
+    # Vehicle model used to compute desired steering angle from curvature for angle-based control
+    # (Ioniq 6 N: LatControlTorque returns steeringAngleDeg=0, so we derive it from actuators.curvature)
+    self.VM = VehicleModel(CP)
+
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -132,7 +138,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
-    new_actuators.steeringAngleDeg = self.apply_angle_last
+    # Only report commanded angle for cars using angle-based control (Ioniq 6 N).
+    # For other cars, preserve the angle set by controlsd's lateral controller.
+    if self.CP.flags & HyundaiFlags.CCNC and self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+      new_actuators.steeringAngleDeg = self.apply_angle_last
     new_actuators.accel = self.tuning.actual_accel
 
     self.frame += 1
@@ -194,11 +203,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     ccnc_non_hda2 = self.CP.flags & HyundaiFlags.CCNC and not lka_steering
 
     # steering control
-    # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), apply angle rate limits to prevent EPS faults.
+    # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), compute desired steering angle from curvature
+    # because LatControlTorque returns steeringAngleDeg=0. Apply rate limits to prevent EPS faults.
     # When inactive, hold current steering wheel angle (standard angle control pattern).
     ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
     if ccnc_lka_alt:
-      self.apply_angle_last = apply_std_steer_angle_limits(CC.actuators.steeringAngleDeg, self.apply_angle_last,
+      # Derive desired steering angle from desired curvature using vehicle model
+      desired_angle_rad = self.VM.get_steer_from_curvature(-CC.actuators.curvature, max(CS.out.vEgoRaw, 0.1), 0.0)
+      desired_angle_deg = math.degrees(desired_angle_rad)
+      self.apply_angle_last = apply_std_steer_angle_limits(desired_angle_deg, self.apply_angle_last,
                                                            CS.out.vEgoRaw, CS.out.steeringAngleDeg,
                                                            CC.latActive, CarControllerParams.ANGLE_LIMITS)
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,

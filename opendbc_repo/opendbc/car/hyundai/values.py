@@ -19,11 +19,11 @@ class CarControllerParams:
   ACCEL_MAX = 2.0 # m/s
 
   # Angle-based control limits for CCNC LKA_STEERING_ALT cars (Ioniq 6 N).
-  # DBC range for ADAS_StrAnglReqVal is [0|176.7] deg, but we use a conservative
-  # limit to prevent EPS faults and aggressive steering.
+  # STEER_ANGLE_MAX matches DBC range for ADAS_StrAnglReqVal [0|176.7] deg,
+  # which covers low-speed turns observed in drivelog (wheel angles up to ~170°).
   # Rate limits at 100Hz, similar to Toyota LTA (deg/frame, based on speed m/s).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    90.0,  # STEER_ANGLE_MAX (deg)
+    176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
     ([5, 25], [0.3, 0.15]),  # ANGLE_RATE_LIMIT_UP
     ([5, 25], [0.4, 0.2]),   # ANGLE_RATE_LIMIT_DOWN
   )
