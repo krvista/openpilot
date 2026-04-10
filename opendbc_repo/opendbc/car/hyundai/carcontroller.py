@@ -26,27 +26,23 @@ MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 # Ioniq 6 N LKAS_ALT angle-command smoothing filter.
-# 1st-order low-pass applied to the rate-limited apply_angle so that the direct
-# angle command is lightly smoothed against high-frequency jitter while keeping
-# the N-car's reactive response to camera lane updates.
+# 1st-order low-pass applied to the rate-limited apply_angle to reject single-
+# frame model jitter while preserving the N-car's reactive response to camera
+# lane updates.
 #
-# τ = 100ms is tuned to exactly match steerActuatorDelay = 0.1s. This way the
-# planner's latency compensation absorbs the filter's phase delay perfectly,
-# so there is no effective lag vs direct angle command from the car's POV.
+# τ = 50ms is a tight filter that only rejects high-frequency noise. Planner's
+# steerActuatorDelay (0.1s) compensates for half of the 50ms filter phase delay
+# plus the physical ADAS DRV + MDPS latency, leaving a small positive net lag
+# of ~50ms which is imperceptible but enough to absorb single-frame jitter.
 #
-# Response: rise 10-90% = 220ms, settling 2% = 390ms, phase delay ≈ 100ms
-#   (cancelled by controlsd latency compensation of steerActuatorDelay).
+# Response: rise 10-90% = 110ms, settling 2% = 190ms, phase delay ≈ 50ms.
+# α = 1 - exp(-0.01/0.05) ≈ 0.1813 (much more reactive than τ=100ms's 0.0952).
 #
-# RMS lag vs raw rate_limited output across 192979 active frames from route 0x23
-# is 1.64° - small enough to preserve reactivity but enough to reject single-
-# frame model jitter. Full drivelog safety: 0 exceptions, 0 rate violations,
-# max A2A jump = 2.286°/f (essentially unchanged from the 2.3°/f hard cap).
-#
-# Contrast with Ioniq 5 N's torque chain which has a natural ~230ms combined
-# time constant (LatControlTorque 1.2 Hz jerk filter + EPS lag). We intentionally
-# do NOT try to match that here because the Ioniq 6 N's direct angle control is
-# a performance advantage that should be preserved for camera-reactive driving.
-LKAS_FILTER_TAU = 0.10  # seconds - matches steerActuatorDelay for perfect latency compensation
+# Rationale: the Ioniq 6 N's direct angle control is a performance advantage
+# over torque-chain cars (5 N, Toyota). Maximizing its reactivity is preferred
+# over emulating older tuning, while still providing basic noise rejection to
+# avoid EPS stress from frame-level model jitter.
+LKAS_FILTER_TAU = 0.05  # seconds - light noise rejection while preserving reactivity
 LKAS_FILTER_ALPHA = 1.0 - math.exp(-DT_CTRL / LKAS_FILTER_TAU)
 
 
