@@ -2,7 +2,7 @@ import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance
+from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -204,17 +204,36 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # steering control
     # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), compute desired steering angle from curvature
-    # because LatControlTorque returns steeringAngleDeg=0. Use VehicleModel-based rate limiter
-    # (Tesla pattern) to enforce ISO 11270 lateral jerk/accel limits + stock camera rate cap.
+    # because LatControlTorque returns steeringAngleDeg=0. Apply VehicleModel-based jerk-limited
+    # rate limit + hard angle cap. Skip the lateral-accel position clamp of the shared vm helper
+    # (apply_steer_angle_limits_vm) because it can cause a rate-limit-bypassing jump when the
+    # speed increases while apply_angle_last is outside the new max_angle boundary.
     # When inactive, hold current steering wheel angle (standard angle control pattern).
     ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
     if ccnc_lka_alt:
+      angle_limits = CarControllerParams.ANGLE_LIMITS
+      v = max(CS.out.vEgoRaw, 1.0)
+
       # Derive desired steering angle from desired curvature using vehicle model
-      desired_angle_rad = self.VM.get_steer_from_curvature(-CC.actuators.curvature, max(CS.out.vEgoRaw, 0.1), 0.0)
+      desired_angle_rad = self.VM.get_steer_from_curvature(-CC.actuators.curvature, v, 0.0)
       desired_angle_deg = math.degrees(desired_angle_rad)
-      self.apply_angle_last = apply_steer_angle_limits_vm(desired_angle_deg, self.apply_angle_last,
-                                                          CS.out.vEgoRaw, CS.out.steeringAngleDeg,
-                                                          CC.latActive, self.params, self.VM)
+
+      # Rate limit based on ISO 11270 lateral jerk (physics-based), plus hard cap
+      max_curvature_rate = angle_limits.MAX_LATERAL_JERK / (v * v)
+      max_angle_rate_sec = math.degrees(self.VM.get_steer_from_curvature(max_curvature_rate, v, 0.0))
+      max_delta = min(max_angle_rate_sec * DT_CTRL, angle_limits.MAX_ANGLE_RATE)
+
+      if CC.latActive:
+        new_angle = float(np.clip(desired_angle_deg,
+                                  self.apply_angle_last - max_delta,
+                                  self.apply_angle_last + max_delta))
+      else:
+        # When inactive, track the current wheel angle so we resume smoothly
+        new_angle = float(CS.out.steeringAngleDeg)
+
+      self.apply_angle_last = float(np.clip(new_angle,
+                                            -angle_limits.STEER_ANGLE_MAX,
+                                            angle_limits.STEER_ANGLE_MAX))
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
                                                            apply_angle=self.apply_angle_last))
 

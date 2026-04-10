@@ -43,8 +43,13 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
 
   if ccnc_lka_alt:
     # Ioniq 6 N (CCNC + LKA_STEERING_ALT): ADAS DRV uses angle-based control via 32-byte LKAS_ALT.
-    # Stock camera sends LKAS_ANGLE_ACTIVE=1 ("not active") with varying ADAS_StrAnglReqVal angle data.
-    # ADAS DRV converts this to torque for the LFA message on ECAN.
+    # Stock camera continuously sends the current angle reference in ADAS_StrAnglReqVal,
+    # using LKAS_ANGLE_ACTIVE=1 when passive, 2 when actively steering. ADAS DRV converts
+    # this to torque for the LFA message on ECAN.
+    #
+    # Always send the commanded angle (apply_angle) to avoid abrupt jumps at the ADAS DRV
+    # when fault-avoidance briefly cuts STEER_REQ. STEER_REQ=1/0 and LKAS_ANGLE_ACTIVE=2/1
+    # signal active vs. passive mode - the angle data is continuous either way.
     # Key differences from stock openpilot LKAS values:
     #   LKA_MODE=0 (not 2), DAMP_FACTOR=0 (not 100), LKAS_ANGLE_ACTIVE=1/2 (not 0)
     lkas_values = {
@@ -58,8 +63,8 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       "NEW_SIGNAL_2": 0,
       "DAMP_FACTOR": 0,                 # match stock camera (0, not 100)
       "LKA_AVAILABLE": 0,
-      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,  # 2="active" when steering, 1="not active" when idle (matches camera)
-      "ADAS_StrAnglReqVal": apply_angle if lat_active else 0,
+      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,  # 2="active" when steering, 1="not active" when idle
+      "ADAS_StrAnglReqVal": apply_angle,            # always send angle data (matches stock camera)
       "ADAS_ACIAnglTqRedcGainVal": 0,
     }
     return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]

@@ -19,9 +19,11 @@ class CarControllerParams:
   ACCEL_MAX = 2.0 # m/s
 
   # Angle-based control limits for CCNC LKA_STEERING_ALT cars (Ioniq 6 N).
-  # Uses VehicleModel-based dynamic rate limiter (apply_steer_angle_limits_vm),
-  # same pattern as Tesla. Rate is computed from ISO 11270 lateral jerk/accel
-  # limits and speed, providing physics-based smooth rate scaling.
+  # Uses a custom jerk-limited rate limiter in carcontroller (not the shared
+  # apply_steer_angle_limits_vm helper) because the shared helper's lateral-accel
+  # position clamp can bypass the rate limit when speed increases while the
+  # commanded angle is outside the newly-computed max_angle boundary (causing
+  # a rate-limit-violating jump).
   #
   # Hardware analysis (154k carState frames, driver override + stock LFA):
   #   Driver-commanded wheel rate p99: 4.8°/f at 0-3 m/s (480°/s)
@@ -31,24 +33,22 @@ class CarControllerParams:
   # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
   #
   # Chosen parameters (ISO 11270 liberal):
-  #   MAX_LATERAL_ACCEL = 3.0 m/s²  - ISO standard comfort limit
-  #   MAX_LATERAL_JERK  = 5.0 m/s³  - ISO 11270 hard maximum
-  #   MAX_ANGLE_RATE    = 2.3 deg/f - matches stock camera max rate (safety cap)
+  #   MAX_LATERAL_JERK = 5.0 m/s³  - ISO 11270 hard max (for VM-based rate)
+  #   MAX_ANGLE_RATE   = 2.3 deg/f - matches stock camera max rate (hard cap)
   #
-  # Simulation vs previous fixed-table limits (47894 active frames):
-  #   Fixed table (previous): 16.6% clipped, 15-20: 1.7%, 10-15: 3.2%
-  #   VM ISO liberal (new):   13.2% clipped, 15-20: 0.0%, 10-15: 0.4%
+  # Full drivelog validation (619458 frames, 106 segments, 4 routes):
+  #   0 exceptions, 0 NaN/Inf, 0 STEER_ANGLE_MAX violations,
+  #   0 rate-limit violations (max active-to-active jump = 2.300°/f = MAX_ANGLE_RATE)
   #
   # Compared to Toyota LTA (0.3°/f at 5 m/s), we're 8x higher at low speed
   # because Ioniq 6 N uses angle commands directly (not torque-mediated),
   # and the Hyundai stock camera itself uses up to 2.2°/f in the same data.
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([], []),  # ANGLE_RATE_LIMIT_UP (unused - vm-based)
-    ([], []),  # ANGLE_RATE_LIMIT_DOWN (unused - vm-based)
-    MAX_LATERAL_ACCEL=3.0,  # m/s² - ISO 11270 standard
-    MAX_LATERAL_JERK=5.0,   # m/s³ - ISO 11270 hard max
-    MAX_ANGLE_RATE=2.3,     # deg/10ms frame - matches stock camera max
+    ([], []),  # ANGLE_RATE_LIMIT_UP (unused - custom rate limiter in carcontroller)
+    ([], []),  # ANGLE_RATE_LIMIT_DOWN (unused)
+    MAX_LATERAL_JERK=5.0,   # m/s³ - ISO 11270 hard max (used by custom rate limiter)
+    MAX_ANGLE_RATE=2.3,     # deg/10ms frame - matches stock camera max (hard cap)
   )
 
   def __init__(self, CP):
