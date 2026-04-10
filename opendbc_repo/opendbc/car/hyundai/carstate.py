@@ -314,6 +314,15 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT
                                           else cp_cam.vl["CAM_0x2a4"])
 
+    # For Ioniq 6 N (CCNC + LKA_STEERING_ALT), capture the camera's native LKAS_ALT
+    # so carcontroller can pass its bits through unchanged except for the angle
+    # command. This preserves camera-native fields (LKA_AVAILABLE, LFA_BUTTON,
+    # LKA_ICON, and the hidden-nibble validation bits at byte 9) that ADAS DRV
+    # uses to authenticate the LKAS_ALT message as a legitimate camera command
+    # and activate its LFA processing pipeline rather than falling back to LKA.
+    if (self.CP.flags & HyundaiFlags.CCNC) and (self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT):
+      self.lkas_alt_cam_msg = copy.copy(cp_cam.vl["LKAS_ALT"])
+
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),

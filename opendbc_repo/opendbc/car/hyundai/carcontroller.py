@@ -265,8 +265,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_filtered = self.apply_angle_last
 
     apply_angle_out = self.apply_angle_filtered if ccnc_lka_alt else self.apply_angle_last
+    # For Ioniq 6 N, pass the camera's captured LKAS_ALT values through so create_steering_messages
+    # can mirror them and preserve the hidden validation bits that ADAS DRV requires.
+    lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
-                                                           apply_angle=apply_angle_out))
+                                                           apply_angle=apply_angle_out, lkas_alt_cam_msg=lkas_alt_cam_msg))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT

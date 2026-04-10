@@ -38,35 +38,61 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None):
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
     # Ioniq 6 N (CCNC + LKA_STEERING_ALT): ADAS DRV uses angle-based control via 32-byte LKAS_ALT.
-    # Stock camera continuously sends the current angle reference in ADAS_StrAnglReqVal,
-    # using LKAS_ANGLE_ACTIVE=1 when passive, 2 when actively steering. ADAS DRV converts
-    # this to torque for the LFA message on ECAN.
     #
-    # Always send the commanded angle (apply_angle) to avoid abrupt jumps at the ADAS DRV
-    # when fault-avoidance briefly cuts STEER_REQ. STEER_REQ=1/0 and LKAS_ANGLE_ACTIVE=2/1
-    # signal active vs. passive mode - the angle data is continuous either way.
-    # Key differences from stock openpilot LKAS values:
-    #   LKA_MODE=0 (not 2), DAMP_FACTOR=0 (not 100), LKAS_ANGLE_ACTIVE=1/2 (not 0)
-    lkas_values = {
-      "LKA_MODE": 0,                    # match stock camera (0=default, not 2=assist)
-      "LKA_ICON": lkas_icon,
-      "TORQUE_REQUEST": apply_torque,
-      "LKA_ASSIST": 0,
-      "STEER_REQ": 1 if lat_active else 0,
-      "STEER_MODE": 0,
-      "HAS_LANE_SAFETY": 0,
-      "NEW_SIGNAL_2": 0,
-      "DAMP_FACTOR": 0,                 # match stock camera (0, not 100)
-      "LKA_AVAILABLE": 0,
-      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,  # 2="active" when steering, 1="not active" when idle
-      "ADAS_StrAnglReqVal": apply_angle,            # always send angle data (matches stock camera)
-      "ADAS_ACIAnglTqRedcGainVal": 0,
-    }
+    # IMPORTANT: The camera uses "hidden" validation bits in byte 9 lower nibble
+    # (bits 0-3) that ADAS DRV checks to authenticate the LKAS_ALT as coming from
+    # a valid camera. If these bits are wrong (e.g. zeroed out), ADAS DRV stops
+    # processing angle commands and falls back to its internal LKA algorithm -
+    # resulting in "LKA-like" wandering behavior. We therefore mirror all of the
+    # camera's native signals verbatim and only override ADAS_StrAnglReqVal (our
+    # commanded angle) and, when actively steering, LKAS_ANGLE_ACTIVE=2 to signal
+    # the override mode to ADAS DRV.
+    #
+    # When lkas_alt_cam_msg is unavailable (e.g. during carcontroller init before
+    # the first camera message), fall back to a minimal safe dict that still
+    # includes LKAS_BYTE9_HIDDEN=0x5 (the most common camera low-speed value).
+    if lkas_alt_cam_msg is not None:
+      lkas_values = {
+        "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
+        "LKA_AVAILABLE":             lkas_alt_cam_msg["LKA_AVAILABLE"],
+        "LKA_WARNING":               lkas_alt_cam_msg["LKA_WARNING"],
+        "LKA_ICON":                  lkas_alt_cam_msg["LKA_ICON"],
+        "FCA_SYSWARN":               lkas_alt_cam_msg["FCA_SYSWARN"],
+        "TORQUE_REQUEST":            0,  # never set torque (camera-native=0, use angle)
+        "STEER_REQ":                 0,  # never set (camera-native=0)
+        "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],  # mirror button state
+        "LKA_ASSIST":                lkas_alt_cam_msg["LKA_ASSIST"],
+        "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
+        "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
+        "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
+        "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],  # camera validation bits
+        "LKAS_ANGLE_ACTIVE":         2 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
+        "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
+        "ADAS_StrAnglReqVal":        apply_angle,  # our commanded angle
+        "ADAS_ACIAnglTqRedcGainVal": lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"],
+      }
+    else:
+      # Fallback when camera message is not yet available (startup or loss of camera)
+      lkas_values = {
+        "LKA_MODE": 0,
+        "LKA_AVAILABLE": 0,
+        "LKA_ICON": lkas_icon,
+        "TORQUE_REQUEST": 0,
+        "STEER_REQ": 0,
+        "LKA_ASSIST": 0,
+        "DAMP_FACTOR": 0,
+        "STEER_MODE": 0,
+        "HAS_LANE_SAFETY": 0,
+        "LKAS_BYTE9_HIDDEN": 0x5,          # most common camera low-nibble
+        "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+        "ADAS_StrAnglReqVal": apply_angle,
+        "ADAS_ACIAnglTqRedcGainVal": 0,
+      }
     return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
   common_values = {
