@@ -19,13 +19,24 @@ class CarControllerParams:
   ACCEL_MAX = 2.0 # m/s
 
   # Angle-based control limits for CCNC LKA_STEERING_ALT cars (Ioniq 6 N).
-  # STEER_ANGLE_MAX matches DBC range for ADAS_StrAnglReqVal [0|176.7] deg,
-  # which covers low-speed turns observed in drivelog (wheel angles up to ~170°).
-  # Rate limits at 100Hz, similar to Toyota LTA (deg/frame, based on speed m/s).
+  # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
+  #
+  # Rate limits derived from empirical analysis of ~310k carState frames across
+  # 4 routes (drivelog/99b215d21bbf8735_0000002[0-3]). Key findings:
+  #   - Stock camera ADAS_StrAnglReqVal p99 rate per speed (deg / 10ms frame):
+  #     0-6 m/s: 2.2, 6-10: 1.0, 10-15: 0.5, 15-20: 0.3, 20-25: 0.4, 25+: 0.3
+  #   - openpilot planner desired angle rate p95: 0.37 at 15-20, 0.75 at 10-15,
+  #     1.7 at 6-10, 4.1 at 3-6 m/s (derived from actuators.curvature)
+  #   - Previous limits (0.3/0.15 at 5/25 m/s) clipped 75% of frames at 0-3 m/s
+  #     and 20% at 10-15 m/s, significantly reducing steering responsiveness.
+  #
+  # New limits: ~80-90% of stock camera p99 (safety margin), but sufficient to
+  # cover openpilot's p95 desired rate without clipping. DOWN allows slightly
+  # faster wind-down, standard practice for angle controllers.
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([5, 25], [0.3, 0.15]),  # ANGLE_RATE_LIMIT_UP
-    ([5, 25], [0.4, 0.2]),   # ANGLE_RATE_LIMIT_DOWN
+    ([5, 10, 15, 20, 25], [1.8, 1.0, 0.5, 0.35, 0.25]),  # ANGLE_RATE_LIMIT_UP
+    ([5, 10, 15, 20, 25], [2.0, 1.2, 0.6, 0.4, 0.3]),    # ANGLE_RATE_LIMIT_DOWN
   )
 
   def __init__(self, CP):
