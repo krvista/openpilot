@@ -1,7 +1,7 @@
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance
+from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -64,6 +64,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     self.accel_last = 0
     self.apply_torque_last = 0
+    self.apply_angle_last = 0.0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
 
@@ -131,6 +132,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
+    new_actuators.steeringAngleDeg = self.apply_angle_last
     new_actuators.accel = self.tuning.actual_accel
 
     self.frame += 1
@@ -192,9 +194,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     ccnc_non_hda2 = self.CP.flags & HyundaiFlags.CCNC and not lka_steering
 
     # steering control
-    apply_angle = float(CC.actuators.steeringAngleDeg) if CC.latActive else 0.0
+    # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), apply angle rate limits to prevent EPS faults.
+    # When inactive, hold current steering wheel angle (standard angle control pattern).
+    ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+    if ccnc_lka_alt:
+      self.apply_angle_last = apply_std_steer_angle_limits(CC.actuators.steeringAngleDeg, self.apply_angle_last,
+                                                           CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+                                                           CC.latActive, CarControllerParams.ANGLE_LIMITS)
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
-                                                           apply_angle=apply_angle))
+                                                           apply_angle=self.apply_angle_last))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT

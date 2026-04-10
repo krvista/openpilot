@@ -4,6 +4,7 @@ from enum import IntFlag
 
 from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds
 from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.lateral import AngleSteeringLimits
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarHarness, CarDocs, CarParts, SupportType
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
@@ -16,6 +17,16 @@ Ecu = CarParams.Ecu
 class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s
   ACCEL_MAX = 2.0 # m/s
+
+  # Angle-based control limits for CCNC LKA_STEERING_ALT cars (Ioniq 6 N).
+  # DBC range for ADAS_StrAnglReqVal is [0|176.7] deg, but we use a conservative
+  # limit to prevent EPS faults and aggressive steering.
+  # Rate limits at 100Hz, similar to Toyota LTA (deg/frame, based on speed m/s).
+  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+    90.0,  # STEER_ANGLE_MAX (deg)
+    ([5, 25], [0.3, 0.15]),  # ANGLE_RATE_LIMIT_UP
+    ([5, 25], [0.4, 0.2]),   # ANGLE_RATE_LIMIT_DOWN
+  )
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
