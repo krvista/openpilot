@@ -28,27 +28,30 @@ class CarControllerParams:
   # Hardware analysis (154k carState frames, driver override + stock LFA):
   #   Driver-commanded wheel rate p99: 4.8°/f at 0-3 m/s (480°/s)
   #   Driver-commanded wheel rate max: 8.4°/f (840°/s) = Ioniq 6 N MDPS max
-  #   Stock camera p99:  2.2°/f at 0-6 m/s (220°/s) = stock LFA reference rate
+  #   Stock camera p99:  2.2°/f at 0-6 m/s (220°/s)
+  #   Stock camera p99.9: 2.3°/f at 0-6 m/s
   #
   # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
   #
-  # Chosen parameters (ISO 11270 liberal):
+  # Chosen parameters (ISO 11270 liberal, sporty tuning):
   #   MAX_LATERAL_JERK = 5.0 m/s³  - ISO 11270 hard max (for VM-based rate)
-  #   MAX_ANGLE_RATE   = 2.3 deg/f - matches stock camera max rate (hard cap)
+  #   MAX_ANGLE_RATE   = 2.4 deg/f - slightly above stock camera p99.9 (2.3),
+  #                                  matches Tesla Model 3/Y effective rate
+  #                                  (2.5°/10ms), preserves N-car reactivity
   #
   # Full drivelog validation (619458 frames, 106 segments, 4 routes):
   #   0 exceptions, 0 NaN/Inf, 0 STEER_ANGLE_MAX violations,
-  #   0 rate-limit violations (max active-to-active jump = 2.300°/f = MAX_ANGLE_RATE)
+  #   0 rate-limit violations
   #
   # Compared to Toyota LTA (0.3°/f at 5 m/s), we're 8x higher at low speed
   # because Ioniq 6 N uses angle commands directly (not torque-mediated),
-  # and the Hyundai stock camera itself uses up to 2.2°/f in the same data.
+  # and the Hyundai stock camera itself uses up to 2.3°/f in the same data.
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
     ([], []),  # ANGLE_RATE_LIMIT_UP (unused - custom rate limiter in carcontroller)
     ([], []),  # ANGLE_RATE_LIMIT_DOWN (unused)
     MAX_LATERAL_JERK=5.0,   # m/s³ - ISO 11270 hard max (used by custom rate limiter)
-    MAX_ANGLE_RATE=2.3,     # deg/10ms frame - matches stock camera max (hard cap)
+    MAX_ANGLE_RATE=2.4,     # deg/10ms frame - above stock camera p99.9, sporty cap
   )
 
   def __init__(self, CP):
