@@ -38,7 +38,32 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0):
+  ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+
+  if ccnc_lka_alt:
+    # Ioniq 6 N (CCNC + LKA_STEERING_ALT): ADAS DRV uses angle-based control via 32-byte LKAS_ALT.
+    # Stock camera sends LKAS_ANGLE_ACTIVE=1 ("not active") with varying ADAS_StrAnglReqVal angle data.
+    # ADAS DRV converts this to torque for the LFA message on ECAN.
+    # Key differences from stock openpilot LKAS values:
+    #   LKA_MODE=0 (not 2), DAMP_FACTOR=0 (not 100), LKAS_ANGLE_ACTIVE=1/2 (not 0)
+    lkas_values = {
+      "LKA_MODE": 0,                    # match stock camera (0=default, not 2=assist)
+      "LKA_ICON": lkas_icon,
+      "TORQUE_REQUEST": apply_torque,
+      "LKA_ASSIST": 0,
+      "STEER_REQ": 1 if lat_active else 0,
+      "STEER_MODE": 0,
+      "HAS_LANE_SAFETY": 0,
+      "NEW_SIGNAL_2": 0,
+      "DAMP_FACTOR": 0,                 # match stock camera (0, not 100)
+      "LKA_AVAILABLE": 0,
+      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,  # 2="active" when steering, 1="not active" when idle (matches camera)
+      "ADAS_StrAnglReqVal": apply_angle if lat_active else 0,
+      "ADAS_ACIAnglTqRedcGainVal": 0,
+    }
+    return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
+
   common_values = {
     "LKA_MODE": 2,
     "LKA_ICON": lkas_icon,
