@@ -75,6 +75,15 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        apply_angle,  # our commanded angle
         "ADAS_ACIAnglTqRedcGainVal": lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"],
+        # Unmapped camera bytes that ADAS DRV checks for ACI activation.
+        # Without these, ADAS DRV rejects LKAS_ALT and never enters angle control mode.
+        "LKAS_BYTE7_BITS4_5":        lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
+        "LKAS_BYTE7_BIT7":           lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
+        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"],
+        "LKAS_BYTE28":               lkas_alt_cam_msg["LKAS_BYTE28"],
+        "LKAS_BYTE29":               lkas_alt_cam_msg["LKAS_BYTE29"],
+        "LKAS_BYTE30":               lkas_alt_cam_msg["LKAS_BYTE30"],
+        "LKAS_BYTE31":               lkas_alt_cam_msg["LKAS_BYTE31"],
       }
     else:
       # Fallback when camera message is not yet available (startup or loss of camera)
@@ -92,6 +101,13 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
         "ADAS_ACIAnglTqRedcGainVal": 0,
+        "LKAS_BYTE7_BITS4_5": 0,
+        "LKAS_BYTE7_BIT7": 0,
+        "LKAS_BYTE13": 0,
+        "LKAS_BYTE28": 0x92,
+        "LKAS_BYTE29": 0x01,
+        "LKAS_BYTE30": 0xFF,
+        "LKAS_BYTE31": 0xFF,
       }
     return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
