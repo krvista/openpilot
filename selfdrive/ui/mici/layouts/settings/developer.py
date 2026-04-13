@@ -56,6 +56,9 @@ class DeveloperLayoutMici(NavScroller):
     self._debug_mode_toggle = BigParamControl("ui debug mode", "ShowDebugInfo",
                                               toggle_callback=lambda checked: (gui_app.set_show_touches(checked),
                                                                                gui_app.set_show_fps(checked)))
+    self._lkas_passthrough_toggle = BigToggle("stock LFA passthrough",
+                                               initial_state=ui_state.params.get_bool("LkasPassthrough"),
+                                               toggle_callback=self._on_lkas_passthrough)
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -65,6 +68,7 @@ class DeveloperLayoutMici(NavScroller):
       self._long_maneuver_toggle,
       self._alpha_long_toggle,
       self._debug_mode_toggle,
+      self._lkas_passthrough_toggle,
     ])
 
     # Toggle lists
@@ -75,6 +79,7 @@ class DeveloperLayoutMici(NavScroller):
       ("LongitudinalManeuverMode", self._long_maneuver_toggle),
       ("AlphaLongitudinalEnabled", self._alpha_long_toggle),
       ("ShowDebugInfo", self._debug_mode_toggle),
+      ("LkasPassthrough", self._lkas_passthrough_toggle),
     )
     onroad_blocked_toggles = (self._adb_toggle, self._joystick_toggle)
     release_blocked_toggles = (self._joystick_toggle, self._long_maneuver_toggle, self._alpha_long_toggle)
@@ -144,3 +149,15 @@ class DeveloperLayoutMici(NavScroller):
     ui_state.params.put_bool("AlphaLongitudinalEnabled", state)
     restart_needed_callback(state)
     self._update_toggles()
+
+  def _on_lkas_passthrough(self, state: bool):
+    import os
+    from pathlib import Path
+    passthrough_path = "/data/openpilot/lkas_passthrough"
+    ui_state.params.put_bool("LkasPassthrough", state)
+    if state:
+      Path(passthrough_path).touch(exist_ok=True)
+    else:
+      if os.path.exists(passthrough_path):
+        os.remove(passthrough_path)
+    restart_needed_callback(state)
