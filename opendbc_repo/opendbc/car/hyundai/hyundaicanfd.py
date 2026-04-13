@@ -38,7 +38,7 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None, driver_overriding=False):
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
@@ -56,6 +56,12 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     # When lkas_alt_cam_msg is unavailable (e.g. during carcontroller init before
     # the first camera message), fall back to a minimal safe dict that still
     # includes LKAS_BYTE9_HIDDEN=0x5 (the most common camera low-speed value).
+    # ACI signals are only active when openpilot is steering AND driver is NOT overriding.
+    # When the driver grabs the wheel (steeringPressed or high torque), we must release
+    # ACI authority so MDPS doesn't fight the driver. Without this, the driver needs
+    # extreme force to override (p50=368 Nm-units vs normal ~50).
+    aci_active = lat_active and not driver_overriding
+
     if lkas_alt_cam_msg is not None:
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
@@ -63,54 +69,44 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKA_WARNING":               lkas_alt_cam_msg["LKA_WARNING"],
         "LKA_ICON":                  lkas_alt_cam_msg["LKA_ICON"],
         "FCA_SYSWARN":               lkas_alt_cam_msg["FCA_SYSWARN"],
-        "TORQUE_REQUEST":            0,  # never set torque (camera-native=0, use angle)
-        "STEER_REQ":                 0,  # never set (camera-native=0)
-        "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],  # mirror button state
-        # When lat_active, force LKA_ASSIST=1 to signal ADAS DRV that LKA is ready.
-        # Camera often sends LKA_ASSIST=0 (especially when openpilot intercepts), but
-        # ADAS DRV requires LKA_ASSIST=1 to transition ACISta from INIT to ACTIVE.
-        "LKA_ASSIST":                1 if lat_active else lkas_alt_cam_msg["LKA_ASSIST"],
+        "TORQUE_REQUEST":            0,
+        "STEER_REQ":                 0,
+        "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
+        "LKA_ASSIST":                1 if aci_active else lkas_alt_cam_msg["LKA_ASSIST"],
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
-        "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],  # camera validation bits
-        "LKAS_ANGLE_ACTIVE":         2 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
+        "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],
+        "LKAS_ANGLE_ACTIVE":         2 if aci_active else (1 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"]),
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
-        "ADAS_StrAnglReqVal":        apply_angle,  # our commanded angle
-        # ACI torque reduction gain: must be non-zero for ADAS DRV to complete ACI handshake
-        # and transition ACISta from INIT(0) to ACTIVE(2). Without this, only ACILvl2
-        # activates, giving reduced steering authority and poor lane tracking.
-        "ADAS_ACIAnglTqRedcGainVal": 1.0 if lat_active else lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"],
-        # Unmapped camera bytes for ACI activation. When lat_active, force the
-        # "camera active" pattern even if camera reports LKA_ASSIST=0, so ADAS DRV
-        # sees a consistent active state across all validation fields.
-        "LKAS_BYTE7_BITS4_5":        3 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
-        "LKAS_BYTE7_BIT7":           1 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
-        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if lat_active else 0),
+        "ADAS_StrAnglReqVal":        apply_angle,
+        "ADAS_ACIAnglTqRedcGainVal": 1.0 if aci_active else 0,
+        "LKAS_BYTE7_BITS4_5":        3 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
+        "LKAS_BYTE7_BIT7":           1 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
+        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if aci_active else 0),
         "LKAS_BYTE28":               lkas_alt_cam_msg["LKAS_BYTE28"],
         "LKAS_BYTE29":               lkas_alt_cam_msg["LKAS_BYTE29"],
         "LKAS_BYTE30":               lkas_alt_cam_msg["LKAS_BYTE30"],
         "LKAS_BYTE31":               lkas_alt_cam_msg["LKAS_BYTE31"],
       }
     else:
-      # Fallback when camera message is not yet available (startup or loss of camera)
       lkas_values = {
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
         "LKA_ICON": lkas_icon,
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
-        "LKA_ASSIST": 1 if lat_active else 0,
+        "LKA_ASSIST": 1 if aci_active else 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,          # most common camera low-nibble
-        "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+        "LKAS_ANGLE_ACTIVE": 2 if aci_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": 1.0 if lat_active else 0,
-        "LKAS_BYTE7_BITS4_5": 3 if lat_active else 0,
-        "LKAS_BYTE7_BIT7": 1 if lat_active else 0,
-        "LKAS_BYTE13": 0x09 if lat_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": 1.0 if aci_active else 0,
+        "LKAS_BYTE7_BITS4_5": 3 if aci_active else 0,
+        "LKAS_BYTE7_BIT7": 1 if aci_active else 0,
+        "LKAS_BYTE13": 0x09 if aci_active else 0,
         "LKAS_BYTE28": 0x92,
         "LKAS_BYTE29": 0x01,
         "LKAS_BYTE30": 0xFF,
