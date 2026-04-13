@@ -122,5 +122,4 @@ class DeveloperLayoutSP(DeveloperLayout):
 
     self.enable_copyparty_toggle.set_visible(show_advanced)
     self.enable_github_runner_toggle.set_visible(show_advanced and not self._is_release_branch)
-    self.lkas_passthrough_toggle.set_visible(True)  # always visible in developer panel
     self.error_log_btn.set_visible(not self._is_release_branch)
