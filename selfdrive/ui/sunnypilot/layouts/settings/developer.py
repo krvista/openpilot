@@ -50,9 +50,19 @@ class DeveloperLayoutSP(DeveloperLayout):
 
     self.prebuilt_toggle = toggle_item_sp(tr("Quickboot Mode"), "", param="QuickBootToggle", callback=self._on_prebuilt_toggled)
 
+    self.lkas_passthrough_toggle = toggle_item_sp(
+      tr("Stock LFA Passthrough"),
+      tr("Forward camera LKAS_ALT unchanged for stock LFA data collection. "
+         "When enabled, openpilot will NOT steer — the stock camera controls LFA directly. "
+         "Use this to collect reference data for tuning. Reboot required."),
+      param="LkasPassthrough", callback=self._on_lkas_passthrough_toggled)
+
     self.error_log_btn = button_item(tr("Error Log"), tr("VIEW"), tr("View the error log for sunnypilot crashes."), callback=self._on_error_log_clicked)
 
-    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle, self.error_log_btn,]
+    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle,
+                        self.lkas_passthrough_toggle, self.error_log_btn,]
+
+  LKAS_PASSTHROUGH_PATH = "/data/openpilot/lkas_passthrough"
 
   @staticmethod
   def _on_prebuilt_toggled(state):
@@ -61,6 +71,15 @@ class DeveloperLayoutSP(DeveloperLayout):
     else:
       os.remove(PREBUILT_PATH)
     ui_state.params.put_bool("QuickBootToggle", state)
+
+  @classmethod
+  def _on_lkas_passthrough_toggled(cls, state):
+    if state:
+      Path(cls.LKAS_PASSTHROUGH_PATH).touch(exist_ok=True)
+    else:
+      if os.path.exists(cls.LKAS_PASSTHROUGH_PATH):
+        os.remove(cls.LKAS_PASSTHROUGH_PATH)
+    ui_state.params.put_bool("LkasPassthrough", state)
 
   def _on_delete_confirm(self, result):
     if result == DialogResult.CONFIRM:
