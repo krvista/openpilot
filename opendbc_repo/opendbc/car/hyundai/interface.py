@@ -120,7 +120,14 @@ class CarInterface(CarInterfaceBase):
     ret.centerToFront = ret.wheelbase * 0.4
     ret.steerActuatorDelay = 0.1
     ret.steerLimitTimer = 0.4
-    CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+
+    # Ioniq 6 N (CCNC + LKA_STEERING_ALT) uses angle-based control via LKAS_ALT.
+    # LatControlAngle provides live steerRatio, angleOffsetDeg, and roll compensation
+    # from liveParameters, which are critical for accurate angle commands.
+    if ret.flags & HyundaiFlags.CCNC and ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+      ret.steerControlType = structs.CarParams.SteerControlType.angle
+    else:
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     if ret.flags & HyundaiFlags.ALT_LIMITS:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_LIMITS.value

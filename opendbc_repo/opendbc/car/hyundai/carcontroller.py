@@ -88,6 +88,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_torque_last = 0
     self.apply_angle_last = 0.0
     self.apply_angle_filtered = 0.0  # 1st-order low-pass output for 5 N-like smoothing
+    self.angle_error_integral = 0.0  # integral term for angle error feedback PID
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
 
@@ -224,20 +225,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     ccnc_non_hda2 = self.CP.flags & HyundaiFlags.CCNC and not lka_steering
 
     # steering control
-    # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), compute desired steering angle from curvature
-    # because LatControlTorque returns steeringAngleDeg=0. Apply VehicleModel-based jerk-limited
-    # rate limit + hard angle cap. Skip the lateral-accel position clamp of the shared vm helper
-    # (apply_steer_angle_limits_vm) because it can cause a rate-limit-bypassing jump when the
-    # speed increases while apply_angle_last is outside the new max_angle boundary.
-    # When inactive, hold current steering wheel angle (standard angle control pattern).
+    # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), use LatControlAngle's output which includes
+    # live steerRatio, angleOffsetDeg, and roll compensation from liveParameters.
+    # A low-bandwidth feedback PID on angle error corrects persistent drift that open-loop
+    # feedforward alone cannot handle (road banking, tire wear, steerRatio error).
     ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
     if ccnc_lka_alt:
       angle_limits = CarControllerParams.ANGLE_LIMITS
       v = max(CS.out.vEgoRaw, 1.0)
 
-      # Derive desired steering angle from desired curvature using vehicle model
-      desired_angle_rad = self.VM.get_steer_from_curvature(-CC.actuators.curvature, v, 0.0)
-      desired_angle_deg = math.degrees(desired_angle_rad)
+      # Use LatControlAngle output (includes live steerRatio, angleOffsetDeg, roll)
+      desired_angle_deg = CC.actuators.steeringAngleDeg
+
+      # Low-bandwidth feedback PID: correct persistent drift without fighting EPS
+      if CC.latActive:
+        angle_error = desired_angle_deg - CS.out.steeringAngleDeg
+        self.angle_error_integral += angle_error * DT_CTRL
+        self.angle_error_integral = float(np.clip(self.angle_error_integral, -2.0, 2.0))
+        correction = 0.1 * angle_error + 0.02 * self.angle_error_integral
+        desired_angle_deg += correction
+      else:
+        self.angle_error_integral = 0.0
 
       # Rate limit based on ISO 11270 lateral jerk (physics-based), plus hard cap
       max_curvature_rate = angle_limits.MAX_LATERAL_JERK / (v * v)
@@ -256,9 +264,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             -angle_limits.STEER_ANGLE_MAX,
                                             angle_limits.STEER_ANGLE_MAX))
 
-      # 1st-order low-pass filter on angle output to emulate Ioniq 5 N's torque-chain
-      # smoothness (EPS lag + 1.2 Hz jerk filter). Reset filter state when inactive so
-      # there is no stale-value transient at re-engage.
+      # 1st-order low-pass filter for noise rejection. Reset when inactive.
       if CC.latActive:
         self.apply_angle_filtered += LKAS_FILTER_ALPHA * (self.apply_angle_last - self.apply_angle_filtered)
       else:
