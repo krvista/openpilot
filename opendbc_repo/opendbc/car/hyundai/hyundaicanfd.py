@@ -38,24 +38,18 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None, driver_overriding=False):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None, passthrough=False, driver_overriding=False):
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # Ioniq 6 N (CCNC + LKA_STEERING_ALT): ADAS DRV uses angle-based control via 32-byte LKAS_ALT.
-    #
-    # IMPORTANT: The camera uses "hidden" validation bits in byte 9 lower nibble
-    # (bits 0-3) that ADAS DRV checks to authenticate the LKAS_ALT as coming from
-    # a valid camera. If these bits are wrong (e.g. zeroed out), ADAS DRV stops
-    # processing angle commands and falls back to its internal LKA algorithm -
-    # resulting in "LKA-like" wandering behavior. We therefore mirror all of the
-    # camera's native signals verbatim and only override ADAS_StrAnglReqVal (our
-    # commanded angle) and, when actively steering, LKAS_ANGLE_ACTIVE=2 to signal
-    # the override mode to ADAS DRV.
-    #
-    # When lkas_alt_cam_msg is unavailable (e.g. during carcontroller init before
-    # the first camera message), fall back to a minimal safe dict that still
-    # includes LKAS_BYTE9_HIDDEN=0x5 (the most common camera low-speed value).
+    # Stock LFA passthrough: forward ALL camera signal values unchanged.
+    # ADAS DRV receives exactly what the camera would send, enabling native LFA.
+    # CRC and counter are recomputed by the packer (unavoidable), but all signal
+    # values are the camera's originals. Use for stock LFA data collection.
+    if passthrough and lkas_alt_cam_msg is not None:
+      lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
+      return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
+
     # ACI signals are only active when openpilot is steering AND driver is NOT overriding.
     # When the driver grabs the wheel (steeringPressed or high torque), we must release
     # ACI authority so MDPS doesn't fight the driver. Without this, the driver needs

@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import os
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance
@@ -89,6 +90,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_angle_last = 0.0
     self.apply_angle_filtered = 0.0  # 1st-order low-pass output for 5 N-like smoothing
     self.angle_error_integral = 0.0  # integral term for angle error feedback PID
+    # Stock LFA passthrough mode: forward camera's LKAS_ALT unchanged so ADAS DRV
+    # runs its native LFA. Enable by: touch /data/openpilot/lkas_passthrough && sudo reboot
+    self.lkas_passthrough = os.path.exists('/data/openpilot/lkas_passthrough')
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
 
@@ -225,31 +229,35 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     ccnc_non_hda2 = self.CP.flags & HyundaiFlags.CCNC and not lka_steering
 
     # steering control
-    # For CCNC + LKA_STEERING_ALT (Ioniq 6 N), use LatControlAngle's output which includes
-    # live steerRatio, angleOffsetDeg, and roll compensation from liveParameters.
-    # A low-bandwidth feedback PID on angle error corrects persistent drift.
     ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
     driver_overriding = False
-    if ccnc_lka_alt:
+    lkas_passthrough = False
+    lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
+
+    if ccnc_lka_alt and self.lkas_passthrough:
+      # Stock LFA passthrough: forward camera's LKAS_ALT unchanged so ADAS DRV
+      # runs its native LFA. All angle computation is skipped. The camera controls
+      # steering directly. Enable: touch /data/openpilot/lkas_passthrough && reboot
+      lkas_passthrough = True
+      self.apply_angle_last = float(CS.out.steeringAngleDeg)
+      self.apply_angle_filtered = self.apply_angle_last
+      self.angle_error_integral = 0.0
+
+    elif ccnc_lka_alt:
+      # Normal openpilot angle control with LatControlAngle + feedback PID
       angle_limits = CarControllerParams.ANGLE_LIMITS
       v = max(CS.out.vEgoRaw, 1.0)
 
-      # Detect driver override: when driver grabs wheel, release ACI authority
-      # so MDPS doesn't fight the driver. This is critical for safety — without it,
-      # ACIAnglTqRedcGainVal=1.0 makes MDPS enforce angles with maximum force.
+      # Detect driver override: release ACI authority so MDPS doesn't fight driver
       driver_overriding = CS.out.steeringPressed
 
       # Use LatControlAngle output (includes live steerRatio, angleOffsetDeg, roll)
       desired_angle_deg = CC.actuators.steeringAngleDeg
 
-      # During driver override: track the driver's wheel position so there's no
-      # sudden angle jump when openpilot resumes after the driver releases.
-      # Also reset PID integral to prevent stale correction from accumulating.
       if driver_overriding:
         desired_angle_deg = float(CS.out.steeringAngleDeg)
         self.angle_error_integral = 0.0
       elif CC.latActive:
-        # Low-bandwidth feedback PID: correct persistent drift
         angle_error = desired_angle_deg - CS.out.steeringAngleDeg
         self.angle_error_integral += angle_error * DT_CTRL
         self.angle_error_integral = float(np.clip(self.angle_error_integral, -2.0, 2.0))
@@ -258,13 +266,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         self.angle_error_integral = 0.0
 
-      # Defense-in-depth: clamp desired angle before rate limiting to prevent
-      # pathological PID correction from exceeding protocol limits
       desired_angle_deg = float(np.clip(desired_angle_deg,
                                         -angle_limits.STEER_ANGLE_MAX,
                                         angle_limits.STEER_ANGLE_MAX))
 
-      # Rate limit based on ISO 11270 lateral jerk (physics-based), plus hard cap
       max_curvature_rate = angle_limits.MAX_LATERAL_JERK / (v * v)
       max_angle_rate_sec = math.degrees(self.VM.get_steer_from_curvature(max_curvature_rate, v, 0.0))
       max_delta = min(max_angle_rate_sec * DT_CTRL, angle_limits.MAX_ANGLE_RATE)
@@ -280,16 +285,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             -angle_limits.STEER_ANGLE_MAX,
                                             angle_limits.STEER_ANGLE_MAX))
 
-      # 1st-order low-pass filter for noise rejection. Reset when inactive.
       if CC.latActive or driver_overriding:
         self.apply_angle_filtered += LKAS_FILTER_ALPHA * (self.apply_angle_last - self.apply_angle_filtered)
       else:
         self.apply_angle_filtered = self.apply_angle_last
 
     apply_angle_out = self.apply_angle_filtered if ccnc_lka_alt else self.apply_angle_last
-    lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
                                                            apply_angle=apply_angle_out, lkas_alt_cam_msg=lkas_alt_cam_msg,
+                                                           passthrough=lkas_passthrough,
                                                            driver_overriding=driver_overriding))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
