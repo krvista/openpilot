@@ -66,7 +66,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "TORQUE_REQUEST":            0,  # never set torque (camera-native=0, use angle)
         "STEER_REQ":                 0,  # never set (camera-native=0)
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],  # mirror button state
-        "LKA_ASSIST":                lkas_alt_cam_msg["LKA_ASSIST"],
+        # When lat_active, force LKA_ASSIST=1 to signal ADAS DRV that LKA is ready.
+        # Camera often sends LKA_ASSIST=0 (especially when openpilot intercepts), but
+        # ADAS DRV requires LKA_ASSIST=1 to transition ACISta from INIT to ACTIVE.
+        "LKA_ASSIST":                1 if lat_active else lkas_alt_cam_msg["LKA_ASSIST"],
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
@@ -74,12 +77,16 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_ANGLE_ACTIVE":         2 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        apply_angle,  # our commanded angle
-        "ADAS_ACIAnglTqRedcGainVal": lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"],
-        # Unmapped camera bytes that ADAS DRV checks for ACI activation.
-        # Without these, ADAS DRV rejects LKAS_ALT and never enters angle control mode.
-        "LKAS_BYTE7_BITS4_5":        lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
-        "LKAS_BYTE7_BIT7":           lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
-        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"],
+        # ACI torque reduction gain: must be non-zero for ADAS DRV to complete ACI handshake
+        # and transition ACISta from INIT(0) to ACTIVE(2). Without this, only ACILvl2
+        # activates, giving reduced steering authority and poor lane tracking.
+        "ADAS_ACIAnglTqRedcGainVal": 1.0 if lat_active else lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"],
+        # Unmapped camera bytes for ACI activation. When lat_active, force the
+        # "camera active" pattern even if camera reports LKA_ASSIST=0, so ADAS DRV
+        # sees a consistent active state across all validation fields.
+        "LKAS_BYTE7_BITS4_5":        3 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
+        "LKAS_BYTE7_BIT7":           1 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
+        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if lat_active else 0),
         "LKAS_BYTE28":               lkas_alt_cam_msg["LKAS_BYTE28"],
         "LKAS_BYTE29":               lkas_alt_cam_msg["LKAS_BYTE29"],
         "LKAS_BYTE30":               lkas_alt_cam_msg["LKAS_BYTE30"],
@@ -93,17 +100,17 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKA_ICON": lkas_icon,
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
-        "LKA_ASSIST": 0,
+        "LKA_ASSIST": 1 if lat_active else 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,          # most common camera low-nibble
         "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": 0,
-        "LKAS_BYTE7_BITS4_5": 0,
-        "LKAS_BYTE7_BIT7": 0,
-        "LKAS_BYTE13": 0,
+        "ADAS_ACIAnglTqRedcGainVal": 1.0 if lat_active else 0,
+        "LKAS_BYTE7_BITS4_5": 3 if lat_active else 0,
+        "LKAS_BYTE7_BIT7": 1 if lat_active else 0,
+        "LKAS_BYTE13": 0x09 if lat_active else 0,
         "LKAS_BYTE28": 0x92,
         "LKAS_BYTE29": 0x01,
         "LKAS_BYTE30": 0xFF,
