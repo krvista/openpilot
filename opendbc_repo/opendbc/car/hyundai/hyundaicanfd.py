@@ -38,23 +38,23 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None, passthrough=False, driver_overriding=False):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None, driver_overriding=False, aci_speed_ok=True):
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # Stock LFA passthrough: forward ALL camera signal values unchanged.
-    # ADAS DRV receives exactly what the camera would send, enabling native LFA.
-    # CRC and counter are recomputed by the packer (unavoidable), but all signal
-    # values are the camera's originals. Use for stock LFA data collection.
-    if passthrough and lkas_alt_cam_msg is not None:
+    # When lateral control is inactive (cruise off), forward camera's LKAS_ALT
+    # unchanged so ADAS DRV can run stock LFA. This enables stock LFA data
+    # collection without SSH — just turn cruise off while MADS is on.
+    if not lat_active and not driver_overriding and lkas_alt_cam_msg is not None:
       lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
       return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
-    # ACI signals are only active when openpilot is steering AND driver is NOT overriding.
+    # ACI signals are only active when openpilot is steering AND driver is NOT
+    # overriding AND speed is above minimum (prevents low-speed jitter).
     # When the driver grabs the wheel (steeringPressed or high torque), we must release
     # ACI authority so MDPS doesn't fight the driver. Without this, the driver needs
     # extreme force to override (p50=368 Nm-units vs normal ~50).
-    aci_active = lat_active and not driver_overriding
+    aci_active = lat_active and not driver_overriding and aci_speed_ok
 
     if lkas_alt_cam_msg is not None:
       lkas_values = {
