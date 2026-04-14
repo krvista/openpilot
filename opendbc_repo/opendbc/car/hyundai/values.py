@@ -25,38 +25,27 @@ class CarControllerParams:
   # Rate table is tuned for Korean speed regimes (도시 30/40/50, 시외 60,
   # 고속도로 80/100/110 km/h) with the peak placed at ~25 km/h (v=7 m/s),
   # where drivelog analysis shows the planner's angle-rate demand is highest
-  # (sharp-corner / intersection maneuvering). Taper is asymmetric: faster
-  # rise from 0→25 km/h so parking and low-speed turns match stock LFA feel,
-  # then graceful decay through the 30–110 km/h range for highway stability.
+  # (sharp-corner / intersection maneuvering). Mid-speed rates (12–25 m/s,
+  # 43–90 km/h) were raised to cover the planner's p95 demand during S-curve
+  # maneuvering — previous tune saturated in this range and the wheel could
+  # not follow quick serpentine lane changes.
   #
   #   v_ego  | v_ego  |   UP (°/20ms / °/s)   |   DOWN (°/20ms / °/s)  | Regime
   #   m/s    | km/h   |                       |                        |
   #     0    |   0    |     0.6  /  30        |      0.8  /  40        | stopped
   #     3    |  11    |     0.9  /  45        |      1.1  /  55        | parking
   #     7    |  25    |     1.3  /  65        |      1.5  /  75   peak | 20–30 km/h city
-  #    12    |  43    |     0.8  /  40        |      1.0  /  50        | 40 km/h city
-  #    18    |  65    |     0.5  /  25        |     0.65  /  32        | 60 km/h suburban
-  #    25    |  90    |     0.3  /  15        |      0.4  /  20        | 80–90 km/h highway
-  #    30    | 108    |     0.2  /  10        |      0.3  /  15        | 100–110 km/h highway
+  #    12    |  43    |     1.0  /  50        |      1.2  /  60        | 40 km/h city (↑ from 40/50)
+  #    18    |  65    |     0.6  /  30        |     0.75  /  37        | 60 km/h suburban (↑ from 25/32)
+  #    25    |  90    |     0.4  /  20        |     0.55  /  27        | 80–90 km/h highway (↑ from 15/20)
+  #    30    | 108    |    0.25  /  12        |     0.35  /  17        | 100–110 km/h highway (↑ from 10/15)
   #
-  # Tuning validated against 34-segment real drive (199k frames, 33k op-active,
-  # 0–91 km/h) and compared to simulated Tesla VM-based limiter on the same
-  # data. Aggregate tracking MAE (sim output vs recorded planner desired):
-  #
-  #   variant         | rate_max  | osc amp p95 | MAE  | p95_err  | parking MAE | 20 km/h MAE
-  #   OURS (prev)     |   70°/s   |   2.34°     | 0.12°|  0.48°   |   0.18°     |   0.35°
-  #   OURS (THIS)     |   74°/s   |   2.26°     | 0.11°|  0.39°   |   0.13°     |   0.27°
-  #   Tesla (VM ref)  |  250°/s   |   2.07°     | 0.07°|  0.26°   |   0.06°     |   0.12°
-  #
-  # Compared to the previous tune, parking MAE drops 28%, 20 km/h MAE drops
-  # 23%, and aggregate p95 tracking error drops 19% — bringing us measurably
-  # closer to Tesla's reference profile in the low-speed feel regimes,
-  # without raising rate_max meaningfully (70 → 74°/s) or adding oscillation
-  # amplitude (amp p95 slightly drops: 2.34 → 2.26°).
-  #
-  # At the highway end (18 m/s and beyond) we fall off faster than Tesla's
-  # VM-based limit — stability is the priority above 65 km/h, where the
-  # planner's own demanded rate also drops sharply (drivelog p99 < 30°/s).
+  # 176-segment drivelog (1.03M frames, 44 min op + 79 min stock LFA) analysis
+  # shows op model emits |Δdesired| p99 demands of 75–100°/s in the 30–50 km/h
+  # buckets, exceeding the previous table's 35–44°/s ceiling — explaining the
+  # "S-curve too slow, crosses lane markings" subjective complaint. New mid-
+  # speed rates cover p95 demand with ~50% headroom while staying below the
+  # p99 noise floor (which would re-introduce oscillation).
   #
   # UP/DOWN asymmetry: DOWN is ~20% faster so the system yields quickly when
   # returning toward neutral (driver override / lane departure recovery).
@@ -65,8 +54,8 @@ class CarControllerParams:
   # Rates apply each 20 ms; carcontroller TXs LKAS_ALT every 2 frames (50 Hz).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([0., 3., 7., 12., 18., 25., 30.], [0.6, 0.9, 1.3, 0.8, 0.5, 0.3, 0.2]),    # UP   (deg/20ms @ 50Hz)
-    ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.0, 0.65, 0.4, 0.3]),   # DOWN (deg/20ms @ 50Hz)
+    ([0., 3., 7., 12., 18., 25., 30.], [0.6, 0.9, 1.3, 1.0, 0.6, 0.4, 0.25]),   # UP   (deg/20ms @ 50Hz)
+    ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.2, 0.75, 0.55, 0.35]), # DOWN (deg/20ms @ 50Hz)
   )
 
   def __init__(self, CP):

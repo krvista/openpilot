@@ -199,7 +199,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # steering control
     ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
-    aci_speed_ok = CS.out.vEgoRaw > 3.0 / 3.6  # 3 km/h
+    # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
+    # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
+    # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
+    # This prevents the "tick" catch feel the driver felt when letting the
+    # wheel return toward center at creep speed, where the previous binary
+    # gate flipped passthrough→op in a single frame.
+    ACI_SPEED_FULL_MS = 3.0 / 3.6   # full authority at/above 3 km/h
+    ACI_SPEED_ZERO_MS = 1.0 / 3.6   # zero authority at/below 1 km/h
+    speed_blend = float(np.clip((CS.out.vEgoRaw - ACI_SPEED_ZERO_MS) /
+                                 (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Toyota LTA-style gradient driver override blending.
     # Instead of binary steeringPressed (threshold ~100 Nm-units), compute a
     # smooth blend factor from raw torque. This allows openpilot to back off
@@ -242,7 +251,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
-                                                             aci_speed_ok=aci_speed_ok))
+                                                             speed_blend=speed_blend))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
