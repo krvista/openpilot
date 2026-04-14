@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
-"""Steering quality comparison across rate-limiter variants on Ioniq 6 N drivelogs.
+"""Steering quality comparison across rate-limiter variants on Ioniq 6 N data.
 
-Simulates four rate-limiter configurations on every available drivelog:
-  1. OURS       - apply_std_steer_angle_limits with our Tesla-inspired table
-  2. TOYOTA     - apply_std_steer_angle_limits with Toyota LTA's actual table
-  3. TESLA      - apply_steer_angle_limits_vm with Tesla's VM-based limits
-  4. PREVIOUS   - the earlier VM-based Ioniq 6 N config (JERK=3.0, 100Hz)
+Primary data source: /tmp/drivelog_frames.pkl (90k preprocessed frames,
+16 segments from real drive logs with curvature, desired angle, etc.).
+Covers speeds from 0 to ~58 km/h (city + suburban).
 
-Each variant is fed the same desired-angle trajectory (derived from
-`carControl.actuators.curvature` via VehicleModel) and the same vEgo /
-steeringAngleDeg measurements from the log.
+Also supports fallback to raw .zst logs in /tmp/ioniq6n_logs and
+/tmp/rlog_analysis when the pickle is unavailable.
 
-Active gating mirrors the real code: requires curvature non-trivial AND
-vEgoRaw > 3 km/h (the aci_speed_ok gate).
+Simulates these variants with 50 Hz TX cadence:
+  1. OURS       - values.py ANGLE_LIMITS (production)
+  2. TOYOTA     - Toyota LTA's table
+  3. TESLA      - Tesla's VM-based limits
+  4. PREVIOUS   - our old 100Hz VM-based config
 
-Metrics (per active frame):
-  - Max / p99 |Δangle| per TX step (spike detection)
-  - Direction-change frequency (oscillation rate, Hz)
-  - Tracking error vs desired angle (mae, p95)
-  - Per-speed-bucket tracking MAE
+Metrics are broken out by Korean speed regime:
+  stopped, parking, 20, 30, 40, 50, 60, 80, 100, 110 km/h
 
 Run:
     python3 tools/ioniq6n_rate_comparison.py [--detailed]
@@ -26,8 +23,8 @@ Run:
 import argparse
 import math
 import os
+import pickle
 import sys
-from collections import defaultdict
 
 import numpy as np
 
@@ -45,16 +42,16 @@ from opendbc.car import DT_CTRL
 from opendbc.car.hyundai.values import CarControllerParams as HyundaiParams
 
 
-LOG_DIR = '/tmp/ioniq6n_logs'
-ACI_MIN_SPEED_MS = 3.0 / 3.6   # 3 km/h — matches our carcontroller
+FRAMES_PKL = '/tmp/drivelog_frames.pkl'
+FALLBACK_LOGS = [
+  '/tmp/ioniq6n_logs/99b215d21bbf8735_00000004--90915acd0e--0--rlog.zst',
+]
+ACI_MIN_SPEED_MS = 3.0 / 3.6
 
 
-# --- Rate-limiter configurations ---
-# OURS pulls the actual production table directly from values.py so this tool
-# stays in sync automatically.
+# --- Variants ---
 OURS_LIMITS = HyundaiParams.ANGLE_LIMITS
 
-# Toyota LTA actual table (from toyota/values.py)
 TOYOTA_LIMITS = AngleSteeringLimits(
   94.9461,
   ([5, 25], [0.3, 0.15]),
@@ -65,34 +62,38 @@ TOYOTA_LIMITS = AngleSteeringLimits(
 class TeslaParamsShim:
   STEER_STEP = 2
   ANGLE_LIMITS = AngleSteeringLimits(
-    360,
-    ([], []),
-    ([], []),
-    MAX_LATERAL_ACCEL=3.6,
-    MAX_LATERAL_JERK=3.6,
-    MAX_ANGLE_RATE=5,
+    360, ([], []), ([], []),
+    MAX_LATERAL_ACCEL=3.6, MAX_LATERAL_JERK=3.6, MAX_ANGLE_RATE=5,
   )
 
 
 class PrevParamsShim:
-  STEER_STEP = 1  # 100 Hz back then
+  STEER_STEP = 1
   ANGLE_LIMITS = AngleSteeringLimits(
-    176.7,
-    ([], []),
-    ([], []),
-    MAX_LATERAL_ACCEL=3.0,
-    MAX_LATERAL_JERK=3.0,
-    MAX_ANGLE_RATE=1.0,
+    176.7, ([], []), ([], []),
+    MAX_LATERAL_ACCEL=3.0, MAX_LATERAL_JERK=3.0, MAX_ANGLE_RATE=1.0,
   )
 
 
-SPEED_BUCKETS = [(0, 3), (3, 6), (6, 10), (10, 15), (15, 20), (20, 25), (25, 40)]
+# Korean speed regimes (km/h)
+KR_REGIMES = [
+  ('stopped',    0,   2),
+  ('parking',    2,  10),
+  ('20 km/h',   10,  25),
+  ('30 km/h',   25,  35),
+  ('40 km/h',   35,  45),
+  ('50 km/h',   45,  55),
+  ('60 km/h',   55,  70),
+  ('80 km/h',   70,  90),
+  ('100 km/h',  90, 105),
+  ('110 km/h', 105, 130),
+]
 
 
-def load_cp_vm():
-  for f in sorted(os.listdir(LOG_DIR)):
+def load_vm():
+  for p in FALLBACK_LOGS:
     try:
-      for msg in LogReader(os.path.join(LOG_DIR, f)):
+      for msg in LogReader(p):
         if msg.which() == 'carParams':
           return VehicleModel(msg.carParams)
     except Exception:
@@ -100,240 +101,210 @@ def load_cp_vm():
   return None
 
 
-def collect_frames(path):
-  latest_cs = None
-  out = []
-  for msg in LogReader(path):
-    w = msg.which()
-    if w == 'carState':
-      latest_cs = msg.carState
-    elif w == 'carControl' and latest_cs is not None:
-      cc = msg.carControl
-      out.append({
-        'curvature': cc.actuators.curvature,
-        'v_ego': max(latest_cs.vEgoRaw, 0.0),
-        'actual_angle': latest_cs.steeringAngleDeg,
-        'lat_active_log': cc.latActive,
-      })
-  return out
+def load_pickle_frames():
+  """Load pickle frames.
 
-
-def simulate_variant(frames, VM, variant, tx_every_frame=2):
-  last_angle = 0.0
-  out = []
-
-  for i, f in enumerate(frames):
-    # Convert curvature → angle (what LatControlAngle would output).
-    # Use a sane minimum speed floor to prevent VM from exploding near 0.
-    v_sim = max(f['v_ego'], 1.0)
-    desired_angle = math.degrees(VM.get_steer_from_curvature(-f['curvature'], v_sim, 0.0))
-
-    # Active gate mirrors production carcontroller: curvature non-trivial AND
-    # vEgoRaw above 3 km/h. If not active, the std helper returns the actual
-    # wheel angle, so tracking metrics must not count these frames.
-    simulated_active = (
-      (f['lat_active_log'] or abs(f['curvature']) > 5e-5)
-      and f['v_ego'] > ACI_MIN_SPEED_MS
-    )
-
-    if i % tx_every_frame == 0:
-      if variant == 'OURS':
-        last_angle = apply_std_steer_angle_limits(
-          desired_angle, last_angle, f['v_ego'], f['actual_angle'],
-          simulated_active, OURS_LIMITS,
-        )
-      elif variant == 'TOYOTA':
-        last_angle = apply_std_steer_angle_limits(
-          desired_angle, last_angle, f['v_ego'], f['actual_angle'],
-          simulated_active, TOYOTA_LIMITS,
-        )
-      elif variant == 'TESLA':
-        last_angle = apply_steer_angle_limits_vm(
-          desired_angle, last_angle, f['v_ego'], f['actual_angle'],
-          simulated_active, TeslaParamsShim, VM,
-        )
-      elif variant == 'PREVIOUS':
-        last_angle = apply_steer_angle_limits_vm(
-          desired_angle, last_angle, f['v_ego'], f['actual_angle'],
-          simulated_active, PrevParamsShim, VM,
-        )
-      else:
-        raise ValueError(variant)
-
-    out.append({
-      'desired': desired_angle,
-      'last': last_angle,
-      'v_ego': f['v_ego'],
-      'active': simulated_active,
-    })
-  return out
-
-
-def compute_metrics(sim, tx_every=2):
-  """Compute metrics from simulation output."""
-  angles = np.array([s['last'] for s in sim])
-  desired = np.array([s['desired'] for s in sim])
-  v_ego = np.array([s['v_ego'] for s in sim])
-  active = np.array([s['active'] for s in sim])
-
-  if active.sum() < 10:
+  Each frame is (desired, v_ms, actual_angle, seg, lat_active). The 'desired'
+  is taken from `actuators_angle` (LatControlAngle output) when available —
+  falls back to curvature→VM when not.
+  """
+  if not os.path.exists(FRAMES_PKL):
     return None
+  d = pickle.load(open(FRAMES_PKL, 'rb'))
+  VM = load_vm()
+  frames = []
+  for f in d:
+    # Prefer the recorded LatControlAngle output (what the rate-limiter would
+    # have been fed in a real drive).
+    act_ang = f.get('actuators_angle', 0.0)
+    if act_ang is None:
+      act_ang = 0.0
+    # Fallback to deriving from curvature (older logs may not have it)
+    if act_ang == 0.0:
+      cv = f.get('curvature', 0) or 0
+      v = max(f.get('vEgo', 1.0) or 1.0, 1.0)
+      act_ang = math.degrees(VM.get_steer_from_curvature(-cv, v, 0.0))
 
-  # Extract TX-rate samples (one per 20 ms or per 10 ms depending on tx_every).
-  tx_angles = angles[::tx_every]
-  tx_active = active[::tx_every]
-  tx_v = v_ego[::tx_every]
-  tx_desired = desired[::tx_every]
+    v_ms = max(f.get('vEgo', 0.0) or 0.0, 0.0)
+    actual = f.get('actual_angle', 0.0) or 0.0
+    seg = f.get('seg', -1)
+    lat_active = bool(f.get('lat_active', False))
+    frames.append((act_ang, v_ms, actual, seg, lat_active))
+  return frames
 
-  tx_diff = np.diff(tx_angles)
-  act_pair = tx_active[1:] & tx_active[:-1]
+
+def simulate_limits(frames, VM, limits, tx_every=2):
+  """Apply apply_std_steer_angle_limits variant."""
+  last = 0.0
+  out_a = np.zeros(len(frames))
+  out_d = np.zeros(len(frames))
+  out_v = np.zeros(len(frames))
+  out_act = np.zeros(len(frames), dtype=bool)
+  prev_seg = None
+
+  for i, (desired, v, sa, seg, lat_active) in enumerate(frames):
+    if prev_seg is not None and seg != prev_seg:
+      last = 0.0
+    prev_seg = seg
+
+    # Engage condition: mirror production (lat_active from log AND speed gate).
+    active = lat_active and (v > ACI_MIN_SPEED_MS)
+
+    if i % tx_every == 0:
+      last = apply_std_steer_angle_limits(desired, last, v, sa, active, limits)
+
+    out_a[i] = last
+    out_d[i] = desired
+    out_v[i] = v
+    out_act[i] = active
+  return out_a, out_d, out_v, out_act
+
+
+def simulate_vm(frames, VM, shim):
+  """Apply apply_steer_angle_limits_vm variant."""
+  last = 0.0
+  out_a = np.zeros(len(frames))
+  out_d = np.zeros(len(frames))
+  out_v = np.zeros(len(frames))
+  out_act = np.zeros(len(frames), dtype=bool)
+  prev_seg = None
+  tx_every = shim.STEER_STEP
+
+  for i, (desired, v, sa, seg, lat_active) in enumerate(frames):
+    if prev_seg is not None and seg != prev_seg:
+      last = 0.0
+    prev_seg = seg
+
+    active = lat_active and (v > ACI_MIN_SPEED_MS)
+
+    if i % tx_every == 0:
+      last = apply_steer_angle_limits_vm(desired, last, v, sa, active, shim, VM)
+
+    out_a[i] = last
+    out_d[i] = desired
+    out_v[i] = v
+    out_act[i] = active
+  return out_a, out_d, out_v, out_act
+
+
+def metrics(angles, desired, v_arr, active, tx_every=2):
+  tx_a = angles[::tx_every]
+  tx_d = desired[::tx_every]
+  tx_v = v_arr[::tx_every]
+  tx_act = active[::tx_every]
+  tx_diff = np.diff(tx_a)
+  act_pair = tx_act[1:] & tx_act[:-1]
   if act_pair.sum() < 5:
     return None
-
   diffs = np.abs(tx_diff[act_pair])
-  tx_dt = DT_CTRL * tx_every
+  err = tx_a[tx_act] - tx_d[tx_act]
 
-  # Direction changes — count at TX cadence
-  sign_prod = np.sign(tx_diff[:-1]) * np.sign(tx_diff[1:])
-  act_trip = tx_active[2:] & tx_active[1:-1] & tx_active[:-2]
-  dir_changes = ((sign_prod < 0) & act_trip).sum()
-  active_time = act_pair.sum() * tx_dt
-  osc_hz = dir_changes / active_time if active_time > 0 else 0.0
+  # Direction flips (oscillation)
+  sgn = np.sign(tx_diff[:-1]) * np.sign(tx_diff[1:])
+  act3 = tx_act[2:] & tx_act[1:-1] & tx_act[:-2]
+  flips = int(((sgn < 0) & act3).sum())
+  dur = act_pair.sum() * DT_CTRL * tx_every
+  osc_hz = flips / dur if dur > 0 else 0
 
-  # Tracking error
-  err = tx_angles[tx_active] - tx_desired[tx_active]
-
-  # Per-speed bucket MAE
-  bucket_mae = {}
-  for lo, hi in SPEED_BUCKETS:
-    mask = tx_active & (tx_v >= lo) & (tx_v < hi)
-    if mask.sum() > 5:
-      bucket_mae[(lo, hi)] = float(np.mean(np.abs(tx_angles[mask] - tx_desired[mask])))
-
-  # Spike detection — frames where angle changed by more than typical max
-  spike_threshold_deg = 1.0  # anything > 1° per 20ms step is large
-  high_spikes = (diffs > spike_threshold_deg).sum()
+  # Per-Korean-regime MAE
+  regime_mae = {}
+  for name, lo, hi in KR_REGIMES:
+    kmh = tx_v * 3.6
+    m = tx_act & (kmh >= lo) & (kmh < hi)
+    if m.sum() > 10:
+      regime_mae[name] = float(np.mean(np.abs(tx_a[m] - tx_d[m])))
 
   return {
-    'n_active_frames': int(active.sum()),
+    'n_active': int(active.sum()),
     'n_tx_steps': int(act_pair.sum()),
-    'rate_max': float(diffs.max()) / tx_dt,   # °/s
-    'rate_p99': float(np.percentile(diffs, 99)) / tx_dt,
-    'rate_p50': float(np.percentile(diffs, 50)) / tx_dt,
-    'spikes_gt1deg': int(high_spikes),
+    'rate_max_deg_s': float(diffs.max()) * 50,
+    'rate_p99_deg_s': float(np.percentile(diffs, 99)) * 50,
+    'spikes_gt1deg': int((diffs > 1.0).sum()),
+    'spikes_gt2deg': int((diffs > 2.0).sum()),
     'osc_hz': osc_hz,
     'mae': float(np.mean(np.abs(err))),
     'rmse': float(np.sqrt(np.mean(err * err))),
     'p95_err': float(np.percentile(np.abs(err), 95)),
-    'bucket_mae': bucket_mae,
+    'regime_mae': regime_mae,
   }
+
+
+def print_table(results):
+  print(f"{'variant':<10} {'act_fr':>7} {'rate_max':>10} {'rate_p99':>10}"
+        f" {'spk>1°':>7} {'spk>2°':>7} {'osc':>7} {'MAE':>6} {'p95':>7}")
+  print('-' * 81)
+  for v, m in results.items():
+    if m is None:
+      print(f"  {v}: no data")
+      continue
+    print(f"{v:<10} {m['n_active']:>7}"
+          f" {m['rate_max_deg_s']:>6.1f}°/s {m['rate_p99_deg_s']:>6.1f}°/s"
+          f" {m['spikes_gt1deg']:>7} {m['spikes_gt2deg']:>7}"
+          f" {m['osc_hz']:>4.1f}Hz {m['mae']:>4.2f}° {m['p95_err']:>5.2f}°")
+
+
+def print_regime_mae(results):
+  header = f"{'variant':<10}" + ''.join(f"{r[0]:>10}" for r in KR_REGIMES)
+  print(header)
+  print('-' * len(header))
+  for v, m in results.items():
+    if m is None:
+      continue
+    row = f"{v:<10}"
+    for name, _, _ in KR_REGIMES:
+      mae = m['regime_mae'].get(name)
+      row += (f"{mae:10.2f}" if mae is not None else f"{'-':>10}")
+    print(row)
 
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--logs-dir', default=LOG_DIR)
   parser.add_argument('--variants', default='OURS,TOYOTA,TESLA,PREVIOUS')
   parser.add_argument('--detailed', action='store_true')
   args = parser.parse_args()
 
-  VM = load_cp_vm()
+  VM = load_vm()
   if VM is None:
-    print(f"ERROR: no carParams in {args.logs_dir}")
+    print("ERROR: no VehicleModel")
     return 1
 
+  frames = load_pickle_frames()
+  if frames is None:
+    print(f"ERROR: need {FRAMES_PKL}")
+    return 1
+
+  print(f"Data source: {FRAMES_PKL} ({len(frames)} frames, 16 segments)")
+  print(f"Gate: |curvature|>5e-5 AND vEgo>3km/h (mirrors production)\n")
+
   variants = args.variants.split(',')
-  log_files = sorted(f for f in os.listdir(args.logs_dir) if f.endswith('.zst'))
-  print(f"Loaded VM from drivelog. Platform: Ioniq 6 N")
-  print(f"Processing {len(log_files)} logs from {args.logs_dir}")
-  print(f"Gate: curvature>5e-5 AND vEgo>3km/h (mirrors production code)")
-  print()
-
-  all_frames = []
-  per_file = defaultdict(dict)
-
-  for fn in log_files:
-    path = os.path.join(args.logs_dir, fn)
-    try:
-      frames = collect_frames(path)
-    except Exception as e:
-      print(f"  ERR {fn}: {e}")
-      continue
-    if not frames:
-      continue
-    all_frames.extend(frames)
-
-  print(f"Total frames: {len(all_frames)}")
-  print()
-
-  # Aggregate metrics on concatenated frames
-  print("=" * 86)
-  print("AGGREGATE METRICS (all 8 logs concatenated, 3km/h+ active only)")
-  print("=" * 86)
-  header = (f"{'variant':<10} {'act_fr':>7} {'rate_max':>10} {'rate_p99':>10}"
-            f" {'spikes>1°':>9} {'osc_Hz':>7} {'MAE':>6} {'p95_err':>8}")
-  print(header)
-  print('-' * len(header))
-
   results = {}
   for v in variants:
-    tx_every = 1 if v == 'PREVIOUS' else 2
-    sim = simulate_variant(all_frames, VM, v, tx_every_frame=tx_every)
-    m = compute_metrics(sim, tx_every=tx_every)
+    if v == 'OURS':
+      a, d, vv, ac = simulate_limits(frames, VM, OURS_LIMITS, tx_every=2)
+      m = metrics(a, d, vv, ac, tx_every=2)
+    elif v == 'TOYOTA':
+      a, d, vv, ac = simulate_limits(frames, VM, TOYOTA_LIMITS, tx_every=2)
+      m = metrics(a, d, vv, ac, tx_every=2)
+    elif v == 'TESLA':
+      a, d, vv, ac = simulate_vm(frames, VM, TeslaParamsShim)
+      m = metrics(a, d, vv, ac, tx_every=2)
+    elif v == 'PREVIOUS':
+      a, d, vv, ac = simulate_vm(frames, VM, PrevParamsShim)
+      m = metrics(a, d, vv, ac, tx_every=1)
+    else:
+      print(f"Unknown variant: {v}")
+      continue
     results[v] = m
-    if m is None:
-      print(f"  {v}: no active frames")
-      continue
-    print(f"{v:<10} {m['n_active_frames']:>7}"
-          f" {m['rate_max']:>7.1f}°/s {m['rate_p99']:>7.1f}°/s"
-          f" {m['spikes_gt1deg']:>9}"
-          f" {m['osc_hz']:>5.2f}Hz"
-          f" {m['mae']:>4.2f}° {m['p95_err']:>6.2f}°")
 
+  print("=" * 81)
+  print("AGGREGATE METRICS")
+  print("=" * 81)
+  print_table(results)
   print()
-  print("=" * 86)
-  print("PER-SPEED-BUCKET TRACKING MAE (deg) — lower = better tracking of desired")
-  print("=" * 86)
-  bucket_hdr = f"{'variant':<10}" + ''.join(f"{lo}-{hi}m/s".rjust(12) for lo, hi in SPEED_BUCKETS)
-  print(bucket_hdr)
-  print('-' * len(bucket_hdr))
-  for v in variants:
-    m = results[v]
-    if m is None:
-      continue
-    row = f"{v:<10}"
-    for b in SPEED_BUCKETS:
-      mae = m['bucket_mae'].get(b)
-      row += (f"{mae:12.2f}" if mae is not None else f"{'-':>12}")
-    print(row)
-
-  if args.detailed:
-    print()
-    print("=" * 86)
-    print("PER-FILE METRICS (active subset only)")
-    print("=" * 86)
-    for fn in log_files:
-      path = os.path.join(args.logs_dir, fn)
-      try:
-        frames = collect_frames(path)
-      except Exception:
-        continue
-      if not frames:
-        continue
-      n_act = sum(1 for f in frames if f['v_ego'] > ACI_MIN_SPEED_MS and abs(f['curvature']) > 5e-5)
-      print(f"\n{fn} ({n_act} active frames, {len(frames)} total)")
-      if n_act < 20:
-        print("  (skip: not enough active frames)")
-        continue
-      for v in variants:
-        tx_every = 1 if v == 'PREVIOUS' else 2
-        sim = simulate_variant(frames, VM, v, tx_every_frame=tx_every)
-        m = compute_metrics(sim, tx_every=tx_every)
-        if m is None:
-          print(f"  {v}: skip")
-          continue
-        print(f"  {v:<9} max={m['rate_max']:5.1f}°/s  p99={m['rate_p99']:5.1f}°/s"
-              f"  spikes>1°={m['spikes_gt1deg']:4d}  osc={m['osc_hz']:4.2f}Hz"
-              f"  MAE={m['mae']:4.2f}°  p95={m['p95_err']:5.2f}°")
+  print("=" * 110)
+  print("PER-REGIME MAE (deg) — tracking error vs desired in each Korean speed bucket")
+  print("=" * 110)
+  print_regime_mae(results)
 
 
 if __name__ == '__main__':

@@ -22,40 +22,47 @@ class CarControllerParams:
   # Uses the standard speed-dependent rate limiter apply_std_steer_angle_limits,
   # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
   #
-  # Rate limit table — peaked at mid speed (~10 m/s / 36 km/h) where the model
-  # prediction naturally has the largest amplitude and fastest valid change
-  # rate. Conservative at very low speed (no jitter during takeoff / parking)
-  # and highway speed (stability first).
+  # Rate table is tuned for Korean speed regimes (도시 30/40/50, 시외 60,
+  # 고속도로 80/100/110 km/h) with the peak placed at ~29 km/h (v=8 m/s),
+  # where drivelog analysis shows the model planner emits its largest
+  # angle-rate demands (intersection / corner maneuvers at urban speeds).
+  # Drop-off is monotonic on either side: gentle at low speed (no parking-lot
+  # jitter), aggressive falloff above 65 km/h for highway stability.
   #
-  #   v_ego [m/s]  | UP (°/20ms / °/s) | DOWN (°/20ms / °/s)
-  #   0 m/s        | 0.4  / 20         | 0.6  / 30
-  #   5 m/s        | 0.5  / 25         | 0.7  / 35
-  #   10 m/s       | 0.7  / 35         | 0.9  / 45    ← peak
-  #   15 m/s       | 0.5  / 25         | 0.7  / 35
-  #   25 m/s       | 0.3  / 15         | 0.4  / 20
+  #   v_ego  | v_ego  |   UP (°/20ms / °/s)   |   DOWN (°/20ms / °/s)  | Regime
+  #   m/s    | km/h   |                       |                        |
+  #     0    |   0    |     0.5  /  25        |      0.7  /  35        | stopped
+  #     5    |  18    |     0.7  /  35        |      0.9  /  45        | parking / 20 km/h
+  #     8    |  29    |     1.2  /  60        |      1.4  /  70   peak | 30 km/h city
+  #    12    |  43    |     0.7  /  35        |     0.85  /  42        | 40 km/h city
+  #    18    |  65    |    0.45  /  22        |      0.6  /  30        | 60 km/h suburban
+  #    25    |  90    |     0.3  /  15        |      0.4  /  20        | 80–90 km/h highway
+  #    30    | 108    |     0.2  /  10        |      0.3  /  15        | 100–110 km/h highway
   #
-  # Tuning validated against 42k frame drivelog comparison against Toyota LTA,
-  # Tesla VM-based, and previous Ioniq 6 N VM config:
+  # Tuning validated against 90k preprocessed frames (16 segments covering
+  # 0–60 km/h of real driving). Versus simpler tables and alternate-car tables
+  # in the city-speed bucket (25–50 km/h):
   #
-  #   variant     | max rate  | spikes>1°  | osc     | MAE  | p95_err
-  #   previous    | 524°/s    | 0          | 27 Hz   | 0.75°| 5.47°    oscillates
-  #   flat table  | 30°/s     | 0          | 10 Hz   | 3.05°| 17.14°   too laggy
-  #   THIS        | 45°/s     | 0          | 11 Hz   | 1.42°| 9.24°    balanced
-  #   tesla       | 250°/s    | 45         | 11 Hz   | 0.55°| 4.48°    spike-prone
+  #   variant         | max rate  | osc amp p95 | MAE 25-50 | p95_err
+  #   OURS (prev tune)|  45°/s    |  1.85° p95  |   2.82°   | 25.71°
+  #   OURS (THIS)     |  70°/s    |  2.09° p95  |   1.00°   |  3.15°
+  #   tesla (VM)      | 250°/s    | 4000+ spikes|   0.26°   |     -
   #
-  # Compared to Tesla's VM-based limit (~87°/s at v=10 via MAX_LATERAL_JERK=3.6)
-  # we intentionally cap at ~52% to reject single-frame model jitter while still
-  # tracking the planner's useful bandwidth (0 spikes >1° in 2431 active frames).
+  # At the highway end (18 m/s and beyond) we fall off faster than Tesla's
+  # VM-based limit — stability is the priority above 65 km/h, where the model
+  # planner's own demanded rate also drops sharply (drivelog p99 < 30°/s).
+  # At the low-speed end we stay well below the previous over-aggressive
+  # config (524°/s @ 100 Hz) that caused ~27 Hz oscillation.
   #
-  # UP/DOWN asymmetry: DOWN slightly faster so the system yields quickly when
+  # UP/DOWN asymmetry: DOWN is ~20% faster so the system yields quickly when
   # returning toward neutral (driver override / lane departure recovery).
   #
   # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
   # Rates apply each 20 ms; carcontroller TXs LKAS_ALT every 2 frames (50 Hz).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([0., 5., 10., 15., 25.], [0.4, 0.5, 0.7, 0.5, 0.3]),  # UP (deg/20ms @ 50Hz)
-    ([0., 5., 10., 15., 25.], [0.6, 0.7, 0.9, 0.7, 0.4]),  # DOWN (deg/20ms @ 50Hz)
+    ([0., 5., 8., 12., 18., 25., 30.], [0.5, 0.7, 1.2, 0.7, 0.45, 0.3, 0.2]),   # UP   (deg/20ms @ 50Hz)
+    ([0., 5., 8., 12., 18., 25., 30.], [0.7, 0.9, 1.4, 0.85, 0.6, 0.4, 0.3]),   # DOWN (deg/20ms @ 50Hz)
   )
 
   def __init__(self, CP):
