@@ -42,7 +42,7 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 # over torque-chain cars (5 N, Toyota). Maximizing its reactivity is preferred
 # over emulating older tuning, while still providing basic noise rejection to
 # avoid EPS stress from frame-level model jitter.
-LKAS_FILTER_TAU = 0.15  # seconds - suppress high-frequency hunting (was 0.05, caused 40Hz oscillation)
+LKAS_FILTER_TAU = 0.25  # seconds - heavy low-pass for natural feel (Toyota LTA equivalent)
 LKAS_FILTER_ALPHA = 1.0 - math.exp(-DT_CTRL / LKAS_FILTER_TAU)
 
 
@@ -225,36 +225,45 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # steering control
     ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
-    driver_overriding = False
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
-    # Minimum speed for ACI activation: prevents low-speed steering jitter at start/stop
     aci_speed_ok = CS.out.vEgoRaw > 3.0 / 3.6  # 3 km/h
+    # Toyota LTA-style gradient driver override blending.
+    # Instead of binary steeringPressed (threshold ~100 Nm-units), compute a
+    # smooth blend factor from raw torque. This allows openpilot to back off
+    # gracefully when the driver applies even small torque, matching stock feel.
+    DRIVER_TORQUE_DEADZONE = 30   # below this: no reduction (normal driving)
+    DRIVER_TORQUE_FULL_OVERRIDE = 150  # at/above this: fully surrendered (Toyota MAX_LTA_DRIVER_TORQUE_ALLOWANCE)
+    driver_abs_torque = abs(CS.out.steeringTorque)
+    override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
+                                     (DRIVER_TORQUE_FULL_OVERRIDE - DRIVER_TORQUE_DEADZONE), 0.0, 1.0))
+    driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
+    blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     if ccnc_lka_alt:
       angle_limits = CarControllerParams.ANGLE_LIMITS
       v = max(CS.out.vEgoRaw, 1.0)
 
-      driver_overriding = CS.out.steeringPressed
-
-      # Use LatControlAngle feedforward only (no PID — live steerRatio + angleOffsetDeg
-      # + roll already provide sufficient accuracy at r=0.985, bias=0.007°.
-      # PID was causing 40Hz oscillation; will redesign after stock LFA data analysis.)
+      # Feedforward-only angle (LatControlAngle provides live steerRatio,
+      # angleOffsetDeg, roll compensation — r=0.985 without PID).
       desired_angle_deg = CC.actuators.steeringAngleDeg
 
-      if driver_overriding:
-        desired_angle_deg = float(CS.out.steeringAngleDeg)
-      elif not CC.latActive:
-        desired_angle_deg = float(CS.out.steeringAngleDeg)
+      # Blend toward driver's actual wheel angle when driver is fighting or inactive
+      if override_factor > 0 or not CC.latActive:
+        desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
+                            override_factor * float(CS.out.steeringAngleDeg)
+        if not CC.latActive:
+          desired_angle_deg = float(CS.out.steeringAngleDeg)
 
       desired_angle_deg = float(np.clip(desired_angle_deg,
                                         -angle_limits.STEER_ANGLE_MAX,
                                         angle_limits.STEER_ANGLE_MAX))
 
+      # Rate limit based on ISO 11270 lateral jerk (physics-based)
       max_curvature_rate = angle_limits.MAX_LATERAL_JERK / (v * v)
       max_angle_rate_sec = math.degrees(self.VM.get_steer_from_curvature(max_curvature_rate, v, 0.0))
       max_delta = min(max_angle_rate_sec * DT_CTRL, angle_limits.MAX_ANGLE_RATE)
 
-      if CC.latActive or driver_overriding:
+      if CC.latActive:
         new_angle = float(np.clip(desired_angle_deg,
                                   self.apply_angle_last - max_delta,
                                   self.apply_angle_last + max_delta))
@@ -265,7 +274,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             -angle_limits.STEER_ANGLE_MAX,
                                             angle_limits.STEER_ANGLE_MAX))
 
-      if CC.latActive or driver_overriding:
+      if CC.latActive:
         self.apply_angle_filtered += LKAS_FILTER_ALPHA * (self.apply_angle_last - self.apply_angle_filtered)
       else:
         self.apply_angle_filtered = self.apply_angle_last
@@ -273,7 +282,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     apply_angle_out = self.apply_angle_filtered if ccnc_lka_alt else self.apply_angle_last
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
                                                            apply_angle=apply_angle_out, lkas_alt_cam_msg=lkas_alt_cam_msg,
-                                                           driver_overriding=driver_overriding,
+                                                           driver_torque_blend=driver_torque_blend,
+                                                           blinker_on=blinker_on,
                                                            aci_speed_ok=aci_speed_ok))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU

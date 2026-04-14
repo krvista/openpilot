@@ -38,30 +38,48 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None, driver_overriding=False, aci_speed_ok=True):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
+                             driver_torque_blend=1.0, blinker_on=False, aci_speed_ok=True):
+  """
+  Create LKAS_ALT message for Ioniq 6 N (CCNC + LKA_STEERING_ALT).
+
+  driver_torque_blend: 1.0 = no driver input, 0.0 = driver fully overriding.
+    Used for gradient ACI authority reduction (Toyota LTA TORQUE_WIND_DOWN style).
+  blinker_on: reduce ACI authority during turn signals to avoid fighting lane changes.
+  aci_speed_ok: False below minimum speed (3 km/h) to prevent low-speed jitter.
+  """
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # When lateral control is inactive (cruise off), forward camera's LKAS_ALT
-    # unchanged so ADAS DRV can run stock LFA. This enables stock LFA data
-    # collection without SSH — just turn cruise off while MADS is on.
-    if not lat_active and not driver_overriding and lkas_alt_cam_msg is not None:
+    # When inactive (cruise off) and driver isn't fighting: forward camera values
+    # unchanged so ADAS DRV can run stock LFA. No-SSH stock LFA data collection.
+    if not lat_active and driver_torque_blend > 0.9 and lkas_alt_cam_msg is not None:
       lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
       return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
-    # ACI signals are only active when openpilot is steering AND driver is NOT
-    # overriding AND speed is above minimum (prevents low-speed jitter).
-    # When the driver grabs the wheel (steeringPressed or high torque), we must release
-    # ACI authority so MDPS doesn't fight the driver. Without this, the driver needs
-    # extreme force to override (p50=368 Nm-units vs normal ~50).
-    aci_active = lat_active and not driver_overriding and aci_speed_ok
+    # Gradient ACI authority: blend based on driver torque and turn signal state.
+    # driver_torque_blend=1.0 means full ACI; 0.0 means none (driver fully in control).
+    # This mirrors Toyota LTA's TORQUE_WIND_DOWN gradient instead of binary on/off.
+    authority = driver_torque_blend if lat_active and aci_speed_ok else 0.0
+    if blinker_on:
+      authority *= 0.2  # large gain reduction during turn signals (natural lane change feel)
+
+    aci_active = lat_active and aci_speed_ok and authority > 0.1
 
     if lkas_alt_cam_msg is not None:
+      # Mirror camera values, override ADAS_StrAnglReqVal + activation signals.
+      # When active: scale ACIGain by authority instead of forced 1.0 — this
+      # prevents the "openpilot fighting driver" feel and matches stock profile.
+      # When active: force LKA_ICON=2 (green) so driver knows openpilot is steering.
+      cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
+      # Use max(camera_gain, authority * 0.6) — camera's value if active, modest floor otherwise
+      effective_aci_gain = max(cam_aci_gain, authority * 0.6) if aci_active else cam_aci_gain
+
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
         "LKA_AVAILABLE":             lkas_alt_cam_msg["LKA_AVAILABLE"],
         "LKA_WARNING":               lkas_alt_cam_msg["LKA_WARNING"],
-        "LKA_ICON":                  lkas_alt_cam_msg["LKA_ICON"],
+        "LKA_ICON":                  2 if aci_active else lkas_alt_cam_msg["LKA_ICON"],
         "FCA_SYSWARN":               lkas_alt_cam_msg["FCA_SYSWARN"],
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
@@ -74,7 +92,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_ANGLE_ACTIVE":         2 if aci_active else (1 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"]),
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": 1.0 if aci_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": effective_aci_gain,
         "LKAS_BYTE7_BITS4_5":        3 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
         "LKAS_BYTE7_BIT7":           1 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
         "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if aci_active else 0),
@@ -84,20 +102,21 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_BYTE31":               lkas_alt_cam_msg["LKAS_BYTE31"],
       }
     else:
+      # Fallback (startup before camera message received)
       lkas_values = {
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
-        "LKA_ICON": lkas_icon,
+        "LKA_ICON": 2 if aci_active else 1,  # 2=green when openpilot steers
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
         "LKA_ASSIST": 1 if aci_active else 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
         "HAS_LANE_SAFETY": 0,
-        "LKAS_BYTE9_HIDDEN": 0x5,          # most common camera low-nibble
+        "LKAS_BYTE9_HIDDEN": 0x5,
         "LKAS_ANGLE_ACTIVE": 2 if aci_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": 1.0 if aci_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": authority * 0.6 if aci_active else 0,
         "LKAS_BYTE7_BITS4_5": 3 if aci_active else 0,
         "LKAS_BYTE7_BIT7": 1 if aci_active else 0,
         "LKAS_BYTE13": 0x09 if aci_active else 0,

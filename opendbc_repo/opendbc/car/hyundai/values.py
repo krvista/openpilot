@@ -50,8 +50,8 @@ class CarControllerParams:
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
     ([], []),  # ANGLE_RATE_LIMIT_UP (unused - custom rate limiter in carcontroller)
     ([], []),  # ANGLE_RATE_LIMIT_DOWN (unused)
-    MAX_LATERAL_JERK=5.0,   # m/s³ - ISO 11270 hard max (used by custom rate limiter)
-    MAX_ANGLE_RATE=2.4,     # deg/10ms frame - above stock camera p99.9, sporty cap
+    MAX_LATERAL_JERK=3.0,   # m/s³ - reduced from 5.0 for smoother feel (Toyota-like)
+    MAX_ANGLE_RATE=1.0,     # deg/10ms frame - reduced from 2.4 for stock LTA-like natural feel
   )
 
   def __init__(self, CP):
