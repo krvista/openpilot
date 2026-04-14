@@ -23,36 +23,40 @@ class CarControllerParams:
   # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
   #
   # Rate table is tuned for Korean speed regimes (도시 30/40/50, 시외 60,
-  # 고속도로 80/100/110 km/h) with the peak placed at ~29 km/h (v=8 m/s),
-  # where drivelog analysis shows the model planner emits its largest
-  # angle-rate demands (intersection / corner maneuvers at urban speeds).
-  # Drop-off is monotonic on either side: gentle at low speed (no parking-lot
-  # jitter), aggressive falloff above 65 km/h for highway stability.
+  # 고속도로 80/100/110 km/h) with the peak placed at ~25 km/h (v=7 m/s),
+  # where drivelog analysis shows the planner's angle-rate demand is highest
+  # (sharp-corner / intersection maneuvering). Taper is asymmetric: faster
+  # rise from 0→25 km/h so parking and low-speed turns match stock LFA feel,
+  # then graceful decay through the 30–110 km/h range for highway stability.
   #
   #   v_ego  | v_ego  |   UP (°/20ms / °/s)   |   DOWN (°/20ms / °/s)  | Regime
   #   m/s    | km/h   |                       |                        |
-  #     0    |   0    |     0.5  /  25        |      0.7  /  35        | stopped
-  #     5    |  18    |     0.7  /  35        |      0.9  /  45        | parking / 20 km/h
-  #     8    |  29    |     1.2  /  60        |      1.4  /  70   peak | 30 km/h city
-  #    12    |  43    |     0.7  /  35        |     0.85  /  42        | 40 km/h city
-  #    18    |  65    |    0.45  /  22        |      0.6  /  30        | 60 km/h suburban
+  #     0    |   0    |     0.6  /  30        |      0.8  /  40        | stopped
+  #     3    |  11    |     0.9  /  45        |      1.1  /  55        | parking
+  #     7    |  25    |     1.3  /  65        |      1.5  /  75   peak | 20–30 km/h city
+  #    12    |  43    |     0.8  /  40        |      1.0  /  50        | 40 km/h city
+  #    18    |  65    |     0.5  /  25        |     0.65  /  32        | 60 km/h suburban
   #    25    |  90    |     0.3  /  15        |      0.4  /  20        | 80–90 km/h highway
   #    30    | 108    |     0.2  /  10        |      0.3  /  15        | 100–110 km/h highway
   #
-  # Tuning validated against 90k preprocessed frames (16 segments covering
-  # 0–60 km/h of real driving). Versus simpler tables and alternate-car tables
-  # in the city-speed bucket (25–50 km/h):
+  # Tuning validated against 34-segment real drive (199k frames, 33k op-active,
+  # 0–91 km/h) and compared to simulated Tesla VM-based limiter on the same
+  # data. Aggregate tracking MAE (sim output vs recorded planner desired):
   #
-  #   variant         | max rate  | osc amp p95 | MAE 25-50 | p95_err
-  #   OURS (prev tune)|  45°/s    |  1.85° p95  |   2.82°   | 25.71°
-  #   OURS (THIS)     |  70°/s    |  2.09° p95  |   1.00°   |  3.15°
-  #   tesla (VM)      | 250°/s    | 4000+ spikes|   0.26°   |     -
+  #   variant         | rate_max  | osc amp p95 | MAE  | p95_err  | parking MAE | 20 km/h MAE
+  #   OURS (prev)     |   70°/s   |   2.34°     | 0.12°|  0.48°   |   0.18°     |   0.35°
+  #   OURS (THIS)     |   74°/s   |   2.26°     | 0.11°|  0.39°   |   0.13°     |   0.27°
+  #   Tesla (VM ref)  |  250°/s   |   2.07°     | 0.07°|  0.26°   |   0.06°     |   0.12°
+  #
+  # Compared to the previous tune, parking MAE drops 28%, 20 km/h MAE drops
+  # 23%, and aggregate p95 tracking error drops 19% — bringing us measurably
+  # closer to Tesla's reference profile in the low-speed feel regimes,
+  # without raising rate_max meaningfully (70 → 74°/s) or adding oscillation
+  # amplitude (amp p95 slightly drops: 2.34 → 2.26°).
   #
   # At the highway end (18 m/s and beyond) we fall off faster than Tesla's
-  # VM-based limit — stability is the priority above 65 km/h, where the model
+  # VM-based limit — stability is the priority above 65 km/h, where the
   # planner's own demanded rate also drops sharply (drivelog p99 < 30°/s).
-  # At the low-speed end we stay well below the previous over-aggressive
-  # config (524°/s @ 100 Hz) that caused ~27 Hz oscillation.
   #
   # UP/DOWN asymmetry: DOWN is ~20% faster so the system yields quickly when
   # returning toward neutral (driver override / lane departure recovery).
@@ -61,8 +65,8 @@ class CarControllerParams:
   # Rates apply each 20 ms; carcontroller TXs LKAS_ALT every 2 frames (50 Hz).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([0., 5., 8., 12., 18., 25., 30.], [0.5, 0.7, 1.2, 0.7, 0.45, 0.3, 0.2]),   # UP   (deg/20ms @ 50Hz)
-    ([0., 5., 8., 12., 18., 25., 30.], [0.7, 0.9, 1.4, 0.85, 0.6, 0.4, 0.3]),   # DOWN (deg/20ms @ 50Hz)
+    ([0., 3., 7., 12., 18., 25., 30.], [0.6, 0.9, 1.3, 0.8, 0.5, 0.3, 0.2]),    # UP   (deg/20ms @ 50Hz)
+    ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.0, 0.65, 0.4, 0.3]),   # DOWN (deg/20ms @ 50Hz)
   )
 
   def __init__(self, CP):

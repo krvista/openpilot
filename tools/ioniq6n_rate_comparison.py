@@ -42,7 +42,9 @@ from opendbc.car import DT_CTRL
 from opendbc.car.hyundai.values import CarControllerParams as HyundaiParams
 
 
-FRAMES_PKL = '/tmp/drivelog_frames.pkl'
+FRAMES_PKL = '/tmp/drivelog_frames.pkl'            # older preprocessed data (16 segs, 0–58 km/h)
+CCNC_CACHE = '/tmp/ccnc_frames.pkl'                 # 34-segment real drive (0–91 km/h, 33k op-active)
+CCNC_LOG_DIR = '/tmp/ccnc_drivelog'
 FALLBACK_LOGS = [
   '/tmp/ioniq6n_logs/99b215d21bbf8735_00000004--90915acd0e--0--rlog.zst',
 ]
