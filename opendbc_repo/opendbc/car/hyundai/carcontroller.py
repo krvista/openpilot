@@ -1,9 +1,7 @@
-import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance
-from opendbc.car.vehicle_model import VehicleModel
+from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -24,26 +22,6 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
-
-# Ioniq 6 N LKAS_ALT angle-command smoothing filter.
-# 1st-order low-pass applied to the rate-limited apply_angle to reject single-
-# frame model jitter while preserving the N-car's reactive response to camera
-# lane updates.
-#
-# τ = 50ms is a tight filter that only rejects high-frequency noise. Planner's
-# steerActuatorDelay (0.1s) compensates for half of the 50ms filter phase delay
-# plus the physical ADAS DRV + MDPS latency, leaving a small positive net lag
-# of ~50ms which is imperceptible but enough to absorb single-frame jitter.
-#
-# Response: rise 10-90% = 110ms, settling 2% = 190ms, phase delay ≈ 50ms.
-# α = 1 - exp(-0.01/0.05) ≈ 0.1813 (much more reactive than τ=100ms's 0.0952).
-#
-# Rationale: the Ioniq 6 N's direct angle control is a performance advantage
-# over torque-chain cars (5 N, Toyota). Maximizing its reactivity is preferred
-# over emulating older tuning, while still providing basic noise rejection to
-# avoid EPS stress from frame-level model jitter.
-LKAS_FILTER_TAU = 0.25  # seconds - heavy low-pass for natural feel (Toyota LTA equivalent)
-LKAS_FILTER_ALPHA = 1.0 - math.exp(-DT_CTRL / LKAS_FILTER_TAU)
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -87,13 +65,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.accel_last = 0
     self.apply_torque_last = 0
     self.apply_angle_last = 0.0
-    self.apply_angle_filtered = 0.0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
-
-    # Vehicle model used to compute desired steering angle from curvature for angle-based control
-    # (Ioniq 6 N: LatControlTorque returns steeringAngleDeg=0, so we derive it from actuators.curvature)
-    self.VM = VehicleModel(CP)
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -239,52 +212,37 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
-    if ccnc_lka_alt:
+    # Ioniq 6 N angle control: standard speed-dependent rate limiter at 50 Hz,
+    # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
+    # No output filter — rate limit itself provides natural smoothing.
+    if ccnc_lka_alt and self.frame % 2 == 0:
       angle_limits = CarControllerParams.ANGLE_LIMITS
-      v = max(CS.out.vEgoRaw, 1.0)
 
-      # Feedforward-only angle (LatControlAngle provides live steerRatio,
-      # angleOffsetDeg, roll compensation — r=0.985 without PID).
+      # Feedforward from LatControlAngle (includes live steerRatio,
+      # angleOffsetDeg, roll compensation — r=0.985 without additional PID).
       desired_angle_deg = CC.actuators.steeringAngleDeg
 
-      # Blend toward driver's actual wheel angle when driver is fighting or inactive
-      if override_factor > 0 or not CC.latActive:
+      # Gradient driver override blend: smoothly yield toward actual wheel
+      # position as driver torque increases (Toyota LTA TORQUE_WIND_DOWN style).
+      if override_factor > 0:
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
                             override_factor * float(CS.out.steeringAngleDeg)
-        if not CC.latActive:
-          desired_angle_deg = float(CS.out.steeringAngleDeg)
 
-      desired_angle_deg = float(np.clip(desired_angle_deg,
-                                        -angle_limits.STEER_ANGLE_MAX,
-                                        angle_limits.STEER_ANGLE_MAX))
+      # Speed-dependent rate limiter (20 ms cadence). When !lat_active, the
+      # helper returns CS.out.steeringAngleDeg so resume is bump-free.
+      self.apply_angle_last = apply_std_steer_angle_limits(
+        desired_angle_deg, self.apply_angle_last, CS.out.vEgoRaw,
+        float(CS.out.steeringAngleDeg), CC.latActive, angle_limits,
+      )
 
-      # Rate limit based on ISO 11270 lateral jerk (physics-based)
-      max_curvature_rate = angle_limits.MAX_LATERAL_JERK / (v * v)
-      max_angle_rate_sec = math.degrees(self.VM.get_steer_from_curvature(max_curvature_rate, v, 0.0))
-      max_delta = min(max_angle_rate_sec * DT_CTRL, angle_limits.MAX_ANGLE_RATE)
-
-      if CC.latActive:
-        new_angle = float(np.clip(desired_angle_deg,
-                                  self.apply_angle_last - max_delta,
-                                  self.apply_angle_last + max_delta))
-      else:
-        new_angle = float(CS.out.steeringAngleDeg)
-
-      self.apply_angle_last = float(np.clip(new_angle,
-                                            -angle_limits.STEER_ANGLE_MAX,
-                                            angle_limits.STEER_ANGLE_MAX))
-
-      if CC.latActive:
-        self.apply_angle_filtered += LKAS_FILTER_ALPHA * (self.apply_angle_last - self.apply_angle_filtered)
-      else:
-        self.apply_angle_filtered = self.apply_angle_last
-
-    apply_angle_out = self.apply_angle_filtered if ccnc_lka_alt else self.apply_angle_last
-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
-                                                           apply_angle=apply_angle_out, lkas_alt_cam_msg=lkas_alt_cam_msg,
-                                                           driver_torque_blend=driver_torque_blend,
-                                                           blinker_on=blinker_on,
-                                                           aci_speed_ok=aci_speed_ok))
+    # Steering message TX: 50 Hz for CCNC LKA_ALT (matching Toyota/Tesla/Nissan),
+    # 100 Hz for other Hyundai CAN FD cars (torque-based, unchanged).
+    if not ccnc_lka_alt or self.frame % 2 == 0:
+      can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
+                                                             apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
+                                                             driver_torque_blend=driver_torque_blend,
+                                                             blinker_on=blinker_on,
+                                                             aci_speed_ok=aci_speed_ok))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT

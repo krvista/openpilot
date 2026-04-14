@@ -19,39 +19,32 @@ class CarControllerParams:
   ACCEL_MAX = 2.0 # m/s
 
   # Angle-based control limits for CCNC LKA_STEERING_ALT cars (Ioniq 6 N).
-  # Uses a custom jerk-limited rate limiter in carcontroller (not the shared
-  # apply_steer_angle_limits_vm helper) because the shared helper's lateral-accel
-  # position clamp can bypass the rate limit when speed increases while the
-  # commanded angle is outside the newly-computed max_angle boundary (causing
-  # a rate-limit-violating jump).
+  # Uses the standard speed-dependent rate limiter apply_std_steer_angle_limits,
+  # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
   #
-  # Hardware analysis (154k carState frames, driver override + stock LFA):
-  #   Driver-commanded wheel rate p99: 4.8°/f at 0-3 m/s (480°/s)
-  #   Driver-commanded wheel rate max: 8.4°/f (840°/s) = Ioniq 6 N MDPS max
-  #   Stock camera p99:  2.2°/f at 0-6 m/s (220°/s)
-  #   Stock camera p99.9: 2.3°/f at 0-6 m/s
+  # Rate limit table (Tesla-inspired, aggressive at low speed):
+  #   v_ego [m/s]  | UP rate (deg/20ms) | DOWN rate (deg/20ms) | UP deg/s | DOWN deg/s
+  #   0 - 5 m/s    | 0.4                | 0.6                  | 20       | 30
+  #   15 m/s       | 0.3                | 0.4                  | 15       | 20
+  #   25 m/s       | 0.2                | 0.3                  | 10       | 15
+  #
+  # Compared to references at 5 m/s:
+  #   Toyota LTA:  15°/s (0.3°/20ms) — most conservative
+  #   This (ours): 20°/s (0.4°/20ms) — Tesla-inspired, aggressive at low speed
+  #   Previous:   100°/s (1.0°/10ms) — over-aggressive, caused oscillation
+  #
+  # UP/DOWN asymmetry: DOWN is faster than UP so the system yields faster when
+  # returning toward neutral (driver override / lane departure recovery).
   #
   # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
   #
-  # Chosen parameters (ISO 11270 liberal, sporty tuning):
-  #   MAX_LATERAL_JERK = 5.0 m/s³  - ISO 11270 hard max (for VM-based rate)
-  #   MAX_ANGLE_RATE   = 2.4 deg/f - slightly above stock camera p99.9 (2.3),
-  #                                  matches Tesla Model 3/Y effective rate
-  #                                  (2.5°/10ms), preserves N-car reactivity
-  #
-  # Full drivelog validation (619458 frames, 106 segments, 4 routes):
-  #   0 exceptions, 0 NaN/Inf, 0 STEER_ANGLE_MAX violations,
-  #   0 rate-limit violations
-  #
-  # Compared to Toyota LTA (0.3°/f at 5 m/s), we're 8x higher at low speed
-  # because Ioniq 6 N uses angle commands directly (not torque-mediated),
-  # and the Hyundai stock camera itself uses up to 2.3°/f in the same data.
+  # Rates are applied each 20 ms (50 Hz transmission cadence), matching
+  # Toyota/Tesla/Nissan. The carcontroller updates apply_angle_last and sends
+  # LKAS_ALT every 2 frames.
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([], []),  # ANGLE_RATE_LIMIT_UP (unused - custom rate limiter in carcontroller)
-    ([], []),  # ANGLE_RATE_LIMIT_DOWN (unused)
-    MAX_LATERAL_JERK=3.0,   # m/s³ - reduced from 5.0 for smoother feel (Toyota-like)
-    MAX_ANGLE_RATE=1.0,     # deg/10ms frame - reduced from 2.4 for stock LTA-like natural feel
+    ([0., 5., 15., 25.], [0.4, 0.4, 0.3, 0.2]),  # ANGLE_RATE_LIMIT_UP (deg/20ms @ 50Hz)
+    ([0., 5., 15., 25.], [0.6, 0.5, 0.4, 0.3]),  # ANGLE_RATE_LIMIT_DOWN (deg/20ms @ 50Hz)
   )
 
   def __init__(self, CP):
