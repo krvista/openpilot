@@ -6,13 +6,36 @@
 
 ---
 
+## Platform scope
+
+This plan targets the **HDA2-ALT + CCNC angle-control platform** — any
+Hyundai/Kia/Genesis car whose `CarParams.flags` end up containing both
+`HyundaiFlags.CCNC` **and** `HyundaiFlags.CANFD_LKA_STEERING_ALT`. The
+second flag is auto-detected in `interface.py` from the presence of
+LKAS_ALT (0x110) on the camera bus at fingerprint time; the first is
+declared statically per car in `values.py`. Members today:
+
+* `HYUNDAI_IONIQ_6_N` (2026) — the first and only measured member; all
+  tuning defaults in this plan derive from its 1.24 M-frame drivelog.
+
+Future members (any 2025+ MY Hyundai/Kia/Genesis car with the same ADAS
+architecture — LKAS_ALT on camera bus, ADAS_StrAnglReqVal commanding
+MDPS) will **inherit the entire behaviour automatically** once their
+fingerprint lands with `CCNC` declared. No platform-logic code changes
+needed; per-car tuning overrides (rate table, α, etc.) remain optional
+in `CarControllerParams.__init__` and the module-level CAMREF_*
+constants.
+
+Logic entry points use the `is_ccnc_angle_platform(CP.flags)` helper in
+`opendbc_repo/opendbc/car/hyundai/carcontroller.py`.
+
 ## Context
 
-Earlier sessions landed a working angle-control path for the Ioniq 6 N
-(HDA2-ALT + CCNC), converged on a speed-indexed rate table, added
-camera-mirrored ACI bytes, dual-threshold hysteresis, aci_gain ramp,
-CCNC_0x161 op-only alert suppression, and rebuilt the panda firmware so
-the TX whitelist actually honors the new 0x161/0x162 path.
+Earlier sessions landed a working angle-control path for this platform
+(first on the Ioniq 6 N), converged on a speed-indexed rate table,
+added camera-mirrored ACI bytes, dual-threshold hysteresis, aci_gain
+ramp, CCNC_0x161 op-only alert suppression, and rebuilt the panda
+firmware so the TX whitelist actually honors the new 0x161/0x162 path.
 
 A prior plan claimed we were already at **MAE 0.11° vs Tesla 0.07°** and
 only needed Kalman filter / jerk limiter / MPC to close the remaining

@@ -23,9 +23,30 @@ MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
+def is_ccnc_angle_platform(flags):
+  """True for Hyundai/Kia cars on the HDA2-ALT + CCNC angle-control path.
+
+  The path is entirely flag-gated (no fingerprint check) so new members
+  only need `HyundaiFlags.CCNC | HyundaiFlags.CANFD_LKA_STEERING_ALT` in
+  values.py to inherit the full behaviour (rate limiter, hysteresis,
+  camera-ref blend, low-speed camera passthrough, ACI gain policy,
+  op-only alert suppression). Ioniq 6 N 2026 is the first member;
+  future 2025+ MY Hyundai/Kia/Genesis HDA2-ALT CCNC trims should
+  reuse this helper.
+  """
+  return bool(flags & HyundaiFlags.CCNC) and bool(flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+
+
 # ── Stage 4: camera-referenced feedforward defaults ──
 # α₀(v) revised after the low-speed tick root-cause analysis
-# (tools/ioniq6n_lfa_vs_op_source.py on 1.24M frames):
+# (tools/ioniq6n_lfa_vs_op_source.py on 1.24M frames from an Ioniq 6 N).
+#
+# Applies to EVERY car on the HDA2-ALT + CCNC angle-control platform
+# (`is_ccnc_angle_platform(CP.flags)` returns True). Current defaults are
+# tuned on Ioniq 6 N data; if a future car on this platform shows
+# materially different camera advisory quality or tracking behaviour,
+# per-fingerprint overrides can be introduced without changing the
+# surrounding logic.
 #
 #   * At 0-2 km/h stock LFA commands |Δ|≈0 (|Δ|p95 = 0.000°), while
 #     op_curv's |Δ|p95 = 0.491°. Stock LFA also holds LKAS_ANGLE_ACTIVE=1
@@ -154,8 +175,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_angle_last = 0.0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
-    # CCNC LKA_ALT hysteresis state — prevents binary flip of LKAS_ANGLE_ACTIVE /
-    # LKA_ASSIST at the authority boundary (the residual low-speed tick source).
+    # HDA2-ALT + CCNC hysteresis state — prevents binary flip of
+    # LKAS_ANGLE_ACTIVE / LKA_ASSIST at the authority boundary (the
+    # residual low-speed tick source).
     # aci_active_latched: True once authority>=0.3 and stays True until <0.05.
     # passthrough_latched: True when driver really has the wheel, stable across
     # small torque oscillations below the driver_torque_blend threshold.
@@ -235,13 +257,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
-    # Only report commanded angle for cars using angle-based control (Ioniq 6 N).
-    # For other cars, preserve the angle set by controlsd's lateral controller.
-    if self.CP.flags & HyundaiFlags.CCNC and self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+    # Only report commanded angle for cars on the HDA2-ALT + CCNC angle-
+    # control platform. For other cars, preserve the angle set by
+    # controlsd's lateral controller.
+    if is_ccnc_angle_platform(self.CP.flags):
       new_actuators.steeringAngleDeg = self.apply_angle_last
-      # Stage 4 diagnostics: report the blend weights that produced the angle
-      # above so drivelog analysis can attribute per-frame tracking error
-      # changes to camera-reference blend dynamics. Both 0 outside Ioniq 6 N.
+      # Stage 4 diagnostics: report the blend weights that produced the
+      # angle above so drivelog analysis can attribute per-frame tracking
+      # error changes to camera-reference blend dynamics. Both 0 outside
+      # the HDA2-ALT + CCNC angle-control platform.
       new_actuators.camrefAlpha = float(self.camref_alpha_last)
       new_actuators.camrefQTrust = float(self.camref_q_last)
     new_actuators.accel = self.tuning.actual_accel
@@ -304,8 +328,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
     ccnc_non_hda2 = self.CP.flags & HyundaiFlags.CCNC and not lka_steering
 
-    # steering control
-    ccnc_lka_alt = bool(self.CP.flags & HyundaiFlags.CCNC) and bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+    # steering control: HDA2-ALT + CCNC angle-control platform path
+    ccnc_lka_alt = is_ccnc_angle_platform(self.CP.flags)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
     # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
     # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
@@ -372,9 +396,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       self.aci_gain_ramp = 0.0
 
-    # Ioniq 6 N angle control: standard speed-dependent rate limiter at 50 Hz,
-    # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
-    # No output filter — rate limit itself provides natural smoothing.
+    # HDA2-ALT + CCNC angle control: standard speed-dependent rate limiter
+    # at 50 Hz, matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian
+    # architecture. No output filter — rate limit itself provides natural
+    # smoothing.
     if ccnc_lka_alt and self.frame % 2 == 0:
       angle_limits = CarControllerParams.ANGLE_LIMITS
 
@@ -435,8 +460,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         float(CS.out.steeringAngleDeg), rate_lat_active, angle_limits,
       )
 
-    # Steering message TX: 50 Hz for CCNC LKA_ALT (matching Toyota/Tesla/Nissan),
-    # 100 Hz for other Hyundai CAN FD cars (torque-based, unchanged).
+    # Steering message TX: 50 Hz on the HDA2-ALT + CCNC angle-control
+    # platform (matching Toyota/Tesla/Nissan), 100 Hz for other Hyundai
+    # CAN FD cars (torque-based, unchanged).
     if not ccnc_lka_alt or self.frame % 2 == 0:
       can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
@@ -448,7 +474,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              in_passthrough=in_passthrough))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
-    # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
+    # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
+    # pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
     if self.frame % 5 == 0 and lka_steering:
       suppress_lanes = not bool(self.CP.flags & HyundaiFlags.CCNC)
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
@@ -456,10 +483,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                         suppress_lanes=suppress_lanes))
 
     # LFA and HDA icons
-    # HDA2-ALT + CCNC (Ioniq 6 N) also gets create_ccnc() so we can suppress
-    # spurious takeover alerts (ALERTS_3=11 HDP_DEACTIVATED_AUDIBLE, etc.)
-    # while openpilot is steering. Requires carstate capture of msg_161 and
-    # panda firmware with 0x161/0x162 on the HDA2-ALT+CCNC TX whitelist.
+    # The HDA2-ALT + CCNC angle-control platform also gets create_ccnc()
+    # so we can suppress spurious takeover alerts (ALERTS_3=11
+    # HDP_DEACTIVATED_AUDIBLE, etc.) while openpilot is steering.
+    # Requires carstate capture of msg_161 and panda firmware with
+    # 0x161/0x162 on the HDA2-ALT+CCNC TX whitelist (check_relay=false
+    # per c6a33de — native-bus source on HDA2-ALT).
     ccnc_hda2_alt = ccnc_lka_alt and getattr(CS, 'msg_161', None)
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long or ccnc_hda2_alt):
       if ccnc_non_hda2 or ccnc_hda2_alt:

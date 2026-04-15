@@ -18,7 +18,21 @@ class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s
   ACCEL_MAX = 2.0 # m/s
 
-  # Angle-based control limits for CCNC LKA_STEERING_ALT cars (Ioniq 6 N).
+  # Angle-based control limits for the HDA2-ALT + CCNC angle-control
+  # platform. This path activates automatically for any Hyundai/Kia car
+  # whose `flags` contains BOTH `HyundaiFlags.CCNC` AND
+  # `HyundaiFlags.CANFD_LKA_STEERING_ALT`. Ioniq 6 N 2026 is the first
+  # member; any future car with the same HDA2-ALT CCNC ADAS architecture
+  # (2025+ MY Hyundai/Kia/Genesis trims that use LKAS_ALT 0x110 with
+  # ADAS_StrAnglReqVal field to command ADAS DRV) will inherit the same
+  # rate limiter, hysteresis, camera-ref blend (Stage 4), and ACI gain
+  # policy by simply receiving those two flags in values.py.
+  #
+  # Rate table below is tuned from Ioniq 6 N drivelog (1.24M frames,
+  # routes 28-2d). If a future car shows materially different planner
+  # demand or EPS capability, per-fingerprint overrides can be added in
+  # CarControllerParams.__init__ below.
+  #
   # Uses the standard speed-dependent rate limiter apply_std_steer_angle_limits,
   # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
   #
