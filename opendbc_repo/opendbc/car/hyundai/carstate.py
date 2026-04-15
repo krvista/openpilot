@@ -267,18 +267,32 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     alt = ""
     if self.CP.flags & HyundaiFlags.CCNC:
       alt = "_ALT"
-      # Capture CCNC camera messages for:
-      #   (a) non-HDA2 CCNC cars — original path, creates full CCNC frame via create_ccnc
-      #   (b) HDA2-ALT + CCNC angle-control platform (Ioniq 6 N 2026 and
-      #       future 2025+ Hyundai/Kia/Genesis cars with CCNC |
-      #       CANFD_LKA_STEERING_ALT) — needed to rewrite and re-send
-      #       CCNC_0x161 so we can suppress hands-on / HDP takeover alerts
-      #       (ALERTS_2 ∈ {1,2}, ALERTS_3 ∈ {11,12}) while openpilot steers.
-      hda2_alt_ccnc = bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
-      if (not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING) or hda2_alt_ccnc:
+      # Capture CCNC messages for later re-publication (non-HDA2 path,
+      # `create_ccnc` in carcontroller). On non-HDA2 CCNC cars these three
+      # messages are forwarded from the camera bus, so we read them via
+      # `cp_cam` (bus 2).
+      #
+      # NOTE: on the HDA2-ALT + CCNC angle-control platform (Ioniq 6 N
+      # 2026 and future CCNC | CANFD_LKA_STEERING_ALT cars), CCNC_0x161,
+      # CCNC_0x162, and FR_CMR_03_50ms are natively published by a
+      # gateway ECU on bus 1 (ECAN), NOT forwarded from the camera bus.
+      # Accessing `cp_cam.vl["CCNC_0x161"]` there auto-registers the
+      # message on the cam parser's validation set (VLDict behaviour in
+      # opendbc/can/parser.py); because it never arrives on bus 2, the
+      # parser's `can_valid` goes False within ~10 s → CarState.canValid
+      # False → `canError` event → "Unknown Vehicle Variant" alert +
+      # controls disabled (fault cascade observed in route 00000030
+      # 2026-04-15: 100 % of 23,511 carState frames had canValid=False).
+      #
+      # The alert-suppression feature that originally motivated capturing
+      # these messages on HDA2-ALT (commit 81c451f) has since been
+      # disabled in carcontroller because the native bus-1 publisher
+      # cannot be silenced, so any TX from openpilot creates a
+      # dual-publisher fault visible as ADAS icon flicker. We therefore
+      # simply skip the capture on HDA2-ALT entirely.
+      if not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
         self.msg_161, self.msg_162, self.msg_1b5 = map(copy.copy, (cp_cam.vl["CCNC_0x161"], cp_cam.vl["CCNC_0x162"], cp_cam.vl["FR_CMR_03_50ms"]))
-        if not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
-          self.cruise_info = copy.copy((cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp).vl["SCC_CONTROL"])
+        self.cruise_info = copy.copy((cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp).vl["SCC_CONTROL"])
     if self.CP.flags & HyundaiFlags.CANFD_ALT_DOORS_BLINKERS:
       ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS_ALT"]["LEFT_LAMP"],
                                                                         cp.vl["BLINKERS_ALT"]["RIGHT_LAMP"])

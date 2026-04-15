@@ -365,3 +365,251 @@ HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC` returns exactly one symbol.
   `session_015hMh1GdaYfs1QjUywn2Nj9` (steering feel) — are preserved as
   commit trailers for ancestry traceability.
 
+---
+
+## Appendix H: Hands-on-detection (HOD) suppression feasibility
+
+Goal explored: make MADS (openpilot lateral) drive without ever
+triggering the "please hold wheel" warning, mirroring Tesla's behaviour.
+
+### Findings (route 00000030, 5 segments, 240 s, `tools/ioniq6n_find_hod.py`)
+
+1. **DBC's `HOD_FD_01_100ms` (0x2AF / 687) is NOT present on any bus.**
+   `opendbc/dbc/hyundai_canfd_generated.dbc` captures an older K-platform
+   HOD address; Ioniq 6 N (2026 HDA2-ALT + CCNC) publishes its capacitive
+   HOD on a different, undocumented ID. User confirmed the sensor exists
+   ("핸들에 손만 대면 경고가 꺼져").
+
+2. **Top undocumented HOD candidates** (bus 1, rate ~20 Hz, non-counter
+   slow-toggle bit signatures matched against 4 min of intermittent
+   hand grip events):
+
+   | Addr   | DLC | Hz   | Slow bits (transition count)              |
+   |--------|-----|------|-------------------------------------------|
+   | 0x1b5  | 32  | 20.7 | byte 13 bit 4–7 : 2–12,  byte 14 bit 0–2 : 2 |
+   | 0x1ba  | 24  | 20.8 | byte 18 bit 0/2/5 : 8,   byte 19 bit 3 : 8, byte 8 bit 0 : 8 |
+   | 0x1e5  | 16  | 20.8 | byte 3 bit 7 : 8,        byte 4 bit 1 : 8, byte 10–11 bit 0 : 8–10 |
+   | 0x3e5  | 24  | 26.3 | byte 13 bit 5 : 2,       byte 11 bit 2/3 : 8 |
+   | 0x175  | 24  | 52.1 | byte 16 bit 0/1/6/7 : 8,  byte 9 bit 0 : 12 (hidden-in-known) |
+
+   (Counter bits following the exponential-halving pattern
+   156 → 78 → 39 → 20 → 10 were filtered out as carriers, not HOD.)
+
+3. **Dual-publisher trap (identical to 0x161 incident).** Every
+   candidate lives on bus 1 (E-CAN) as a *native* publisher — not a
+   camera-forwarded bus 2 address. panda TX on bus 1 therefore
+   interleaves with the real sensor frames; CCNC/MDPS will detect the
+   inconsistency and surface the ADAS flicker we already fought once.
+   check_relay cannot block a native bus 1 publisher.
+
+### Conclusion
+
+Naive HOD spoofing is infeasible on this platform for the same reason
+CCNC_0x161 spoofing was: the receiver sees both our frame and the real
+frame on the same bus and treats the pair as inconsistent. To actually
+suppress hands-on warnings without flicker, one of the following is
+required, both out of scope for the current branch:
+
+* **UDS CommunicationControl(0x28) disableRxAndTx on the source ECU**
+  (likely a steering-column capacitive sensor module), then spoof. Needs
+  module discovery (no 7xx diag IDs observed on bus 1 in this route),
+  carries legal + safety-gateway risk, and fights the factory torque
+  supervisor.
+* **Labelled grip/release drivelog** — same `ioniq6n_find_hod.py`
+  analysis but correlated against user-noted grip timestamps — would
+  disambiguate the 3 top candidates (0x1b5 / 0x1ba / 0x1e5) from
+  coincidental slow signals. Without it, the ranking is pattern-based,
+  not empirical.
+
+### Decision
+
+Option 2 (HOD spoof) joins option 1 (CCNC_0x161 spoof) in the
+"architecturally blocked" bucket. Masterplan continues with option 3:
+accept the factory hands-on timer and focus the remaining effort on
+making it unobtrusive (aci_gain, camref tracking, residual-tick cadence)
+rather than suppressing it at the CAN layer.
+
+Tools: `tools/ioniq6n_hod_probe.py` (0x2AF absence proof),
+`tools/ioniq6n_find_hod.py` (full bus-1 enumeration + bit-transition
+HOD candidate ranking). Both preserved under version control for any
+future re-attempt with a labelled drivelog.
+
+### Addendum (route 00000031--85ea5c34a8, labelled grip/release log)
+
+The labelled drivelog was captured as promised: 8 strong-grip + 5 light-
+touch cycles (user-reported) at the wheel, with the car stationary and
+engine on, followed by a driving lap. Tools:
+
+* `tools/ioniq6n_hod_correlate.py` — phase-split (stationary vs driving)
+  transition scorer. Correctly rules OUT 0x1b5/0x1ba/0x1e5: their "slow
+  bits" had Phase-A/Phase-B transition ratios of exactly 11.5 = log-time
+  ratio, i.e. pure CAN-counter noise proportional to duration.
+* `tools/ioniq6n_hod_decode.py` — byte-level time-series dump of next
+  generation candidates (0x35c / 0x3e3 / 0x35a / 0x35b): they form an
+  *event log* family where byte[2] is a monotonic event counter and
+  byte[0..1] are a cryptographic MAC. They signal HOD transitions but
+  the state value is not directly readable from them.
+* `tools/ioniq6n_hod_align.py` — uses 0x35c byte[2] as ground-truth
+  event timeline, scores every bus-1 byte by (# low-cardinality value
+  transitions aligned with events / total). Top score: **0.79 for
+  0x208 byte 10, 5 distinct values {0, 1, 2, 3, 4}**.
+* `tools/ioniq6n_hod_0x208_inspect.py` — frame-structure autopsy.
+
+### FOUND: 0x208 byte 10 is HOD_Dir_Status
+
+Empirically confirmed by matching the time-series against the labelled
+grip/release timeline:
+
+```
+t=  0.06s  byte10=0  HANDS_OFF  (initial, hands off wheel)
+t= 66.26s  byte10=1  TOUCH_SOFT  ← first strong grip begins
+t= 66.46s  byte10=3  GRIP_SOFT
+t= 66.66s  byte10=4  GRIP_STRONG  (hand fully on)
+t= 88.66s  byte10=3  GRIP_SOFT   (release begins, ~22s grip)
+t= 88.85s  byte10=1  TOUCH_SOFT
+t= 89.26s  byte10=0  HANDS_OFF
+... 12 more cycles with matching pattern, ±0.5 s event alignment.
+```
+
+Complete 0x208 frame structure (bus 1, 10.4 Hz, DLC=16):
+
+| Byte  | Role                            | Values observed           |
+|-------|---------------------------------|---------------------------|
+| 0-1   | CRC / MAC (checksum)            | 256 distinct, pseudo-rand |
+| 2     | Counter (+2 each frame, wraps at 256, bit 0 always 0 → effectively 7-bit mod-128) | 128 distinct |
+| 3-9   | Reserved                        | all 0x00                  |
+| **10** | **HOD_Dir_Status (this is it)** | **{0, 1, 2, 3, 4}**      |
+| 11    | Enable flag                     | 0x01 (always)             |
+| 12    | Raw capacitive pressure (≈)     | 0x00–0x3d, tracks state   |
+| 13    | Raw capacitive area (≈)         | 0x00–0x2d, tracks state   |
+| 14    | Enable/valid flag               | 0x01 (always)             |
+| 15    | Reserved                        | 0x00 (always)             |
+
+Semantic mapping (matches DBC `HOD_FD_01_100ms`/`HOD_Dir_Status`):
+
+* 0 = HANDS_OFF      (no touch)
+* 1 = TOUCH_SOFT     (light contact, ~fingertip)
+* 2 = TOUCH_STRONG   (seen only once in 920 s — essentially transitional)
+* 3 = GRIP_SOFT      (palm contact, loose hold)
+* 4 = GRIP_STRONG    (firm two-hand grip)
+
+Per-state sample payload (bytes 0-15 hex):
+```
+state 0:  XX XX YY 00 00 00 00 00 00 00 00 01 00 00 01 00
+state 1:  XX XX YY 00 00 00 00 00 00 00 01 01 08 06 01 00
+state 3:  XX XX YY 00 00 00 00 00 00 00 03 01 2b 17 01 00
+state 4:  XX XX YY 00 00 00 00 00 00 00 04 01 33 28 01 00
+```
+(XX = CRC bytes, YY = counter byte)
+
+### Revised spoofing feasibility
+
+| Factor | Status |
+|--------|--------|
+| Address found | ✅ 0x208 byte 10 |
+| Counter protection | ⚠️ byte 2 +2/frame — trivial to forge |
+| CRC protection | ❌ byte 0-1 — algorithm unknown, must be reverse-engineered |
+| Native bus-1 publisher | ❌ same dual-publisher trap as 0x161 |
+| Consumer uniqueness | 🤔 *possibly* single-consumer (hands-off timer only, unlike 0x161 which is consumed by both HUD renderer and LFA alerts) — would decide whether spoofing flickers |
+
+0x208 is materially different from 0x161/0x162 in two ways that matter:
+
+1. **Simpler consumer model.** 0x161 was a pan-feature alert carrier
+   (ops, hands-off, lane alerts, ACC alerts) consumed by multiple CCNC
+   state machines; spoofing one field desynchronised another. 0x208
+   appears to feed only the hands-off supervisor — a single consumer
+   whose "latest frame wins" semantics would let a 2x-rate TX dominate.
+2. **CRC exists but is content-specific.** This means a naive replay
+   attack fails (stale counter rejected), but *if* the CRC is the
+   standard Hyundai CRC16-E2E (as used elsewhere in the safety stack),
+   an openpilot-side implementation is tractable.
+
+### Next steps (not executed on this branch)
+
+1. **Reverse-engineer 0x208 CRC (byte 0-1).** Likely CRC16-AUTOSAR /
+   CRC16-E2E over (data_id || counter || payload). Brute-force the
+   data_id against the 4593 captured frames. If it matches Hyundai's
+   standard profile, done.
+2. **Test single-consumer hypothesis.** Bench-TX 0x208 with
+   byte10=4, byte12=0x33, byte13=0x28 at 20 Hz (2× factory rate) on a
+   known-valid CRC. Watch for CCNC flicker the way 0x161 spoof flickered.
+   If stable, MADS-without-HOD-warning is unlocked.
+3. **Escalate to UDS CommunicationControl** only if (1) and (2) fail.
+
+### Decision (updated)
+
+Option 2 is **no longer "architecturally blocked"** — it is "gated on
+CRC reverse-engineering + one bench test". The core unknown has narrowed
+from "which message?" to "which CRC?". This moves option 2 from the
+infeasible bucket to the "tractable but out-of-scope for current branch"
+bucket. Masterplan still proceeds on option 3 for this branch; option 2
+is now a concrete follow-on project with a defined next step.
+
+### Update: CRC solved, option 2 implemented as opt-in (commits ceee9b9 + 3a2262c)
+
+The CRC reverse-engineering problem turned out to be already solved:
+`opendbc/car/hyundai/hyundaicanfd.py::hkg_can_fd_checksum` (CRC16-XMODEM
++ address mix + DLC-16 XOR 0x041D) validates **4593 / 4593** captured
+0x208 frames exactly (see `tools/ioniq6n_verify_0x208_crc.py`). The
+Ioniq 6 N HOD register uses the standard Hyundai CAN FD profile — no
+per-address data_id, no secure key, no custom polynomial.
+
+Implementation landed as an opt-in bypass:
+
+* `hyundaicanfd.create_hod_bypass(bus, counter)` — synthesizes a valid
+  0x208 frame announcing `GRIP_STRONG` with correct CRC.
+* `carcontroller.py` — emits at 10 Hz (matching factory 10.4 Hz) on
+  E-CAN when `os.environ["HOD_BYPASS"] == "1"` AND on the HDA2-ALT +
+  CCNC platform AND `CC.enabled`.
+* `hyundai_canfd.h` — adds 0x208 to the HDA2-ALT CCNC TX whitelist
+  with `check_relay = false` (required: native E-CAN publisher).
+* Panda firmware rebuilt at `DEV-ceee9b98-DEBUG`.
+
+The feature is **dormant by default.** `HOD_BYPASS` is not exported in
+any launch script and is not persisted to Params; rollback is literally
+`unset HOD_BYPASS` + restart.
+
+---
+
+## Appendix I: Engagement mode matrix (what each commit actually touches)
+
+Recurring question: "does the latest HOD / CCNC work change who controls
+lateral and longitudinal in each ACC/LFA combination?" Answer: **no.**
+None of the commits on this branch alter engagement logic. This
+appendix is the audit trail.
+
+### Mode semantics (platform = Ioniq 6 N HDA2-ALT + CCNC, unchanged)
+
+| User setting          | Longitudinal | Lateral               |
+|-----------------------|--------------|-----------------------|
+| LFA only, MADS off    | (none)       | factory LFA (camera ECU native) |
+| LFA only, MADS on     | (none)       | **openpilot/MADS** via `LKAS_ALT` + `apply_angle` |
+| ACC + LFA, MADS off   | factory SCC  | factory LFA           |
+| ACC + LFA, MADS on    | factory SCC  | **openpilot/MADS**    |
+
+`CP.openpilotLongitudinalControl = False` on this platform, so
+longitudinal is **always** factory SCC. openpilot never commands accel.
+Lateral control transfers to openpilot iff `CC.latActive = True`, which
+MADS drives directly (independent of ACC).
+
+### Per-commit engagement impact
+
+| Commit | Files touched | Engagement impact |
+|--------|---------------|-------------------|
+| `4d59c6a` "Unknown Vehicle Variant" + flicker fix | `carstate.py` RX-capture gate + `carcontroller.py` CCNC gate + `hyundai_canfd.h` TX whitelist | ❌ none (RX-side VLDict auto-registration bug; TX-side pulled 0x161/0x162 off the wire) |
+| `74d9303` panda rebuild | firmware binaries | ❌ none |
+| `b3d267e` / `5e01681` / `b366862` HOD discovery | `tools/*.py` | ❌ none (analysis only) |
+| `ceee9b9` HOD bypass implementation | `hyundaicanfd.py` + `carcontroller.py` + `hyundai_canfd.h` | ⚠️ ONLY when `HOD_BYPASS=1` AND `CC.enabled`. One additional TX (0x208). Does not change who holds lateral or longitudinal; only suppresses the factory hands-off warning. In LFA-only mode (`CC.enabled=False`) the bypass is dormant. |
+| `3a2262c` panda rebuild | firmware binaries | ❌ none |
+
+### Side-effect to be aware of
+
+After the 0x161/0x162 TX removal (`4d59c6a`), openpilot no longer
+suppresses factory LFA alerts either. The cluster may surface "take
+over steering" / hands-off chimes while MADS is actively driving.
+This does not change *who controls lateral* (openpilot does, via
+`LKAS_ALT`); it only changes *what the driver sees on the cluster*.
+The `HOD_BYPASS=1` experimental path exists specifically to address
+this surface-level issue without resurrecting the 0x161/0x162
+dual-publisher flicker.
+
