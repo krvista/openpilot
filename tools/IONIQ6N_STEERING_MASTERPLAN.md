@@ -365,3 +365,72 @@ HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC` returns exactly one symbol.
   `session_015hMh1GdaYfs1QjUywn2Nj9` (steering feel) — are preserved as
   commit trailers for ancestry traceability.
 
+---
+
+## Appendix H: Hands-on-detection (HOD) suppression feasibility
+
+Goal explored: make MADS (openpilot lateral) drive without ever
+triggering the "please hold wheel" warning, mirroring Tesla's behaviour.
+
+### Findings (route 00000030, 5 segments, 240 s, `tools/ioniq6n_find_hod.py`)
+
+1. **DBC's `HOD_FD_01_100ms` (0x2AF / 687) is NOT present on any bus.**
+   `opendbc/dbc/hyundai_canfd_generated.dbc` captures an older K-platform
+   HOD address; Ioniq 6 N (2026 HDA2-ALT + CCNC) publishes its capacitive
+   HOD on a different, undocumented ID. User confirmed the sensor exists
+   ("핸들에 손만 대면 경고가 꺼져").
+
+2. **Top undocumented HOD candidates** (bus 1, rate ~20 Hz, non-counter
+   slow-toggle bit signatures matched against 4 min of intermittent
+   hand grip events):
+
+   | Addr   | DLC | Hz   | Slow bits (transition count)              |
+   |--------|-----|------|-------------------------------------------|
+   | 0x1b5  | 32  | 20.7 | byte 13 bit 4–7 : 2–12,  byte 14 bit 0–2 : 2 |
+   | 0x1ba  | 24  | 20.8 | byte 18 bit 0/2/5 : 8,   byte 19 bit 3 : 8, byte 8 bit 0 : 8 |
+   | 0x1e5  | 16  | 20.8 | byte 3 bit 7 : 8,        byte 4 bit 1 : 8, byte 10–11 bit 0 : 8–10 |
+   | 0x3e5  | 24  | 26.3 | byte 13 bit 5 : 2,       byte 11 bit 2/3 : 8 |
+   | 0x175  | 24  | 52.1 | byte 16 bit 0/1/6/7 : 8,  byte 9 bit 0 : 12 (hidden-in-known) |
+
+   (Counter bits following the exponential-halving pattern
+   156 → 78 → 39 → 20 → 10 were filtered out as carriers, not HOD.)
+
+3. **Dual-publisher trap (identical to 0x161 incident).** Every
+   candidate lives on bus 1 (E-CAN) as a *native* publisher — not a
+   camera-forwarded bus 2 address. panda TX on bus 1 therefore
+   interleaves with the real sensor frames; CCNC/MDPS will detect the
+   inconsistency and surface the ADAS flicker we already fought once.
+   check_relay cannot block a native bus 1 publisher.
+
+### Conclusion
+
+Naive HOD spoofing is infeasible on this platform for the same reason
+CCNC_0x161 spoofing was: the receiver sees both our frame and the real
+frame on the same bus and treats the pair as inconsistent. To actually
+suppress hands-on warnings without flicker, one of the following is
+required, both out of scope for the current branch:
+
+* **UDS CommunicationControl(0x28) disableRxAndTx on the source ECU**
+  (likely a steering-column capacitive sensor module), then spoof. Needs
+  module discovery (no 7xx diag IDs observed on bus 1 in this route),
+  carries legal + safety-gateway risk, and fights the factory torque
+  supervisor.
+* **Labelled grip/release drivelog** — same `ioniq6n_find_hod.py`
+  analysis but correlated against user-noted grip timestamps — would
+  disambiguate the 3 top candidates (0x1b5 / 0x1ba / 0x1e5) from
+  coincidental slow signals. Without it, the ranking is pattern-based,
+  not empirical.
+
+### Decision
+
+Option 2 (HOD spoof) joins option 1 (CCNC_0x161 spoof) in the
+"architecturally blocked" bucket. Masterplan continues with option 3:
+accept the factory hands-on timer and focus the remaining effort on
+making it unobtrusive (aci_gain, camref tracking, residual-tick cadence)
+rather than suppressing it at the CAN layer.
+
+Tools: `tools/ioniq6n_hod_probe.py` (0x2AF absence proof),
+`tools/ioniq6n_find_hod.py` (full bus-1 enumeration + bit-transition
+HOD candidate ranking). Both preserved under version control for any
+future re-attempt with a labelled drivelog.
+
