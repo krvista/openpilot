@@ -63,13 +63,17 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # Pure camera passthrough — decided by carcontroller (hysteresis-stable).
-    # When inactive and driver isn't fighting, forward camera values unchanged
-    # so ADAS DRV runs stock LFA. Entry/exit of this mode is gated by the same
-    # hysteresis as aci_active so we don't ping-pong between passthrough and op
-    # at the authority boundary, which was one cause of the low-speed tick.
+    # Pure camera passthrough — decided by carcontroller. Two triggers:
+    #   (a) driver-relaxed passthrough: op inactive + driver holding wheel
+    #   (b) low-speed creep passthrough: v < 2 km/h (emulate stock LFA's
+    #       passive behaviour at creep speed; MDPS idle, no op/MDPS fight)
+    # Either way we forward camera bytes verbatim so ADAS DRV runs stock LFA.
+    # LKA_ICON is overridden to green (2) when op is nominally engaged so
+    # the HUD still reflects op's lateral-guidance state to the driver.
     if in_passthrough and lkas_alt_cam_msg is not None:
       lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
+      if lat_active:
+        lkas_values["LKA_ICON"] = 2
       return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
     # Gradient ACI authority: blend based on driver torque, turn signal, and

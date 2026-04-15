@@ -43,6 +43,8 @@ from opendbc.car.hyundai.carcontroller import (  # noqa: E402
   CAMREF_ALPHA_V,
   CAMREF_NAV_DISAGREE_DEG,
   CAMREF_NAV_ALPHA_CAP,
+  LOW_SPEED_PASSTHROUGH_ENTER_MS,
+  LOW_SPEED_PASSTHROUGH_EXIT_MS,
 )
 
 STAGE0_CACHE = '/tmp/reanalysis_dbc_cache.pkl'
@@ -110,6 +112,7 @@ def compute_signals(frames):
     trust = CameraTrustEstimator()
     aci_latched = False
     aci_gain_ramp = 0.0
+    low_speed_latched = False
     # For C and D, when not latched, "op_hyst" holds current actual wheel
     # (mirrors carcontroller behaviour with rate_lat_active=False and
     # apply_angle_last tracking actual).
@@ -146,28 +149,48 @@ def compute_signals(frames):
       cam_driving = (not lat_active) and (driver_torque_blend > 0.5)
       q_trust = trust.update(cam_angle, actual, cam_driving)
 
+      # Low-speed passthrough latch (mirror carcontroller)
+      if v_ms < LOW_SPEED_PASSTHROUGH_ENTER_MS:
+        low_speed_latched = True
+      elif v_ms > LOW_SPEED_PASSTHROUGH_EXIT_MS:
+        low_speed_latched = False
+
       # A: stock LFA reference (camera)
       cmd_A = cam_angle
       # B: pre-fix op path — pure op_curv
       cmd_B = op_curv
       # C: 81c451f op path — when not latched, hold actual (tick fix)
       cmd_C = op_curv if aci_latched else actual
-      # D: 73d87ec op path — blend
+      # D: 73d87ec op path — camera-ref blend (α₀=0.80 baseline)
       if aci_latched:
+        alpha_base_d = float(np.interp(v_ms, [0., 5., 10., 20., 30.],
+                                               [0.80, 0.80, 0.80, 0.70, 0.60]))
+        alpha_eff_d = alpha_base_d * q_trust
+        if abs(cam_angle - op_curv) > CAMREF_NAV_DISAGREE_DEG:
+          alpha_eff_d = min(alpha_eff_d, CAMREF_NAV_ALPHA_CAP)
+        cmd_D = alpha_eff_d * cam_angle + (1.0 - alpha_eff_d) * op_curv
+      else:
+        cmd_D = actual
+      # E: post-option-② path — raised α + low-speed passthrough
+      if low_speed_latched:
+        cmd_E = cam_angle   # forward camera verbatim at creep speed
+      elif aci_latched:
         alpha_base = float(np.interp(v_ms, CAMREF_ALPHA_BP, CAMREF_ALPHA_V))
         alpha_eff = alpha_base * q_trust
         if abs(cam_angle - op_curv) > CAMREF_NAV_DISAGREE_DEG:
           alpha_eff = min(alpha_eff, CAMREF_NAV_ALPHA_CAP)
-        cmd_D = alpha_eff * cam_angle + (1.0 - alpha_eff) * op_curv
+        cmd_E = alpha_eff * cam_angle + (1.0 - alpha_eff) * op_curv
       else:
-        cmd_D = actual
+        cmd_E = actual
 
       f2 = dict(f)
       f2['cmd_A'] = cmd_A
       f2['cmd_B'] = cmd_B
       f2['cmd_C'] = cmd_C
       f2['cmd_D'] = cmd_D
+      f2['cmd_E'] = cmd_E
       f2['_aci_latched'] = aci_latched
+      f2['_low_speed_latched'] = low_speed_latched
       enriched.append(f2)
   return enriched
 
@@ -270,6 +293,7 @@ def report_quality_vs_lfa(enriched):
     ('OP pre-81c451f',       'cmd_B', 'op'),
     ('OP +hysteresis only',  'cmd_C', 'op'),
     ('OP +hysteresis +S4',   'cmd_D', 'op'),
+    ('OP +S4 +②′ low-pass',  'cmd_E', 'op'),
   ]
   for bname, _, _ in FULL_BUCKETS:
     first = True
@@ -300,6 +324,7 @@ def report_low_speed_focus(enriched):
     ('OP pre',    'cmd_B', 'op'),
     ('OP +hyst',  'cmd_C', 'op'),
     ('OP +S4',    'cmd_D', 'op'),
+    ('OP +S4+②′', 'cmd_E', 'op'),
   ]
   print(f"{'bucket':<10} {'signal':<14} {'|Δ|>0.3%':>10} {'|Δ|>1.0%':>10} "
         f"{'reversals/s':>12} {'tick_frac%':>11}")

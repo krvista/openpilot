@@ -24,13 +24,27 @@ MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 # ── Stage 4: camera-referenced feedforward defaults ──
-# α₀(v) selected by tools/ioniq6n_camref_sim.py (F+nav_gate0.3 winner) on
-# 1.24M frames: 52-65% MAE reduction vs curvature-only across all buckets.
-# F-all-high table: aggressive camera trust at low/mid speed (where camera
-# advisory is most accurate at 0.20-0.31° MAE), tapered at highway where
-# navigation intent matters more for lane changes.
+# α₀(v) revised after the low-speed tick root-cause analysis
+# (tools/ioniq6n_lfa_vs_op_source.py on 1.24M frames):
+#
+#   * At 0-2 km/h stock LFA commands |Δ|≈0 (|Δ|p95 = 0.000°), while
+#     op_curv's |Δ|p95 = 0.491°. Stock LFA also holds LKAS_ANGLE_ACTIVE=1
+#     and ACIGain=0 — MDPS idle — whereas op kept flipping ACTIVE at
+#     ~30/min and commanding ACIGain up to 1.0. The tick isn't an MDPS
+#     artifact; it's op trying to actively steer while the camera
+#     chooses to stay passive.
+#
+#   * This plan uses two coordinated mitigations:
+#       – low-speed camera passthrough (below) handles v<2 km/h by
+#         forwarding the camera's LKAS_ALT verbatim; op effectively
+#         disengages the steering command path at creep speed, matching
+#         stock LFA's passivity.
+#       – α₀ at 2-20 km/h raised to 0.85-0.95 so that once we resume
+#         steering, blend is overwhelmingly camera-driven — where cam
+#         MAE is 0.20-0.30° versus op_curv 0.9-1.9°.
+#
 CAMREF_ALPHA_BP = [0., 5., 10., 20., 30.]
-CAMREF_ALPHA_V  = [0.80, 0.80, 0.80, 0.70, 0.60]
+CAMREF_ALPHA_V  = [0.95, 0.90, 0.85, 0.70, 0.60]
 
 # nav-disagreement gate: clamp α when camera and planner visibly disagree
 # (|cam_angle - op_curv_angle| > NAV_DISAGREE_DEG), so navigation maneuvers
@@ -53,6 +67,16 @@ CAMREF_TRUST_Q_MAX    = 1.00
 # MDPS still recognises us as the source of truth but can do its natural
 # smoothing on our angle command, matching stock LFA behavior.
 ACI_GAIN_OP_FLOOR = 0.15
+
+# Low-speed camera passthrough latch. Below LOW_SPEED_PASSTHROUGH_ENTER_MS
+# we forward the camera's LKAS_ALT verbatim regardless of op engagement;
+# exit at LOW_SPEED_PASSTHROUGH_EXIT_MS so stop-and-go traffic doesn't
+# flap the latch. This matches stock LFA's creep-speed behaviour where
+# the camera commands |Δ|≈0 and LKAS_ANGLE_ACTIVE=1 (MDPS idle), so the
+# driver gets no assist AND no resistance from op — the stock feel.
+# Hysteresis band: 1 km/h (enter 2, exit 3).
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 2.0 / 3.6   # ≈ 0.556 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 
 
 class CameraTrustEstimator:
@@ -144,6 +168,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Logging aids for Stage 4 evaluation (readable via cereal reuse if wired later)
     self.camref_alpha_last = 0.0
     self.camref_q_last = CAMREF_TRUST_Q_MAX
+    # Low-speed camera passthrough latch (hysteresis, ENTER 2 km/h / EXIT 3 km/h).
+    self.low_speed_cam_latched = False
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -324,6 +350,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     elif CC.latActive or driver_torque_blend < 0.6:
       self.passthrough_latched = False
 
+    # Low-speed camera passthrough: at creep speed, stock LFA stays
+    # fully passive (cam |Δ|≈0, LKAS_ANGLE_ACTIVE=1, ACIGain=0 — MDPS
+    # idle). Emulate that by forwarding the camera's LKAS_ALT verbatim,
+    # even while op is nominally engaged. Driver has no assist AND no
+    # resistance at creep speed — identical to stock LFA feel. Hysteresis
+    # on vEgoRaw prevents stop-and-go flapping.
+    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
+      self.low_speed_cam_latched = True
+    elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
+      self.low_speed_cam_latched = False
+    # Combined passthrough flag. Either reason (driver-relaxed OR creep
+    # speed) forwards camera bytes.
+    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
+
     # First-order ramp of ACI gain on re-engagement (smooths the
     # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
     ACI_GAIN_RAMP_TAU_FRAMES = 30.0
@@ -405,7 +445,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              speed_blend=speed_blend,
                                                              aci_active=self.aci_active_latched,
                                                              aci_gain_ramp=self.aci_gain_ramp,
-                                                             in_passthrough=self.passthrough_latched))
+                                                             in_passthrough=in_passthrough))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
