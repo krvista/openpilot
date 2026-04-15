@@ -16,13 +16,24 @@
   {0x110, a_can, 32, .check_relay = (a_can) == 0},  /* LKAS_ALT */  \
   {0x362, a_can, 32, .check_relay = (a_can) == 0},  /* CAM_0x362 */ \
 
-// HDA2-ALT + CCNC (Ioniq 6 N): panda also rewrites/retransmits the camera's
-// CCNC_0x161/0x162 on E-CAN so we can suppress hands-on and HDP takeover
-// alerts that the ADAS camera generates during op lateral control.
+// HDA2-ALT + CCNC (Ioniq 6 N): TX CCNC_0x161/0x162 on E-CAN (bus 1) to
+// attempt hands-on/HDP alert suppression during op lateral control.
+//
+// IMPORTANT: On HDA2-ALT the ADAS gateway natively publishes 0x161/0x162
+// on bus 1 (not forwarded from bus 2 by the panda). Setting
+// `check_relay = true` here would cause panda's stock_ecu_check() to
+// fire on every native reception, producing `relay_malfunction` within
+// 1 second of boot and disabling openpilot ("Unknown Vehicle Variant"
+// alert, carState.valid=False). We therefore keep `check_relay = false`:
+// our TX coexists with the stock source on bus 1 and CCNC may see
+// alternating frames. Alert suppression is best-effort on HDA2-ALT; the
+// non-HDA2 CCNC path (addresses TX'd to bus 0, where 0x161/0x162 are
+// forwarded from bus 2) can block the stock source cleanly and gets
+// full suppression — keep check_relay=true there (line ~297 below).
 #define HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_COMMON_TX_MSGS(a_can, e_can) \
   HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(a_can, e_can)           \
-  {0x161, e_can, 32, .check_relay = true},  /* CCNC_0x161 */            \
-  {0x162, e_can, 32, .check_relay = true},  /* CCNC_0x162 */            \
+  {0x161, e_can, 32, .check_relay = false},  /* CCNC_0x161 */           \
+  {0x162, e_can, 32, .check_relay = false},  /* CCNC_0x162 */           \
 
 #define HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(e_can)  \
   {0x12A, e_can, 16, .check_relay = (e_can) == 0},  /* LFA */            \
