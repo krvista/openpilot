@@ -545,3 +545,71 @@ infeasible bucket to the "tractable but out-of-scope for current branch"
 bucket. Masterplan still proceeds on option 3 for this branch; option 2
 is now a concrete follow-on project with a defined next step.
 
+### Update: CRC solved, option 2 implemented as opt-in (commits ceee9b9 + 3a2262c)
+
+The CRC reverse-engineering problem turned out to be already solved:
+`opendbc/car/hyundai/hyundaicanfd.py::hkg_can_fd_checksum` (CRC16-XMODEM
++ address mix + DLC-16 XOR 0x041D) validates **4593 / 4593** captured
+0x208 frames exactly (see `tools/ioniq6n_verify_0x208_crc.py`). The
+Ioniq 6 N HOD register uses the standard Hyundai CAN FD profile — no
+per-address data_id, no secure key, no custom polynomial.
+
+Implementation landed as an opt-in bypass:
+
+* `hyundaicanfd.create_hod_bypass(bus, counter)` — synthesizes a valid
+  0x208 frame announcing `GRIP_STRONG` with correct CRC.
+* `carcontroller.py` — emits at 10 Hz (matching factory 10.4 Hz) on
+  E-CAN when `os.environ["HOD_BYPASS"] == "1"` AND on the HDA2-ALT +
+  CCNC platform AND `CC.enabled`.
+* `hyundai_canfd.h` — adds 0x208 to the HDA2-ALT CCNC TX whitelist
+  with `check_relay = false` (required: native E-CAN publisher).
+* Panda firmware rebuilt at `DEV-ceee9b98-DEBUG`.
+
+The feature is **dormant by default.** `HOD_BYPASS` is not exported in
+any launch script and is not persisted to Params; rollback is literally
+`unset HOD_BYPASS` + restart.
+
+---
+
+## Appendix I: Engagement mode matrix (what each commit actually touches)
+
+Recurring question: "does the latest HOD / CCNC work change who controls
+lateral and longitudinal in each ACC/LFA combination?" Answer: **no.**
+None of the commits on this branch alter engagement logic. This
+appendix is the audit trail.
+
+### Mode semantics (platform = Ioniq 6 N HDA2-ALT + CCNC, unchanged)
+
+| User setting          | Longitudinal | Lateral               |
+|-----------------------|--------------|-----------------------|
+| LFA only, MADS off    | (none)       | factory LFA (camera ECU native) |
+| LFA only, MADS on     | (none)       | **openpilot/MADS** via `LKAS_ALT` + `apply_angle` |
+| ACC + LFA, MADS off   | factory SCC  | factory LFA           |
+| ACC + LFA, MADS on    | factory SCC  | **openpilot/MADS**    |
+
+`CP.openpilotLongitudinalControl = False` on this platform, so
+longitudinal is **always** factory SCC. openpilot never commands accel.
+Lateral control transfers to openpilot iff `CC.latActive = True`, which
+MADS drives directly (independent of ACC).
+
+### Per-commit engagement impact
+
+| Commit | Files touched | Engagement impact |
+|--------|---------------|-------------------|
+| `4d59c6a` "Unknown Vehicle Variant" + flicker fix | `carstate.py` RX-capture gate + `carcontroller.py` CCNC gate + `hyundai_canfd.h` TX whitelist | ❌ none (RX-side VLDict auto-registration bug; TX-side pulled 0x161/0x162 off the wire) |
+| `74d9303` panda rebuild | firmware binaries | ❌ none |
+| `b3d267e` / `5e01681` / `b366862` HOD discovery | `tools/*.py` | ❌ none (analysis only) |
+| `ceee9b9` HOD bypass implementation | `hyundaicanfd.py` + `carcontroller.py` + `hyundai_canfd.h` | ⚠️ ONLY when `HOD_BYPASS=1` AND `CC.enabled`. One additional TX (0x208). Does not change who holds lateral or longitudinal; only suppresses the factory hands-off warning. In LFA-only mode (`CC.enabled=False`) the bypass is dormant. |
+| `3a2262c` panda rebuild | firmware binaries | ❌ none |
+
+### Side-effect to be aware of
+
+After the 0x161/0x162 TX removal (`4d59c6a`), openpilot no longer
+suppresses factory LFA alerts either. The cluster may surface "take
+over steering" / hands-off chimes while MADS is actively driving.
+This does not change *who controls lateral* (openpilot does, via
+`LKAS_ALT`); it only changes *what the driver sees on the cluster*.
+The `HOD_BYPASS=1` experimental path exists specifically to address
+this surface-level issue without resurrecting the 0x161/0x162
+dual-publisher flicker.
+
