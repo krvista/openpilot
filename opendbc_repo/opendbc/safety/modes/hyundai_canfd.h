@@ -16,24 +16,22 @@
   {0x110, a_can, 32, .check_relay = (a_can) == 0},  /* LKAS_ALT */  \
   {0x362, a_can, 32, .check_relay = (a_can) == 0},  /* CAM_0x362 */ \
 
-// HDA2-ALT + CCNC (Ioniq 6 N): TX CCNC_0x161/0x162 on E-CAN (bus 1) to
-// attempt hands-on/HDP alert suppression during op lateral control.
-//
-// IMPORTANT: On HDA2-ALT the ADAS gateway natively publishes 0x161/0x162
-// on bus 1 (not forwarded from bus 2 by the panda). Setting
-// `check_relay = true` here would cause panda's stock_ecu_check() to
-// fire on every native reception, producing `relay_malfunction` within
-// 1 second of boot and disabling openpilot ("Unknown Vehicle Variant"
-// alert, carState.valid=False). We therefore keep `check_relay = false`:
-// our TX coexists with the stock source on bus 1 and CCNC may see
-// alternating frames. Alert suppression is best-effort on HDA2-ALT; the
-// non-HDA2 CCNC path (addresses TX'd to bus 0, where 0x161/0x162 are
-// forwarded from bus 2) can block the stock source cleanly and gets
-// full suppression — keep check_relay=true there (line ~297 below).
+// HDA2-ALT + CCNC (Ioniq 6 N): CCNC_0x161/0x162 alert-suppression
+// feature DISABLED (2026-04-15). On this platform the ADAS gateway
+// natively publishes 0x161/0x162 on bus 1 (not camera-forwarded — see
+// c6a33de), so any TX from openpilot creates a dual-publisher fault on
+// bus 1: CCNC sees alternating frames, ADAS icon flickers, error
+// counters latch. We no longer TX these addresses from carcontroller
+// (see the `ccnc_non_hda2`-only branch around line 501 of
+// `opendbc/car/hyundai/carcontroller.py`) and therefore drop them from
+// the panda TX whitelist as well — matching the capture-side revert in
+// carstate.py (see the `CANFD_LKA_STEERING` guard around line 293 of
+// `opendbc/car/hyundai/carstate.py`). The non-HDA2 CCNC path still TXs
+// 0x161/0x162 on bus 0 with full alert suppression (addresses are
+// camera-forwarded there, check_relay=true keeps the stock source
+// blocked).
 #define HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_COMMON_TX_MSGS(a_can, e_can) \
-  HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(a_can, e_can)           \
-  {0x161, e_can, 32, .check_relay = false},  /* CCNC_0x161 */           \
-  {0x162, e_can, 32, .check_relay = false},  /* CCNC_0x162 */           \
+  HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(a_can, e_can)
 
 #define HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(e_can)  \
   {0x12A, e_can, 16, .check_relay = (e_can) == 0},  /* LFA */            \

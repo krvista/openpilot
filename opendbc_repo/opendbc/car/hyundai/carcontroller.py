@@ -483,15 +483,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                         suppress_lanes=suppress_lanes))
 
     # LFA and HDA icons
-    # The HDA2-ALT + CCNC angle-control platform also gets create_ccnc()
-    # so we can suppress spurious takeover alerts (ALERTS_3=11
-    # HDP_DEACTIVATED_AUDIBLE, etc.) while openpilot is steering.
-    # Requires carstate capture of msg_161 and panda firmware with
-    # 0x161/0x162 on the HDA2-ALT+CCNC TX whitelist (check_relay=false
-    # per c6a33de — native-bus source on HDA2-ALT).
-    ccnc_hda2_alt = ccnc_lka_alt and getattr(CS, 'msg_161', None)
-    if self.frame % 5 == 0 and (not lka_steering or lka_steering_long or ccnc_hda2_alt):
-      if ccnc_non_hda2 or ccnc_hda2_alt:
+    # Non-HDA2 CCNC cars get our create_ccnc() frame so we can render
+    # HDP / LFA icons consistently with op state.
+    #
+    # HDA2-ALT + CCNC: alert-suppression feature DISABLED (2026-04-15).
+    # On this platform CCNC_0x161/0x162 are natively published by a
+    # gateway ECU on bus 1 (not forwarded from the camera — see
+    # c6a33de). Any TX from openpilot on those addresses creates a
+    # dual-publisher situation on bus 1; the other ADAS components
+    # detect the duplication as a fault, flicker the cluster ADAS
+    # icon, and eventually latch red with accumulated error counts.
+    # Until we have a way to silence the source ECU (UDS session?),
+    # we leave 0x161/0x162 entirely to the stock publisher and accept
+    # the hands-on / HDP audible alerts as the cost of stability.
+    # The rest of the HDA2-ALT + CCNC feature set (Stage 4 camera-ref
+    # blend, low-speed passthrough, ACI floor, etc.) is unaffected.
+    if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
+      if ccnc_non_hda2:
         op_driving = bool(ccnc_lka_alt and self.aci_active_latched)
         can_sends.extend(hyundaicanfd.create_ccnc(self.packer, self.CAN, self.CP.openpilotLongitudinalControl, CC.enabled, CC.hudControl, CC.leftBlinker,
                                                   CC.rightBlinker, CS.msg_161, CS.msg_162, CS.msg_1b5, CS.is_metric, CS.out, CS.main_cruise_enabled,
