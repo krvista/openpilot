@@ -252,3 +252,93 @@ The Stage 0 analyzer is the single source of truth for numbers in this
 plan; subjective feedback is recorded separately but does not gate stage
 promotion.
 
+---
+
+## Safety / recognition change checklist
+
+Two distinct incidents so far have surfaced as the same user-facing alert
+("Unknown Vehicle Variant" + `carState.valid=False`), with completely
+different root causes. To prevent a third, every change under
+`opendbc_repo/opendbc/safety/` or touching Ioniq 6 N / CCNC fingerprinting
+must pass this checklist **before** committing.
+
+### 1. Prior fixes that must stay intact
+
+The foundations below were landed by session
+`session_01DhaSf2nVWu1Ar3ZXYJ7SLx` (commits `772d52b`, `bf5bc8e`,
+`b347e01`, `0e572eb`, `bdb1ce0`, `c405c73`, `2c7474a`, `323c796`).
+Do not remove or weaken any of them without replacing the equivalent
+behaviour:
+
+* `ignore_counter = true` **and** `max_counter = 0U` on 0x35, 0x100,
+  0x105 — required because CCNC platforms use a +2 counter increment.
+  Either flag alone is insufficient: `safety.h` checks `max_counter > 0`
+  before consulting `ignore_counter`.
+* `HyundaiFlags.CANFD_ALT_BUTTONS` + `HYUNDAI_PARAM_CANFD_ALT_BUTTONS`
+  (value 32) for Ioniq 6 N — uses 0x1aa instead of 0x1cf.
+* `HyundaiFlags.CANFD_ALT_DOORS_BLINKERS` for Ioniq 6 N — 0x20a (seatbelt),
+  0x400 (blinkers), 0x3e2 (doors). Dropping this makes `seatbeltUnlatched`
+  stuck True and blocks cruise engagement.
+* `HyundaiFlags.CCNC` safety param flag (1024) for CCNC-equipped cars,
+  including HDA2-ALT Ioniq 6 N — enables CCNC TX whitelist entries.
+
+### 2. Before editing a TX whitelist
+
+Run `tools/ioniq6n_reanalysis_dbc.py` and inspect the bus-counts report
+for the address you plan to add. Then:
+
+| Observation in drivelog                                       | `check_relay` |
+|---------------------------------------------------------------|---------------|
+| Msg appears on a **remote** bus (e.g. camera bus 2) and panda forwards it to the target bus where op wants exclusive TX | **`true`** — panda blocks the forward and stock_ecu_check sanity-tests that the relay works |
+| Msg is **natively published on the same bus we intend to TX on** (e.g. HDA2-ALT 0x161 on bus 1 from a gateway ECU) | **`false`** — we cannot silence a native source; setting `true` triggers `stock_ecu_check` → `relay_malfunction` within 1 s of boot |
+| Msg has no source except op (new synthetic address)           | **`false`** (no stock source to guard against)                   |
+
+Historical precedent: non-HDA2 CCNC uses `check_relay = true` because
+0x161/0x162 are camera-sourced on bus 2 and forwarded. HDA2-ALT
+**requires `check_relay = false`** because the same addresses are native
+on bus 1 and cannot be forwarded-blocked. See commit `c6a33de` /
+`51a38a4` for the incident and fix.
+
+### 3. RX check additions
+
+Any new RX entry for a CCNC car (Ioniq 5/6 N platform) must default to:
+
+* `ignore_counter = true` **and** `max_counter = 0U` if the counter
+  increments by a non-1 step, otherwise the normal increment is assumed
+* `ignore_quality_flag = true` unless the message actually carries a
+  valid quality flag
+* `ignore_alive = true` for messages whose startup latency would cause
+  canValid=False during the boot window
+
+### 4. Firmware rebuild rule
+
+Any change to `opendbc_repo/opendbc/safety/modes/**.h` or
+`opendbc/safety/safety.h` **requires a panda firmware rebuild**. User-
+space-only deploys leave stale firmware on the device. Procedure:
+
+```bash
+cd /home/user/openpilot/panda
+source .venv/bin/activate
+uv pip install -e ../opendbc_repo --no-deps   # once, so opendbc points
+                                              # at the local checkout
+scons --minimal -c && scons --minimal -j2
+# then commit gitversion.h, version, panda_h7.bin.signed,
+# panda_h7/main.bin, panda_h7/main.elf
+```
+
+Verify in commit: `panda/board/obj/version` matches your HEAD's short
+hash, and `arm-none-eabi-nm panda/board/obj/panda_h7/main.elf | grep
+HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC` returns exactly one symbol.
+
+### 5. Commit discipline
+
+* Commit messages must cite the specific measurement they rely on
+  (bus-counts from reanalysis, per-bucket tick_frac from
+  `ioniq6n_tick_comparison.py`, etc.) — no bare "expected" claims.
+* When a change is purely code (no firmware), say so explicitly; when
+  firmware is required, include the build hash (`DEV-<short>-DEBUG`)
+  and note that panda reflash is required for deployment.
+* Session IDs — `session_01DhaSf2nVWu1Ar3ZXYJ7SLx` (foundations) and
+  `session_015hMh1GdaYfs1QjUywn2Nj9` (steering feel) — are preserved as
+  commit trailers for ancestry traceability.
+
