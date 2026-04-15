@@ -1,7 +1,7 @@
 # Ioniq 6 N (2026 ccNC) — Tesla-grade Steering Feel Master Plan
 
 **Branch:** `claude/steering-feel-masterplan-BIIQD`
-**Baseline head:** `2f921df` (objective re-analyzer) on top of `be0bebf` (panda rebuild) on top of `81c451f` (residual tick + takeover alert + I5 sim)
+**Baseline head:** `7933664` (Stage 0 DBC-accurate analyzer) on top of `59cd09a` (plan v1), `2f921df` (objective re-analyzer), `be0bebf` (panda rebuild), `81c451f` (residual tick + alerts + I5 sim)
 **Date:** 2026-04-15
 
 ---
@@ -16,27 +16,18 @@ the TX whitelist actually honors the new 0x161/0x162 path.
 
 A prior plan claimed we were already at **MAE 0.11° vs Tesla 0.07°** and
 only needed Kalman filter / jerk limiter / MPC to close the remaining
-0.04° gap. The fresh objective re-analysis (`tools/ioniq6n_reanalysis.py`,
-1,242,341 frames across 214 segments, routes 28–2d) **contradicts that
-baseline**:
-
-* op-mode MAE is actually **0.42–2.24°** depending on speed
-* the **same car**’s stock LFA achieves **0.02–0.20° MAE** on the same
-  routes — i.e. the hardware is already Tesla-grade; openpilot’s desired
-  angle generation is the bottleneck
-* a 35–39 Hz desired-angle oscillation persists across every build,
-  including `5540440` which claimed to fix a 40 Hz oscillation
-* parking clips the rate limiter on 11.2% of frames
-* **no drivelog exists post-81c451f**, so the hysteresis / aci_gain_ramp
-  / op_driving alert suppression are deployed but unverified
+0.04° gap. The objective re-analysis (`tools/ioniq6n_reanalysis.py`,
+`tools/ioniq6n_reanalysis_dbc.py`, 1,242,341 frames across 214 segments,
+routes 28–2d) **contradicts that baseline** and surfaces several findings
+that were invisible to the previous heuristic analyzer.
 
 The goal of this plan is therefore recalibrated: **match stock LFA
 accuracy first, then exceed Tesla using openpilot-only advantages**
-(lookahead, cross-wind feedforward, model-predictive shaping).
+(lookahead, camera-trust adaptation, model-based shaping).
 
 ---
 
-## Measured current state (routes 28–2d, 1.24M frames)
+## Measured current state (routes 28–2d, 1.24M frames, DBC-accurate)
 
 ### Mode mix per route
 
@@ -49,176 +40,185 @@ accuracy first, then exceed Tesla using openpilot-only advantages**
 | 2c    | a816b9c | 35   | 30.1 | 45.3      | 24.6    |
 | 2d    | 611a505 | 37   | 14.0 | 58.7      | 25.6    |
 
-### Tracking accuracy (|desired − actual|, degrees)
+### Three-way tracking error (op mode, |Δ|=deg)
 
-| Bucket  | op MAE   | op p95 | lfa_pass MAE | op / lfa |
-|---------|----------|--------|--------------|----------|
-| parking | **2.24** | 7.23   | 0.20         | 11.2×    |
-| 20 km/h | 1.88     | 6.19   | 1.78         | 1.1×     |
-| 30 km/h | 1.24     | 4.08   | 0.20         | 6.2×     |
-| 40 km/h | 1.04     | 3.67   | 0.20         | 5.2×     |
-| 50 km/h | 1.05     | 3.39   | 0.20         | 5.3×     |
-| 60–70   | 0.83     | 2.75   | 0.03         | 28×      |
-| 80–90   | 0.42     | 1.40   | 0.02         | 21×      |
+| Bucket  | err_curv (LatControlAngle) | err_op (actual TX) | **err_camref (camera advisory)** |
+|---------|----------------------------|--------------------|----------------------------------|
+| parking | 2.24                       | 1.94               | **0.31**                         |
+| 20 km/h | 1.88                       | 1.60               | **0.30**                         |
+| 30 km/h | 1.24                       | 1.13               | **0.25**                         |
+| 40 km/h | 1.04                       | 0.90               | **0.27**                         |
+| 50 km/h | 1.05                       | 0.90               | **0.27**                         |
+| 60–70   | 0.83                       | 0.70               | **0.26**                         |
+| 80–90   | 0.42                       | 0.37               | **0.20**                         |
+
+The **camera's `ADAS_StrAnglReqVal` advisory is 3–10× more accurate than
+what op transmits**, across every speed bucket, on the same frames.
+This is the Stage 4 rationale — *numerically verified*.
+
+### Alerts (CCNC_0x161, DBC-decoded)
+
+| Route | commit  | op ALERTS_2{1,2}% | op ALERTS_3{11,12}% |
+|-------|---------|-------------------|---------------------|
+| 28    | 77adfed | 0.00              | 11.74               |
+| 29    | 8ac35e4 | 0.00              | 15.60               |
+| 2a    | 5540440 | 1.23              | 14.04               |
+| 2b    | a816b9c | 2.01              | 2.85                |
+| 2c    | a816b9c | 0.25              | 3.72                |
+| 2d    | 611a505 | **4.07**          | 1.78                |
+
+611a505’s mid-speed rate boost incidentally reduced HDP alerts 14 % → 1.78 %,
+but caused a spike in keep-hands alerts (4.07 %). 81c451f’s op-only suppression
+is required to hit our < 0.1 % target.
+
+### ACIGain — broken assumption
+
+| Mode              | cam_aci p50/p95/max | op_aci p50/p95/max |
+|-------------------|---------------------|--------------------|
+| op (all buckets)  | **0.000 / 0.000 / 0.000** | 0.60 / 1.00 / 1.00 |
+| lfa_passthrough   | **0.000 / 0.000 / 0.000** | varies             |
+
+The **camera never commands a non-zero ACIGain**. The existing
+`max(cam_aci_gain, authority * 0.6)` mirror logic in `hyundaicanfd.py`
+therefore always resolves to *op's* gain, not a camera value. We are
+keeping MDPS in a more authoritative state than stock LFA ever does —
+a plausible contributor to the low-speed tick.
+
+### LKAS_ANGLE_ACTIVE flips (op mode)
+
+| Route | bucket   | flips/min |
+|-------|----------|-----------|
+| 2d    | 20 km/h  | **125.2** |
+| 2b    | 20 km/h  | 47.2      |
+| 2c    | 60–70    | 42.5      |
+| 2d    | 60–70    | 50.1      |
+
+Up to 125 flips/min at 20 km/h on the latest build — hysteresis from
+81c451f directly targets this but is unverified because no drivelog
+exists on that build yet.
 
 ### Persistent symptoms
 
-| Symptom                | Measurement                                                 |
-|------------------------|-------------------------------------------------------------|
-| Low-speed tick         | 2–5 km/h \|Δdesired\|>0.3° rate 12.7–19.4% per route (0000002d: 16.1%) |
-| 37 Hz oscillation      | op direction-change rate 35.4–39.3 Hz on every route        |
-| Rate-limit clipping    | 11.2% at parking, 1–5% elsewhere                            |
-| Alerts / ACIGain decode | heuristic returned 0% / 0.533 — **requires DBC decoder**    |
+| Symptom            | Measurement                                     |
+|--------------------|-------------------------------------------------|
+| Low-speed tick     | 2–5 km/h \|Δdesired\|>0.3° at 16.1 % (0000002d) |
+| 37 Hz oscillation  | op direction-change rate 35.4–39.3 Hz every build |
+| Rate-limit clip    | 11.2 % at parking, 1–5 % elsewhere              |
 
 ### Data gaps
 
-* **parking (0–10 km/h) op**: only 1.6 min of op across all 214 segs
+* **parking (0–10 km/h) op**: only 1.6 min across 214 segs
 * **100+ km/h op**: 0.1 min
 * **post-81c451f**: 0 segs
 
 ---
 
-## Problems identified (priority)
+## Problems (priority, post-Stage-0 revision)
 
-| #  | Problem                                                        | Evidence                    | Impact                  |
-|----|----------------------------------------------------------------|-----------------------------|-------------------------|
-| P1 | op desired-angle amplifies planner curvature noise             | 37 Hz; op/lfa MAE ratio 5–28× | Root cause of feel      |
-| P2 | low-speed rate-limit undersized                                 | parking 11.2% clip          | Low-speed responsiveness |
-| P3 | Feedforward-only → no steady-state error removal               | op MAE 0.4–2.2°             | All speeds               |
-| P4 | Low-speed & highway op data deficit                            | 1.6 / 0.1 min               | Can’t tune what we can’t see |
-| P5 | 81c451f not present in any drivelog                            | all routes ≤ 611a505        | Deployment unverified    |
-| P6 | Alerts / ACIGain decode missing                                 | heuristic returned zeros    | Can’t quantify fixes     |
+| # | Problem                                                | Evidence                               | Impact                |
+|---|--------------------------------------------------------|----------------------------------------|-----------------------|
+| P1 | op's desired angle is derived from curvature, not from camera | err_curv 5-10× err_camref              | Root cause of all feel issues |
+| P2 | op holds ACIGain 0.6–1.0 while camera holds 0          | cam_aci ≡ 0                            | Low-speed tension / tick  |
+| P3 | Planner curvature contains 37 Hz noise                 | direction-change Hz persistent         | Hi-freq jitter        |
+| P4 | Low-speed rate limit undersized                        | parking 11.2 % clip                    | Responsiveness        |
+| P5 | 81c451f deployment unverified                          | all logs ≤ 611a505                     | Can't validate fixes  |
+| P6 | No parking/highway op data                             | 1.6 min / 0.1 min                      | Can't tune extremes   |
 
 ---
 
-## Plan
+## Plan (revised)
 
-### Stage 0 — Measurement infrastructure (0.5 week, no driving)
+### ✅ Stage 0 — Measurement infrastructure   *(DONE, 7933664)*
 
-Goal: every metric we care about measured with DBC-grade accuracy.
+Delivered `tools/ioniq6n_reanalysis_dbc.py` with proper CANParser;
+verified alert/ACIGain/angle decoders on 1.24 M frames.
 
-* Rewrite `tools/ioniq6n_reanalysis.py` to use opendbc’s `CANParser`
-  against the HDA2-ALT DBC for bus-2 messages.
-* Accurately decode for each 10 ms frame:
-  * `LKAS_ALT` 0x110 — `ADAS_StrAnglReqVal`, `ADAS_ACIAnglTqRedcGainVal`,
-    `LKAS_ANGLE_ACTIVE`, `LKA_ASSIST`
-  * `CCNC_0x161` — `ALERTS_2`, `ALERTS_3`, `ALERTS_5`, `SOUNDS_2`,
-    `SOUNDS_4`, `LFA_ICON`
-* Verify the stage-0 decoder on ≥1 segment by cross-checking against a
-  known camera command (manual / lfa_passthrough).
-* Re-run the full 214-seg analysis with the new decoder; update this
-  plan with the real ALERTS / ACIGain numbers replacing the current
-  “heuristic = 0%” placeholders.
-* Deliverable: an `ioniq6n_reanalysis.py` that produces a
-  one-page objective report usable as the canonical current-state
-  snapshot; an updated table under “Measured current state”.
+### Stage 1 — Post-81c451f drive-verification logs   *(user action, 1 week)*
 
-### Stage 1 — Deploy-verification drive (1 week, user)
+Target data on be0bebf: 20–30 min op re-run of 0000002d, **20 min parking
+op**, **30 min highway op @ 100–110 km/h**.
 
-Goal: confirm hysteresis / aci_gain_ramp / alert-suppression actually
-work on the car now that be0bebf ships the corresponding panda safety.
+Gates (via Stage 0 analyzer):
 
-User drives with HEAD=be0bebf (or any commit ≥81c451f). Target data:
+| Metric                             | Pre-81c451f | Target |
+|------------------------------------|-------------|--------|
+| 2–5 km/h \|Δdesired\|>0.3 %        | 16.1        | < 3    |
+| LKAS_ANGLE_ACTIVE flips / min      | 125 (20 km/h) | < 10 |
+| op ALERTS_2{1,2} %                 | 4.07        | < 0.1  |
+| op ALERTS_3{11,12} %               | 1.78        | < 0.1  |
 
-* 20–30 min op on a route similar to 0000002d
-* **20 min parking op @ 0–10 km/h** (Priority 1 #9–10 from old plan —
-  still missing)
-* **30 min highway op @ 100–110 km/h** (Priority 1 #6–8 — still missing)
-* ≥10 min stock-LFA reference at each of parking and highway (cruise OFF)
+### Stage 2 — Planner-side jerk LP filter   *(2 weeks, code)*
 
-Verification gates (on the new logs, via Stage 0 decoder):
+Address 37 Hz oscillation by low-passing `desired_curvature` in
+`controlsd.py`. τ ≈ 200 ms starting point; A/B against jerk-limited slew.
+Expected: direction-change Hz 37 → < 5; 60–90 km/h op MAE 0.42° → ≤ 0.10°.
 
-| Gate | Old value | Target |
-|------|-----------|--------|
-| 2–5 km/h \|Δdesired\|>0.3° rate | 16.1% | **<3%** |
-| op direction-change rate (Hz) | 37.9 | still ≤37 ⇒ Stage 2 required; else declare fixed |
-| ALERTS_3∈{11,12} in op mode | (to be measured in S0) | **<0.1%** |
-| ALERTS_3 in manual / lfa_passthrough | (S0) | **unchanged** (preservation check) |
+### **Stage 2b — ACIGain camera-match   *(1 week, code, **NEW**)*
 
-### Stage 2 — Planner-side jerk LP filter (1–2 weeks, code)
+Remove the op-forced ACIGain in `hyundaicanfd.py`; mirror the camera's
+actual value (≈ 0 always) with a small authority floor (e.g., 0.1) when
+op is actively steering. Expected: low-speed MDPS tension reduced;
+possible secondary reduction of 37 Hz osc if MDPS overreaction was the
+source.
 
-Rationale: the 37 Hz oscillation is present in every build including the
-one that claimed to fix it, so its source is not the removed PID. Most
-likely source is the modelV2 `desiredCurvature` output itself. Tesla’s
-`apply_steer_angle_limits_vm` implicitly low-passes via lateral-jerk
-constraints; we currently don’t.
+### Stage 3 — VM-based rate limiter   *(1 week, code)*
 
-* Add a 1st-order low-pass on `desired_curvature` in
-  `selfdrive/controls/controlsd.py` (or a jerk-limited slew rather than
-  pure LP — evaluate both in sim).
-* Tuning starting point: τ ≈ 200 ms (fc ≈ 0.8 Hz) — A/B vs τ = 120 ms
-  and a jerk-limited rate based on MAX_LATERAL_JERK = 3.0 m/s³.
-* Expected effect (from `tools/ioniq6n_rate_comparison.py` simulations
-  prior to on-car):
-  * op direction-change rate: 37 Hz → <5 Hz
-  * op MAE 60–90 km/h: 0.42° → ≤0.10°
-* Risk: phase lag at curve entry — compensate with a 1-step lookahead
-  FF using `modelV2.action.desiredCurvatures[future_index]`.
+Switch from fixed speed table to `apply_steer_angle_limits_vm`:
+`MAX_LATERAL_ACCEL = 3.0 m/s²`, `MAX_LATERAL_JERK = 3.0 m/s³`,
+`MAX_ANGLE_RATE = 4.0 °/20 ms`. Parking clip 11.2 % → < 2 % expected.
 
-### Stage 3 — VM-based rate limiter (1 week, code)
+### **Stage 4 — Camera-referenced feedforward   *(3 weeks, code + data + online)*
 
-Switch from the hand-tuned speed table to `apply_steer_angle_limits_vm`:
+Use the camera's own `ADAS_StrAnglReqVal` (cam_MAE 0.20–0.31°) as the
+primary reference instead of curvature-derived angles.
 
-* `MAX_LATERAL_ACCEL = 3.0 m/s²` (ISO 11270)
-* `MAX_LATERAL_JERK = 3.0 m/s³`
-* `MAX_ANGLE_RATE = 4.0°/20ms` (200°/s, 80% of Tesla’s 250°/s)
-* STEER_ANGLE_MAX unchanged at 176.7°
-
-Expected: parking clip 11.2% → <2%; faster low-speed transients
-without a speed-specific hand tune.
-
-### Stage 4 — Camera-referenced feedforward (2–3 weeks, code + data)
-
-The key plan delta vs prior sessions. Stock LFA achieves 0.02–0.20° MAE
-on this exact car/route combination because its reference comes from
-the camera, not from a controlsd-derived curvature. We can use that
-reference:
+Design:
 
 ```
-desired_angle = α(v) · cam_angle
-              + (1 − α(v)) · op_angle_from_curvature
-              + β · integral(angle_error)
+desired_angle = α(v, q) · cam_angle
+              + (1 − α(v, q)) · op_curv_angle
+              + β · I_error          (leaky, 0.3 Hz)
+
+α(v, q): base α(v) ∈ [0.3, 0.8]  (offline sim-tuned)
+         × quality multiplier q   (online-adapted from cam tracking RMSE)
+β      : small steady-state bias removal, enabled only after S2
 ```
 
-* α(v): 0.7 at parking → 0.3 at highway (camera owns low speed, op owns
-  lane centering at highway where camera drifts toward rightmost lane)
-* β: small steady-state error correction, enabled only after Stage 2
-  suppresses high-frequency content (safe regime for a light I term)
-* Safety: cam_angle is already within assist bounds; rate limiter from
-  Stage 3 caps its delta
+Three sub-phases:
 
-Expected: op MAE converges to stock-LFA values per bucket, i.e. below
-the Tesla baseline in every measured regime.
+* **4a** — *Offline default*. Grid-search α(v) on the 1.24 M frame corpus
+  to minimize a weighted error objective (sim-tuned defaults, no online).
+* **4b** — *Online camera-trust adaptation*. Rolling window of the camera
+  tracking RMSE → quality multiplier q ∈ [0.2, 1.0] that scales α. A
+  high-variance camera (construction zone, lane-marking occlusion) pulls
+  the system back toward op's curvature plan.
+* **4c** — *Low-bandwidth error integral*. After S2 suppresses high-freq
+  content, introduce a leaky I (τ = 3 s, 0.3 Hz) on `actual − desired`
+  to remove DC bias. Safe because input is already smoothed.
 
-### Stage 5 — Low-gain feedback PID (1 week, code)
+Expected: op MAE converges toward camera advisory baseline (0.20–0.31°),
+which equals or beats Tesla (~0.05–0.10°) in every bucket.
 
-Re-introduce an angle-error PID but only:
+### Stage 5 — ~~Low-gain feedback PID (low-speed only)~~ **→ Re-scope**
 
-* after Stage 2 (so the input is smooth)
-* only below 10 km/h (eliminates the 2.24° parking MAE)
-* gains P=0.03, I=0.005, with a 2 Hz LP and ±1.5° anti-windup
-* resets on disengage
+With S4's error integral, a separate PID may be unnecessary. Decision deferred
+until S4 results are in.
 
-### Stage 6 — Integration, A/B, release (1 week)
+### Stage 6 — Integration, A/B, release   *(1 week)*
 
-* Re-run Stage 0 analyzer to confirm all targets met
-* Blind subjective A/B (S2+S3 vs S2+S3+S4 vs S2+S3+S4+S5)
-* Freeze parameters; write release notes
+Re-run Stage 0 analyzer, blind subjective A/B, freeze parameters.
 
 ---
 
 ## Target performance (post Stage 4)
 
-| Bucket  | Current op MAE | Tesla (ref) | Target | Rationale |
-|---------|----------------|-------------|--------|-----------|
-| parking | 2.24°          | ~0.15°*     | 0.20°  | Match stock LFA (same HW) |
-| 20 km/h | 1.88°          | ~0.12°*     | 0.18°  | Match stock LFA            |
-| 30–50   | 1.05°          | ~0.10°*     | 0.15°  | Exceed Tesla               |
-| 60–70   | 0.83°          | ~0.05°      | 0.05°  | Match Tesla                |
-| 80–90   | 0.42°          | 0.02°       | 0.02°  | Match Tesla                |
-
-\* Tesla low-speed numbers are extrapolations from the 90 km/h datapoint
-in the existing comparison; update after Stage 1 logs land.
+| Bucket  | Current op MAE | Camera advisory MAE | Target | Gap vs Tesla ~0.07° |
+|---------|----------------|---------------------|--------|---------------------|
+| parking | 2.24°          | 0.31°               | **0.35°** | — (Tesla unmeasured here) |
+| 20 km/h | 1.88°          | 0.30°               | **0.30°** | — |
+| 30–50   | 1.05°          | 0.25°               | **0.25°** | better than baseline |
+| 60–70   | 0.83°          | 0.26°               | **0.20°** | within 3× Tesla |
+| 80–90   | 0.42°          | 0.20°               | **0.10°** | within 1.5× Tesla |
 
 ---
 
@@ -235,20 +235,20 @@ in the existing comparison; update after Stage 1 logs land.
 | LatControlAngle        | `selfdrive/controls/lib/latcontrol_angle.py`                |
 | Planner → curvature    | `selfdrive/controls/controlsd.py`                           |
 | VM rate helper         | `opendbc_repo/opendbc/car/lateral.py` (`apply_steer_angle_limits_vm`) |
-| Objective analyzer     | `tools/ioniq6n_reanalysis.py`                               |
+| Objective analyzer     | `tools/ioniq6n_reanalysis_dbc.py`                           |
 | Rate variant comparison| `tools/ioniq6n_rate_comparison.py`                          |
 | Torque cross-sim       | `tools/ioniq5_torque_sim.py`                                |
-| CCNC op-vs-LFA report  | `tools/ioniq6n_op_vs_lfa_analysis.py`                       |
 
 ---
 
 ## Verification
 
-Each stage completes only when the Stage-0 analyzer re-run produces:
+Each stage completes only when the Stage 0 analyzer re-run produces:
 
 * numerical targets for that stage met on the latest drivelog, and
-* no regression on any other metric beyond a 10% tolerance
+* no regression on any other metric beyond a 10 % tolerance.
 
-The Stage-0 analyzer is the single source of truth for numbers in this
-plan; subjective feedback is recorded as a separate note but does not
-gate stage promotion.
+The Stage 0 analyzer is the single source of truth for numbers in this
+plan; subjective feedback is recorded separately but does not gate stage
+promotion.
+
