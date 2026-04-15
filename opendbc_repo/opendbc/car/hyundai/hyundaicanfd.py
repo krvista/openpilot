@@ -512,3 +512,49 @@ def hkg_can_fd_checksum(address: int, sig, d: bytearray) -> int:
   elif len(d) == 32:
     crc ^= 0x9F5B
   return crc
+
+
+# ---- Ioniq 6 N HOD (hands-on detection) spoof ----
+# Address 0x208 on E-CAN (bus 1), DLC=16, factory rate 10.4 Hz.
+# Empirically identified in route 00000031--85ea5c34a8 against a labelled
+# grip/release drivelog (tools/ioniq6n_hod_align.py):
+#   byte 10: HOD_Dir_Status {0=HANDS_OFF, 1=TOUCH_SOFT, 2=TOUCH_STRONG,
+#                            3=GRIP_SOFT,  4=GRIP_STRONG}
+#   byte 12: raw capacitive pressure (0x00..0x3d)
+#   byte 13: raw capacitive area     (0x00..0x2d)
+#   byte  0-1: CRC16-XMODEM with DLC-16 XOR 0x041D (standard HKG CRC)
+#   byte  2  : counter, +2 per frame (bit 0 always 0)
+#   byte  3-9, 11, 14-15: fixed 0x00/0x01 per field
+#
+# Emitting this frame with state=4 at factory rate (or higher) when MADS
+# is engaged is the experimental path to suppress the hands-off warning
+# without factory-ECU modification. NOT enabled by default — gated by the
+# HOD_BYPASS=1 environment variable. See Appendix H of
+# IONIQ6N_STEERING_MASTERPLAN.md for feasibility analysis and risks.
+HOD_ADDR = 0x208
+_HOD_GRIP_STRONG = bytes([
+  0x00, 0x00,   # byte 0-1: CRC (filled in below)
+  0x00,         # byte 2: counter (filled in by caller)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  # byte 3-9: reserved
+  0x04,         # byte 10: HOD_Dir_Status = GRIP_STRONG
+  0x01,         # byte 11: enable flag
+  0x33,         # byte 12: pressure (median observed during firm grip)
+  0x28,         # byte 13: area (median observed during firm grip)
+  0x01,         # byte 14: validity flag
+  0x00,         # byte 15: reserved
+])
+
+
+def create_hod_bypass(bus: int, counter: int) -> tuple[int, int, bytes, int]:
+  """Return a (addr, _timing_hint, data, bus) CAN message that announces
+  GRIP_STRONG on 0x208 with a correct Hyundai CAN FD CRC.
+
+  counter is a running +2-per-emit sequence number (mod 256, low bit
+  always 0).
+  """
+  buf = bytearray(_HOD_GRIP_STRONG)
+  buf[2] = counter & 0xFE  # force bit 0 = 0 as observed in factory frames
+  crc = hkg_can_fd_checksum(HOD_ADDR, None, buf)
+  buf[0] = crc & 0xFF
+  buf[1] = (crc >> 8) & 0xFF
+  return HOD_ADDR, 0, bytes(buf), bus

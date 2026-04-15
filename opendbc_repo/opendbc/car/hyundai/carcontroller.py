@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
@@ -192,6 +193,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.camref_q_last = CAMREF_TRUST_Q_MAX
     # Low-speed camera passthrough latch (hysteresis, ENTER 2 km/h / EXIT 3 km/h).
     self.low_speed_cam_latched = False
+    # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
+    # var; otherwise dormant. See Appendix H of the masterplan.
+    self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
+    self.hod_bypass_counter = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -506,6 +511,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                   self.lfa_icon, op_driving=op_driving))
       else:
         can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
+
+    # HOD (hands-on detection) bypass — experimental, opt-in via
+    # HOD_BYPASS=1 env var. Only on the HDA2-ALT + CCNC angle-control
+    # platform (Ioniq 6 N today). TX 0x208 on E-CAN at 10 Hz matching
+    # factory rate with byte 10=4 (GRIP_STRONG) and correct CRC. Factory
+    # publisher is still active on bus 1 (native, cannot be relay-blocked)
+    # — we rely on the hands-off timer being the single consumer and
+    # "latest frame wins" semantics to keep the timer continuously reset.
+    # If CCNC flickers like 0x161 did, disable this flag and revisit.
+    if self.hod_bypass_enabled and ccnc_lka_alt and self.frame % 10 == 0 and CC.enabled:
+      can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
+      self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
 
     # blinkers
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:

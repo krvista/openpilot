@@ -30,8 +30,16 @@
 // 0x161/0x162 on bus 0 with full alert suppression (addresses are
 // camera-forwarded there, check_relay=true keeps the stock source
 // blocked).
+// 0x208 (HOD) added to the TX whitelist for the HDA2-ALT + CCNC platform
+// so the opt-in HOD_BYPASS feature (carcontroller.py create_hod_bypass)
+// can emit GRIP_STRONG frames on E-CAN. Dormant by default (gated by the
+// HOD_BYPASS=1 env var in the python stack); whitelist inclusion alone
+// transmits nothing. check_relay = false because 0x208 is a native E-CAN
+// publisher and cannot be forwarded-blocked (same architectural reason
+// as 0x161/0x162 on this platform — see Appendix H of the masterplan).
 #define HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_COMMON_TX_MSGS(a_can, e_can) \
-  HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(a_can, e_can)
+  HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(a_can, e_can)           \
+  {0x208, e_can, 16, .check_relay = false},  /* HOD bypass */
 
 #define HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(e_can)  \
   {0x12A, e_can, 16, .check_relay = (e_can) == 0},  /* LFA */            \
