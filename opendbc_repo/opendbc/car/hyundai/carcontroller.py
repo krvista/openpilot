@@ -213,6 +213,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # For other cars, preserve the angle set by controlsd's lateral controller.
     if self.CP.flags & HyundaiFlags.CCNC and self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
       new_actuators.steeringAngleDeg = self.apply_angle_last
+      # Stage 4 diagnostics: report the blend weights that produced the angle
+      # above so drivelog analysis can attribute per-frame tracking error
+      # changes to camera-reference blend dynamics. Both 0 outside Ioniq 6 N.
+      new_actuators.camrefAlpha = float(self.camref_alpha_last)
+      new_actuators.camrefQTrust = float(self.camref_q_last)
     new_actuators.accel = self.tuning.actual_accel
 
     self.frame += 1

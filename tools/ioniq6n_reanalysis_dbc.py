@@ -79,6 +79,14 @@ def extract_frames(path):
       v161 = p_ccnc.vl.get('CCNC_0x161', {})
       vcam = p_cam.vl.get('LKAS_ALT', {})
       vop = p_op.vl.get('LKAS_ALT', {})
+      # Stage 4 diagnostics present in new logs only. Older logs fall back to 0.
+      camref_alpha = 0.0
+      camref_q = 0.0
+      try:
+        camref_alpha = float(getattr(cc.actuators, 'camrefAlpha', 0.0) or 0.0)
+        camref_q = float(getattr(cc.actuators, 'camrefQTrust', 0.0) or 0.0)
+      except Exception:
+        pass
       frames.append({
         'v_kmh': latest_cs.vEgoRaw * 3.6,
         'v_ms': latest_cs.vEgoRaw,
@@ -107,6 +115,9 @@ def extract_frames(path):
         'sound2': int(v161.get('SOUNDS_2', 0)),
         'sound4': int(v161.get('SOUNDS_4', 0)),
         'lka_icon': int(v161.get('LKA_ICON', 0)),
+        # Stage 4 on-car diagnostics (0 on pre-Stage-4 builds)
+        'camref_alpha': camref_alpha,
+        'camref_q_trust': camref_q,
       })
   return frames, git_commit, git_branch
 
@@ -379,6 +390,39 @@ def report_op_tracking_vs_camref(frames):
           f"{np.percentile(curv,95):>7.2f}° {op_p95} {np.percentile(camref,95):>9.2f}°")
 
 
+def report_camref_blend_live(frames):
+  """Stage 4 on-car diagnostics, if present (camref_alpha / camref_q_trust).
+
+  On logs built from the Stage-4 code path (or later), these carry the
+  per-frame blend state that the device actually used. Comparing this to
+  the offline replay prediction is the definitive on-car validation.
+  """
+  print("\n=== Stage 4 on-car diagnostics (camref_alpha / q_trust) ===")
+  per_bucket = defaultdict(list)
+  for f in frames:
+    if classify_mode(f) != 'op':
+      continue
+    b = bucket_of(f['v_kmh'])
+    if b is None:
+      continue
+    if f.get('camref_alpha', 0) == 0 and f.get('camref_q_trust', 0) == 0:
+      continue  # legacy logs where the fields are always zero
+    per_bucket[b].append((f['camref_alpha'], f['camref_q_trust']))
+  if not any(per_bucket.values()):
+    print("  (no non-zero samples — pre-Stage-4 drivelog, skipping)")
+    return
+  print(f"{'bucket':<9} {'n':>7} {'α_p50':>6} {'α_p95':>6} {'q_p50':>6} {'q_p5':>6}")
+  for name, _, _ in BUCKETS:
+    data = per_bucket.get(name, [])
+    if len(data) < 200:
+      continue
+    a = np.array([d[0] for d in data])
+    q = np.array([d[1] for d in data])
+    print(f"{name:<9} {len(data):>7,} "
+          f"{np.percentile(a,50):>5.2f}  {np.percentile(a,95):>5.2f}  "
+          f"{np.percentile(q,50):>5.2f}  {np.percentile(q,5):>5.2f}")
+
+
 def main():
   frames, by_route = load_or_cache(force=('--refresh' in sys.argv))
   print(f"\nTotal frames loaded: {len(frames):,}")
@@ -389,6 +433,7 @@ def main():
   report_angle_active_transitions(frames)
   report_cam_tracking_accuracy(frames)
   report_op_tracking_vs_camref(frames)
+  report_camref_blend_live(frames)
 
 
 if __name__ == '__main__':

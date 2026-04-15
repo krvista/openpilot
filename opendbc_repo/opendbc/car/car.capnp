@@ -375,6 +375,13 @@ struct CarControl {
     torqueOutputCan @8: Float32;   # value sent over can to the car
     speed @6: Float32;  # m/s
 
+    # Ioniq 6 N Stage 4 diagnostic (camera-referenced feedforward blend).
+    # Both are 0 when the blend is inactive (non-Ioniq-6-N cars, op not
+    # steering, or ACI not latched). Logged so that drivelog analysis
+    # can attribute tracking error changes to the blend dynamics.
+    camrefAlpha @9: Float32;    # effective α used: α₀(v) · q_trust (capped by nav_gate)
+    camrefQTrust @10: Float32;  # rolling camera-trust multiplier in [Q_MIN, Q_MAX]
+
     enum LongControlState @0xe40f3a917d908282{
       off @0;
       pid @1;
