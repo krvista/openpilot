@@ -42,7 +42,9 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
                              aci_active=None, aci_gain_ramp=1.0, in_passthrough=False):
   """
-  Create LKAS_ALT message for Ioniq 6 N (CCNC + LKA_STEERING_ALT).
+  Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
+  (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
+  2026 is the first member).
 
   driver_torque_blend: 1.0 = no driver input, 0.0 = driver fully overriding.
     Used for gradient ACI authority reduction (Toyota LTA TORQUE_WIND_DOWN style).

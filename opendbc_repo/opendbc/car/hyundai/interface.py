@@ -55,6 +55,16 @@ class CarInterface(CarInterfaceBase):
 
       if lka_steering:
           ret.flags |= HyundaiFlags.CANFD_LKA_STEERING.value
+          # HDA2-ALT + CCNC angle-control platform auto-detection:
+          # presence of LKAS_ALT (0x110) on the camera bus indicates the
+          # ADAS architecture that commands MDPS via ADAS_StrAnglReqVal.
+          # Combined with HyundaiFlags.CCNC from the car's static config
+          # in values.py, this auto-enables angle-based steering, rate
+          # limiter, hysteresis, camera-ref blend, low-speed camera
+          # passthrough, ACI gain policy, and op-only alert suppression
+          # — no per-car code is required; future 2025+ Hyundai/Kia/
+          # Genesis cars sharing this ADAS architecture inherit all
+          # behaviour automatically via this fingerprint-driven flag.
           if 0x110 in fingerprint[CAN.CAM]:
               ret.flags |= HyundaiFlags.CANFD_LKA_STEERING_ALT.value
       else:
@@ -86,9 +96,15 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ALT_BUTTONS.value
       if ret.flags & HyundaiFlags.CANFD_CAMERA_SCC:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
-      # CCNC safety flag: required for panda to allow 0x161/0x162 TX on the
-      # HDA2-ALT + CCNC variant (Ioniq 6 N), so we can suppress spurious
-      # hands-on / HDP takeover alerts while openpilot steers.
+      # CCNC safety flag: required for panda to allow 0x161/0x162 TX on
+      # any member of the HDA2-ALT + CCNC angle-control platform (Ioniq
+      # 6 N and future 2025+ Hyundai/Kia/Genesis cars that share the
+      # CCNC | CANFD_LKA_STEERING_ALT flag combo), so we can suppress
+      # spurious hands-on / HDP takeover alerts while openpilot steers.
+      # Note: on HDA2-ALT the 0x161/0x162 publisher is native on bus 1
+      # (not camera-forwarded), so panda cannot block the stock source;
+      # suppression is best-effort (see c6a33de for the safety-side
+      # check_relay=false requirement on this platform).
       if ret.flags & HyundaiFlags.CCNC and (
         not (ret.flags & HyundaiFlags.CANFD_LKA_STEERING) or (ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
       ):
@@ -126,9 +142,12 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.1
     ret.steerLimitTimer = 0.4
 
-    # Ioniq 6 N (CCNC + LKA_STEERING_ALT) uses angle-based control via LKAS_ALT.
-    # LatControlAngle provides live steerRatio, angleOffsetDeg, and roll compensation
-    # from liveParameters, which are critical for accurate angle commands.
+    # HDA2-ALT + CCNC angle-control platform (Ioniq 6 N 2026 and future
+    # 2025+ Hyundai/Kia/Genesis cars with CCNC | CANFD_LKA_STEERING_ALT)
+    # uses angle-based control via LKAS_ALT's ADAS_StrAnglReqVal field.
+    # LatControlAngle provides live steerRatio, angleOffsetDeg, and roll
+    # compensation from liveParameters, which are critical for accurate
+    # angle commands.
     if ret.flags & HyundaiFlags.CCNC and ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
       ret.steerControlType = structs.CarParams.SteerControlType.angle
     else:

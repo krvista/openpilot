@@ -269,7 +269,9 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       alt = "_ALT"
       # Capture CCNC camera messages for:
       #   (a) non-HDA2 CCNC cars — original path, creates full CCNC frame via create_ccnc
-      #   (b) HDA2-ALT CCNC cars (Ioniq 6 N) — needed to rewrite and re-send
+      #   (b) HDA2-ALT + CCNC angle-control platform (Ioniq 6 N 2026 and
+      #       future 2025+ Hyundai/Kia/Genesis cars with CCNC |
+      #       CANFD_LKA_STEERING_ALT) — needed to rewrite and re-send
       #       CCNC_0x161 so we can suppress hands-on / HDP takeover alerts
       #       (ALERTS_2 ∈ {1,2}, ALERTS_3 ∈ {11,12}) while openpilot steers.
       hda2_alt_ccnc = bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
@@ -321,12 +323,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT
                                           else cp_cam.vl["CAM_0x2a4"])
 
-    # For Ioniq 6 N (CCNC + LKA_STEERING_ALT), capture the camera's native LKAS_ALT
-    # so carcontroller can pass its bits through unchanged except for the angle
-    # command. This preserves camera-native fields (LKA_AVAILABLE, LFA_BUTTON,
-    # LKA_ICON, and the hidden-nibble validation bits at byte 9) that ADAS DRV
-    # uses to authenticate the LKAS_ALT message as a legitimate camera command
-    # and activate its LFA processing pipeline rather than falling back to LKA.
+    # For the HDA2-ALT + CCNC angle-control platform (CCNC |
+    # CANFD_LKA_STEERING_ALT), capture the camera's native LKAS_ALT so
+    # carcontroller can pass its bits through unchanged except for the
+    # angle command. This preserves camera-native fields (LKA_AVAILABLE,
+    # LFA_BUTTON, LKA_ICON, and the hidden-nibble validation bits at
+    # byte 9) that ADAS DRV uses to authenticate the LKAS_ALT message
+    # as a legitimate camera command and activate its LFA processing
+    # pipeline rather than falling back to LKA.
     if (self.CP.flags & HyundaiFlags.CCNC) and (self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT):
       self.lkas_alt_cam_msg = copy.copy(cp_cam.vl["LKAS_ALT"])
 
