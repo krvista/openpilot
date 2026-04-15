@@ -23,6 +23,69 @@ MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
+# ── Stage 4: camera-referenced feedforward defaults ──
+# α₀(v) selected by tools/ioniq6n_camref_sim.py (F+nav_gate0.3 winner) on
+# 1.24M frames: 52-65% MAE reduction vs curvature-only across all buckets.
+# F-all-high table: aggressive camera trust at low/mid speed (where camera
+# advisory is most accurate at 0.20-0.31° MAE), tapered at highway where
+# navigation intent matters more for lane changes.
+CAMREF_ALPHA_BP = [0., 5., 10., 20., 30.]
+CAMREF_ALPHA_V  = [0.80, 0.80, 0.80, 0.70, 0.60]
+
+# nav-disagreement gate: clamp α when camera and planner visibly disagree
+# (|cam_angle - op_curv_angle| > NAV_DISAGREE_DEG), so navigation maneuvers
+# (lane change, obstacle avoidance) aren't overridden by the camera.
+CAMREF_NAV_DISAGREE_DEG = 3.0
+CAMREF_NAV_ALPHA_CAP    = 0.30
+
+# Online camera-trust estimator parameters
+CAMREF_TRUST_WINDOW_S = 30.0    # rolling RMSE window
+CAMREF_TRUST_RMSE_REF = 1.5     # deg — above this, q collapses toward Q_MIN
+CAMREF_TRUST_Q_MIN    = 0.20
+CAMREF_TRUST_Q_MAX    = 1.00
+
+# Stage 2b: ACIGain floor when op is actively steering. The camera itself
+# commands ADAS_ACIAnglTqRedcGainVal = 0.000 at all times (DBC-decoded on
+# 1.24M frames), so "camera-mirrored" in the old code always collapsed to
+# `authority * 0.6` = op-forced 0.6-1.0 gain. That kept MDPS in a more
+# authoritative (less assistive) state than stock LFA ever does and is a
+# plausible contributor to the low-speed tick. Drop to a small floor so
+# MDPS still recognises us as the source of truth but can do its natural
+# smoothing on our angle command, matching stock LFA behavior.
+ACI_GAIN_OP_FLOOR = 0.15
+
+
+class CameraTrustEstimator:
+  """Rolling RMSE of (cam_angle - actual) during lfa_passthrough periods.
+
+  Produces a trust multiplier q ∈ [Q_MIN, Q_MAX]. When the camera is noisy
+  (construction zone, lane-marking occlusion, heavy rain), rolling RMSE
+  grows → q shrinks → the camera-reference blend falls back toward op's
+  own curvature-derived plan. Slow-changing by design (30s window) so no
+  contribution to high-frequency oscillation.
+  """
+  def __init__(self, window_s=CAMREF_TRUST_WINDOW_S, dt=0.02,
+               rmse_ref=CAMREF_TRUST_RMSE_REF,
+               q_min=CAMREF_TRUST_Q_MIN, q_max=CAMREF_TRUST_Q_MAX):
+    import collections as _c
+    self._buf = _c.deque(maxlen=int(window_s / dt))
+    self._rmse_ref = rmse_ref
+    self._q_min = q_min
+    self._q_max = q_max
+    self._last_q = q_max
+
+  def update(self, cam_angle, actual_angle, cam_driving):
+    if cam_driving:
+      self._buf.append(cam_angle - actual_angle)
+    if len(self._buf) >= 100:
+      s = 0.0
+      for e in self._buf:
+        s += e * e
+      rmse = (s / len(self._buf)) ** 0.5
+      q = self._q_max - (rmse / self._rmse_ref) * (self._q_max - self._q_min)
+      self._last_q = max(self._q_min, min(self._q_max, q))
+    return self._last_q
+
 
 def process_hud_alert(enabled, fingerprint, hud_control):
   sys_warning = (hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw))
@@ -76,6 +139,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.aci_active_latched = False
     self.passthrough_latched = False
     self.aci_gain_ramp = 0.0
+    # Stage 4: online camera-trust estimator (30s rolling RMSE on passthrough).
+    self.camera_trust = CameraTrustEstimator()
+    # Logging aids for Stage 4 evaluation (readable via cereal reuse if wired later)
+    self.camref_alpha_last = 0.0
+    self.camref_q_last = CAMREF_TRUST_Q_MAX
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -267,7 +335,39 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       # Feedforward from LatControlAngle (includes live steerRatio,
       # angleOffsetDeg, roll compensation — r=0.985 without additional PID).
-      desired_angle_deg = CC.actuators.steeringAngleDeg
+      op_curv_angle_deg = float(CC.actuators.steeringAngleDeg)
+
+      # ── Stage 4: camera-referenced feedforward blend ──
+      # Stage 0 re-analysis showed the camera's ADAS_StrAnglReqVal has MAE
+      # 0.20-0.31° vs actual (3-10× better than op's curvature-derived angle
+      # at every bucket). Blend the two with trust-adaptive α:
+      #   α_eff = α₀(v) · q_trust   (and clamp to NAV_ALPHA_CAP on disagreement)
+      # The trust q_trust is updated only during lfa_passthrough when the
+      # camera drives the wheel directly — rolling 30s RMSE → multiplier,
+      # immune to fast oscillation (by design, no classical PID loop).
+      cam_angle_deg = None
+      if lkas_alt_cam_msg is not None:
+        cam_angle_deg = float(lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", 0.0))
+        # Feed the trust estimator: camera is "driving" the wheel whenever
+        # openpilot is not (so actual ≈ response to cam_angle), with a light
+        # driver torque gate so override frames don't poison the RMSE.
+        cam_driving = (not CC.latActive) and (driver_torque_blend > 0.5)
+        self.camref_q_last = self.camera_trust.update(
+          cam_angle_deg, float(CS.out.steeringAngleDeg), cam_driving)
+
+      desired_angle_deg = op_curv_angle_deg
+      if cam_angle_deg is not None and CC.latActive and self.aci_active_latched:
+        alpha_base = float(np.interp(CS.out.vEgoRaw, CAMREF_ALPHA_BP, CAMREF_ALPHA_V))
+        alpha_eff = alpha_base * self.camref_q_last
+        # Nav-gate: when planner disagrees with camera by > NAV_DISAGREE_DEG,
+        # clamp α so lane-change / obstacle-avoidance maneuvers aren't
+        # overridden by camera's lane-centering bias.
+        if abs(cam_angle_deg - op_curv_angle_deg) > CAMREF_NAV_DISAGREE_DEG:
+          alpha_eff = min(alpha_eff, CAMREF_NAV_ALPHA_CAP)
+        desired_angle_deg = alpha_eff * cam_angle_deg + (1.0 - alpha_eff) * op_curv_angle_deg
+        self.camref_alpha_last = alpha_eff
+      else:
+        self.camref_alpha_last = 0.0
 
       # Gradient driver override blend: smoothly yield toward actual wheel
       # position as driver torque increases (Toyota LTA TORQUE_WIND_DOWN style).

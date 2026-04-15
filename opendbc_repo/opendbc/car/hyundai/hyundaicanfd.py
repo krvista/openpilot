@@ -97,13 +97,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
 
     if lkas_alt_cam_msg is not None:
       # Mirror camera values, override ADAS_StrAnglReqVal + activation signals.
-      # When active: scale ACIGain by authority instead of forced 1.0 — this
-      # prevents the "openpilot fighting driver" feel and matches stock profile.
+      # Stage 2b: ADAS_ACIAnglTqRedcGainVal reduces MDPS's own torque blending
+      # so higher = pure-angle following (ADAS authoritative), lower = MDPS
+      # contributes its natural assistance/smoothing. Stage 0 DBC decode on
+      # 1.24M frames showed the camera itself ALWAYS commands gain = 0.000;
+      # with cam = 0, the old `max(cam, authority*0.6)` collapsed to op-forced
+      # 0.6-1.0 — MDPS in a more authoritative state than stock LFA ever uses,
+      # a plausible contributor to the residual low-speed tick and the
+      # op-vs-LFA accuracy gap. Mirror the camera's behaviour with a small
+      # authority floor (0.15) so MDPS still recognises openpilot as the
+      # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      # Blend our op floor with camera value; then apply aci_gain_ramp so the
-      # first frames after re-engagement rise smoothly (no gain step) to the
-      # target. aci_gain_ramp = 0 just after engage, 1 after ~0.3 s.
-      op_gain_floor = authority * 0.6 * aci_gain_ramp
+      op_gain_floor = authority * 0.15 * aci_gain_ramp
       effective_aci_gain = max(cam_aci_gain, op_gain_floor) if aci_active else cam_aci_gain
 
       lkas_values = {
@@ -147,7 +152,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_BYTE9_HIDDEN": 0x5,
         "LKAS_ANGLE_ACTIVE": 2 if aci_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": authority * 0.6 * aci_gain_ramp if aci_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": authority * 0.15 * aci_gain_ramp if aci_active else 0,
         "LKAS_BYTE7_BITS4_5": 3 if aci_active else 0,
         "LKAS_BYTE7_BIT7": 1 if aci_active else 0,
         "LKAS_BYTE13": 0x09 if aci_active else 0,
