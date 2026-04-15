@@ -67,6 +67,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_angle_last = 0.0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
+    # CCNC LKA_ALT hysteresis state — prevents binary flip of LKAS_ANGLE_ACTIVE /
+    # LKA_ASSIST at the authority boundary (the residual low-speed tick source).
+    # aci_active_latched: True once authority>=0.3 and stays True until <0.05.
+    # passthrough_latched: True when driver really has the wheel, stable across
+    # small torque oscillations below the driver_torque_blend threshold.
+    # aci_gain_ramp: first-order smoothing 0→1 over ~0.3 s on engagement.
+    self.aci_active_latched = False
+    self.passthrough_latched = False
+    self.aci_gain_ramp = 0.0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -202,24 +211,53 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
     # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
     # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
-    # This prevents the "tick" catch feel the driver felt when letting the
-    # wheel return toward center at creep speed, where the previous binary
-    # gate flipped passthrough→op in a single frame.
     ACI_SPEED_FULL_MS = 3.0 / 3.6   # full authority at/above 3 km/h
     ACI_SPEED_ZERO_MS = 1.0 / 3.6   # zero authority at/below 1 km/h
     speed_blend = float(np.clip((CS.out.vEgoRaw - ACI_SPEED_ZERO_MS) /
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Toyota LTA-style gradient driver override blending.
-    # Instead of binary steeringPressed (threshold ~100 Nm-units), compute a
-    # smooth blend factor from raw torque. This allows openpilot to back off
-    # gracefully when the driver applies even small torque, matching stock feel.
     DRIVER_TORQUE_DEADZONE = 30   # below this: no reduction (normal driving)
-    DRIVER_TORQUE_FULL_OVERRIDE = 150  # at/above this: fully surrendered (Toyota MAX_LTA_DRIVER_TORQUE_ALLOWANCE)
+    DRIVER_TORQUE_FULL_OVERRIDE = 150  # at/above this: fully surrendered
     driver_abs_torque = abs(CS.out.steeringTorque)
     override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
                                      (DRIVER_TORQUE_FULL_OVERRIDE - DRIVER_TORQUE_DEADZONE), 0.0, 1.0))
     driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
+
+    # ---- Hysteresis on ACI engagement (fixes residual low-speed tick) ----
+    # The old single-threshold `aci_active = authority > 0.05` flipped
+    # LKAS_ANGLE_ACTIVE (1↔2) and LKA_ASSIST (0↔1) in a single 20 ms frame at
+    # the boundary. ADAS ECU observes the flip as a mode change and briefly
+    # re-arms the EPS actuator → the driver felt a tick when the wheel returned
+    # to center at creep. Dual thresholds hold state through small wiggles.
+    authority = driver_torque_blend * speed_blend if CC.latActive else 0.0
+    if blinker_on:
+      authority *= 0.2
+    ACI_ENTER = 0.30
+    ACI_EXIT  = 0.05
+    if CC.latActive:
+      if authority >= ACI_ENTER:
+        self.aci_active_latched = True
+      elif authority < ACI_EXIT:
+        self.aci_active_latched = False
+    else:
+      self.aci_active_latched = False
+
+    # Camera passthrough latch: engage passthrough when clearly not driving
+    # (not lat_active AND driver has the wheel). Dual threshold on
+    # driver_torque_blend so small wiggles don't flap passthrough on/off.
+    if not CC.latActive and driver_torque_blend > 0.9:
+      self.passthrough_latched = True
+    elif CC.latActive or driver_torque_blend < 0.6:
+      self.passthrough_latched = False
+
+    # First-order ramp of ACI gain on re-engagement (smooths the
+    # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
+    ACI_GAIN_RAMP_TAU_FRAMES = 30.0
+    if self.aci_active_latched:
+      self.aci_gain_ramp = min(1.0, self.aci_gain_ramp + 1.0 / ACI_GAIN_RAMP_TAU_FRAMES)
+    else:
+      self.aci_gain_ramp = 0.0
 
     # Ioniq 6 N angle control: standard speed-dependent rate limiter at 50 Hz,
     # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
@@ -237,11 +275,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
                             override_factor * float(CS.out.steeringAngleDeg)
 
-      # Speed-dependent rate limiter (20 ms cadence). When !lat_active, the
-      # helper returns CS.out.steeringAngleDeg so resume is bump-free.
+      # When ACI is NOT latched (passthrough / driver taking over), force
+      # `lat_active=False` into the rate limiter so it returns the actual
+      # wheel angle. This keeps self.apply_angle_last tracking the physical
+      # wheel during manual / passthrough periods — so when ACI re-engages,
+      # apply_angle_last matches reality and the first active command has
+      # NO step. Previously, a stale apply_angle_last could be several
+      # degrees off from actual after driver input, causing a tick as the
+      # rate limiter ramped it back.
+      rate_lat_active = bool(CC.latActive) and self.aci_active_latched
+
       self.apply_angle_last = apply_std_steer_angle_limits(
         desired_angle_deg, self.apply_angle_last, CS.out.vEgoRaw,
-        float(CS.out.steeringAngleDeg), CC.latActive, angle_limits,
+        float(CS.out.steeringAngleDeg), rate_lat_active, angle_limits,
       )
 
     # Steering message TX: 50 Hz for CCNC LKA_ALT (matching Toyota/Tesla/Nissan),
@@ -251,7 +297,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
-                                                             speed_blend=speed_blend))
+                                                             speed_blend=speed_blend,
+                                                             aci_active=self.aci_active_latched,
+                                                             aci_gain_ramp=self.aci_gain_ramp,
+                                                             in_passthrough=self.passthrough_latched))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (Ioniq 5 N, Ioniq 6 N): pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
@@ -262,11 +311,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                         suppress_lanes=suppress_lanes))
 
     # LFA and HDA icons
-    if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
-      if ccnc_non_hda2:
+    # HDA2-ALT + CCNC (Ioniq 6 N) also gets create_ccnc() so we can suppress
+    # spurious takeover alerts (ALERTS_3=11 HDP_DEACTIVATED_AUDIBLE, etc.)
+    # while openpilot is steering. Requires carstate capture of msg_161 and
+    # panda firmware with 0x161/0x162 on the HDA2-ALT+CCNC TX whitelist.
+    ccnc_hda2_alt = ccnc_lka_alt and getattr(CS, 'msg_161', None)
+    if self.frame % 5 == 0 and (not lka_steering or lka_steering_long or ccnc_hda2_alt):
+      if ccnc_non_hda2 or ccnc_hda2_alt:
+        op_driving = bool(ccnc_lka_alt and self.aci_active_latched)
         can_sends.extend(hyundaicanfd.create_ccnc(self.packer, self.CAN, self.CP.openpilotLongitudinalControl, CC.enabled, CC.hudControl, CC.leftBlinker,
                                                   CC.rightBlinker, CS.msg_161, CS.msg_162, CS.msg_1b5, CS.is_metric, CS.out, CS.main_cruise_enabled,
-                                                  self.lfa_icon))
+                                                  self.lfa_icon, op_driving=op_driving))
       else:
         can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
 

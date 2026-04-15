@@ -16,6 +16,14 @@
   {0x110, a_can, 32, .check_relay = (a_can) == 0},  /* LKAS_ALT */  \
   {0x362, a_can, 32, .check_relay = (a_can) == 0},  /* CAM_0x362 */ \
 
+// HDA2-ALT + CCNC (Ioniq 6 N): panda also rewrites/retransmits the camera's
+// CCNC_0x161/0x162 on E-CAN so we can suppress hands-on and HDP takeover
+// alerts that the ADAS camera generates during op lateral control.
+#define HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_COMMON_TX_MSGS(a_can, e_can) \
+  HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(a_can, e_can)           \
+  {0x161, e_can, 32, .check_relay = true},  /* CCNC_0x161 */            \
+  {0x162, e_can, 32, .check_relay = true},  /* CCNC_0x162 */            \
+
 #define HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(e_can)  \
   {0x12A, e_can, 16, .check_relay = (e_can) == 0},  /* LFA */            \
   {0x1E0, e_can, 16, .check_relay = (e_can) == 0},  /* LFAHDA_CLUSTER */ \
@@ -242,6 +250,10 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     HYUNDAI_CANFD_LKA_STEERING_ALT_COMMON_TX_MSGS(0, 1)
   };
 
+  static const CanMsg HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_TX_MSGS[] = {
+    HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_COMMON_TX_MSGS(0, 1)
+  };
+
   static const CanMsg HYUNDAI_CANFD_LKA_STEERING_LONG_TX_MSGS[] = {
     HYUNDAI_CANFD_LKA_STEERING_COMMON_TX_MSGS(0, 1)
     HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(1)
@@ -357,7 +369,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         SET_RX_CHECKS(hyundai_canfd_lka_steering_rx_checks, ret);
       }
       if (hyundai_canfd_lka_steering_alt) {
-        SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_ALT_TX_MSGS, ret);
+        if (get_hyundai_ccnc()) {
+          SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC_TX_MSGS, ret);
+        } else {
+          SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_ALT_TX_MSGS, ret);
+        }
       } else {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEERING_TX_MSGS, ret);
       }

@@ -86,7 +86,12 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ALT_BUTTONS.value
       if ret.flags & HyundaiFlags.CANFD_CAMERA_SCC:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
-      if ret.flags & HyundaiFlags.CCNC and not ret.flags & HyundaiFlags.CANFD_LKA_STEERING:
+      # CCNC safety flag: required for panda to allow 0x161/0x162 TX on the
+      # HDA2-ALT + CCNC variant (Ioniq 6 N), so we can suppress spurious
+      # hands-on / HDP takeover alerts while openpilot steers.
+      if ret.flags & HyundaiFlags.CCNC and (
+        not (ret.flags & HyundaiFlags.CANFD_LKA_STEERING) or (ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+      ):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CCNC.value
 
     else:

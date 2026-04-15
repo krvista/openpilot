@@ -13,6 +13,11 @@ Simulates these variants with 50 Hz TX cadence:
   2. TOYOTA     - Toyota LTA's table
   3. TESLA      - Tesla's VM-based limits
   4. PREVIOUS   - our old 100Hz VM-based config
+  5. IONIQ_5    - virtual full torque-stack output (Ioniq 5 latcontrol_torque
+                  + first-order plant). Not a rate-limiter variant — it asks
+                  "what would a torque-controlled Ioniq 5 have produced on
+                  this same reference?" Useful cross-reference for Phase 3
+                  validation. See tools/ioniq5_torque_sim.py for details.
 
 Metrics are broken out by Korean speed regime:
   stopped, parking, 20, 30, 40, 50, 60, 80, 100, 110 km/h
@@ -75,6 +80,76 @@ class PrevParamsShim:
     176.7, ([], []), ([], []),
     MAX_LATERAL_ACCEL=3.0, MAX_LATERAL_JERK=3.0, MAX_ANGLE_RATE=1.0,
   )
+
+
+# Compact Ioniq 5 torque stack used by the IONIQ_5 variant. Mirrors the full
+# simulator in tools/ioniq5_torque_sim.py. Params from opendbc torque_data/
+# params.toml (HYUNDAI_IONIQ_5) + values.py.
+I5_STEER_RATIO = 14.26
+I5_WHEELBASE = 2.97
+I5_LAT_ACCEL_FACTOR = 3.172929
+I5_FRICTION = 0.096019
+I5_PLANT_TAU = 0.12
+I5_PLANT_DAMPING = 3.0
+I5_KP_BP = [1.0, 1.5, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 30.0]
+I5_KP_VAL = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, 0.8]
+
+
+def simulate_ioniq5_torque(frames, VM, tx_every=1):
+  """Virtual Ioniq 5 torque controller + first-order EPS plant replay.
+  Returns the same (angles, desired, v, active) tuple as other simulate_*.
+  """
+  out_a = np.zeros(len(frames))
+  out_d = np.zeros(len(frames))
+  out_v = np.zeros(len(frames))
+  out_act = np.zeros(len(frames), dtype=bool)
+  virt_angle = 0.0
+  virt_rate = 0.0
+  pid_i = 0.0
+  prev_seg = None
+
+  for i, (desired, v, sa, seg, lat_active) in enumerate(frames):
+    if prev_seg is not None and seg != prev_seg:
+      virt_angle, virt_rate, pid_i = sa, 0.0, 0.0
+    prev_seg = seg
+
+    active = lat_active and (v > ACI_MIN_SPEED_MS)
+    v_safe = max(v, 0.5)
+    # Convert desired angle → desired curvature → desired lat accel
+    des_curv = math.radians(desired / I5_STEER_RATIO) / I5_WHEELBASE
+    des_lat_accel = des_curv * v_safe * v_safe
+    # Measured curvature from virtual wheel angle
+    meas_curv = math.radians(virt_angle / I5_STEER_RATIO) / I5_WHEELBASE
+    meas_lat_accel = meas_curv * v_safe * v_safe
+    err = des_lat_accel - meas_lat_accel
+    # Friction (piecewise linear, deadzone 0.2 m/s²)
+    fric = I5_FRICTION * np.clip(err / 0.2, -1.0, 1.0)
+    ff = des_lat_accel + fric
+    if active:
+      kp_scale = float(np.interp(v, I5_KP_BP, I5_KP_VAL))
+      kp = 0.8 * kp_scale
+      ki = 0.15 * kp_scale
+      if not (v < 5):
+        pid_i = float(np.clip(pid_i + ki * err * 0.01, -2.5, 2.5))
+      u_lat_accel = ff + kp * err + pid_i
+      torque_cmd = float(np.clip(u_lat_accel / I5_LAT_ACCEL_FACTOR, -1.0, 1.0))
+      # Plant: first-order lag to steady-state angle
+      angle_ss_rad = torque_cmd * I5_LAT_ACCEL_FACTOR / (v_safe * v_safe) * I5_WHEELBASE * I5_STEER_RATIO
+      angle_ss = math.degrees(angle_ss_rad)
+      target_rate = (angle_ss - virt_angle) / I5_PLANT_TAU
+      virt_rate += (target_rate - I5_PLANT_DAMPING * virt_rate) * 0.01 / I5_PLANT_TAU
+      virt_rate = float(np.clip(virt_rate, -150.0, 150.0))
+      virt_angle += virt_rate * 0.01
+    else:
+      virt_angle = sa
+      virt_rate = 0.0
+      pid_i = 0.0
+
+    out_a[i] = virt_angle
+    out_d[i] = desired
+    out_v[i] = v
+    out_act[i] = active
+  return out_a, out_d, out_v, out_act
 
 
 # Korean speed regimes (km/h)
@@ -261,7 +336,7 @@ def print_regime_mae(results):
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--variants', default='OURS,TOYOTA,TESLA,PREVIOUS')
+  parser.add_argument('--variants', default='OURS,TOYOTA,TESLA,PREVIOUS,IONIQ_5')
   parser.add_argument('--detailed', action='store_true')
   args = parser.parse_args()
 
@@ -292,6 +367,10 @@ def main():
       m = metrics(a, d, vv, ac, tx_every=2)
     elif v == 'PREVIOUS':
       a, d, vv, ac = simulate_vm(frames, VM, PrevParamsShim)
+      m = metrics(a, d, vv, ac, tx_every=1)
+    elif v == 'IONIQ_5':
+      a, d, vv, ac = simulate_ioniq5_torque(frames, VM)
+      # tx_every=1 — torque controller samples every 10 ms (not gated by TX cadence)
       m = metrics(a, d, vv, ac, tx_every=1)
     else:
       print(f"Unknown variant: {v}")

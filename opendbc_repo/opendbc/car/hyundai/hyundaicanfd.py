@@ -39,7 +39,8 @@ class CanBus(CanBusBase):
 
 
 def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
-                             driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0):
+                             driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
+                             aci_active=None, aci_gain_ramp=1.0, in_passthrough=False):
   """
   Create LKAS_ALT message for Ioniq 6 N (CCNC + LKA_STEERING_ALT).
 
@@ -47,15 +48,27 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     Used for gradient ACI authority reduction (Toyota LTA TORQUE_WIND_DOWN style).
   blinker_on: reduce ACI authority during turn signals to avoid fighting lane changes.
   speed_blend: 0.0 below ~1 km/h, 1.0 above ~3 km/h, linear in between. Smooth
-    replacement for the old binary `aci_speed_ok` 3 km/h gate — prevents the
-    "tick" catch feel when the driver returns the wheel to center at creep.
+    replacement for the old binary `aci_speed_ok` 3 km/h gate.
+  aci_active: latched ACI engagement state with hysteresis (enter at authority>=0.3,
+    exit at authority<0.05) computed in carcontroller. Prevents binary flips of
+    LKAS_ANGLE_ACTIVE / LKA_ASSIST at the authority threshold — the root cause of
+    the residual low-speed "tick" felt when returning wheel to center. If None,
+    falls back to single-threshold computation (legacy).
+  aci_gain_ramp: 0.0→1.0 first-order ramp applied to `effective_aci_gain` when
+    aci_active transitions False→True, smoothing the ACIGain discontinuity.
+  in_passthrough: carcontroller already decided to forward camera values. If True,
+    emit the camera passthrough frame (identical to the legacy early-return, but
+    now driven by carcontroller's latched state rather than recomputed here).
   """
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # When inactive (cruise off) and driver isn't fighting: forward camera values
-    # unchanged so ADAS DRV can run stock LFA. No-SSH stock LFA data collection.
-    if not lat_active and driver_torque_blend > 0.9 and lkas_alt_cam_msg is not None:
+    # Pure camera passthrough — decided by carcontroller (hysteresis-stable).
+    # When inactive and driver isn't fighting, forward camera values unchanged
+    # so ADAS DRV runs stock LFA. Entry/exit of this mode is gated by the same
+    # hysteresis as aci_active so we don't ping-pong between passthrough and op
+    # at the authority boundary, which was one cause of the low-speed tick.
+    if in_passthrough and lkas_alt_cam_msg is not None:
       lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
       return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
@@ -67,10 +80,13 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     if blinker_on:
       authority *= 0.2  # large gain reduction during turn signals (natural lane change feel)
 
-    # aci_active drives the angle-control signaling to ADAS DRV. Stays True
-    # down to very low speed as long as lat_active and we still have some
-    # authority — this preserves continuity through parking-speed centering.
-    aci_active = lat_active and authority > 0.05
+    # aci_active drives the angle-control signaling to ADAS DRV. With hysteresis
+    # (passed in from carcontroller), LKAS_ANGLE_ACTIVE / LKA_ASSIST / LKAS_BYTE7
+    # signals stop binary-flipping at the authority boundary — the ADAS ECU sees
+    # a stable engagement state across small authority wiggles at creep speeds.
+    if aci_active is None:
+      # Legacy path: single threshold (no hysteresis). Kept for safety.
+      aci_active = lat_active and authority > 0.05
 
     # LKA_ICON: stay green (2) whenever openpilot is providing lateral control,
     # independent of driver-torque blending or low-speed state. This matches
@@ -84,8 +100,11 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # When active: scale ACIGain by authority instead of forced 1.0 — this
       # prevents the "openpilot fighting driver" feel and matches stock profile.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      # Use max(camera_gain, authority * 0.6) — camera's value if active, modest floor otherwise
-      effective_aci_gain = max(cam_aci_gain, authority * 0.6) if aci_active else cam_aci_gain
+      # Blend our op floor with camera value; then apply aci_gain_ramp so the
+      # first frames after re-engagement rise smoothly (no gain step) to the
+      # target. aci_gain_ramp = 0 just after engage, 1 after ~0.3 s.
+      op_gain_floor = authority * 0.6 * aci_gain_ramp
+      effective_aci_gain = max(cam_aci_gain, op_gain_floor) if aci_active else cam_aci_gain
 
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
@@ -128,7 +147,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_BYTE9_HIDDEN": 0x5,
         "LKAS_ANGLE_ACTIVE": 2 if aci_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": authority * 0.6 if aci_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": authority * 0.6 * aci_gain_ramp if aci_active else 0,
         "LKAS_BYTE7_BITS4_5": 3 if aci_active else 0,
         "LKAS_BYTE7_BIT7": 1 if aci_active else 0,
         "LKAS_BYTE13": 0x09 if aci_active else 0,
@@ -240,7 +259,13 @@ def create_lfahda_cluster(packer, CAN, enabled, lfa_icon):
 
 
 def create_ccnc(packer, CAN, openpilotLongitudinalControl, enabled, hud, leftBlinker, rightBlinker, msg_161, msg_162, msg_1b5,
-                is_metric, out, main_cruise_enabled, lfa_icon):
+                is_metric, out, main_cruise_enabled, lfa_icon, op_driving=False):
+  """op_driving: True when openpilot is actively providing lateral control. Used
+  to conditionally suppress hands-on / takeover / HDP deactivation alerts
+  generated by the ADAS camera ECU — these are correct during stock LFA but
+  spurious while openpilot is steering. When False, pass-through so stock UX
+  (e.g. real takeover warnings during manual driving) is preserved.
+  """
   for f in {"FAULT_LSS", "FAULT_HDA", "FAULT_DAS", "FAULT_LFA", "FAULT_DAW", "FAULT_ESS"}:
     msg_162[f] = 0
   if msg_161["ALERTS_2"] == 5:
@@ -251,6 +276,17 @@ def create_ccnc(packer, CAN, openpilotLongitudinalControl, enabled, hud, leftBli
     msg_161["ALERTS_5"] = 0
   if msg_161["SOUNDS_4"] == 2 and msg_161["LFA_ICON"] in (3, 0,):
     msg_161["SOUNDS_4"] = 0
+
+  # Mode-separated suppression — op only. HDP takeover prompt (ALERTS_3=11) and
+  # the hands-on variants (ALERTS_2 ∈ {1,2}, ALERTS_3=12) are camera-generated
+  # warnings that should NOT be shown while openpilot is actively steering
+  # (they cause the "takeover on gentle corner" anxiety). In stock LFA they're
+  # correct, so we leave them alone unless op_driving is True.
+  if op_driving:
+    if msg_161["ALERTS_2"] in (1, 2):
+      msg_161.update({"ALERTS_2": 0, "SOUNDS_2": 0})
+    if msg_161["ALERTS_3"] in (11, 12):
+      msg_161["ALERTS_3"] = 0
 
   LANE_CHANGE_SPEED_MIN = 8.9408
   anyBlinker = leftBlinker or rightBlinker

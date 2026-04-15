@@ -267,9 +267,16 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     alt = ""
     if self.CP.flags & HyundaiFlags.CCNC:
       alt = "_ALT"
-      if not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
+      # Capture CCNC camera messages for:
+      #   (a) non-HDA2 CCNC cars — original path, creates full CCNC frame via create_ccnc
+      #   (b) HDA2-ALT CCNC cars (Ioniq 6 N) — needed to rewrite and re-send
+      #       CCNC_0x161 so we can suppress hands-on / HDP takeover alerts
+      #       (ALERTS_2 ∈ {1,2}, ALERTS_3 ∈ {11,12}) while openpilot steers.
+      hda2_alt_ccnc = bool(self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+      if (not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING) or hda2_alt_ccnc:
         self.msg_161, self.msg_162, self.msg_1b5 = map(copy.copy, (cp_cam.vl["CCNC_0x161"], cp_cam.vl["CCNC_0x162"], cp_cam.vl["FR_CMR_03_50ms"]))
-        self.cruise_info = copy.copy((cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp).vl["SCC_CONTROL"])
+        if not self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
+          self.cruise_info = copy.copy((cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp).vl["SCC_CONTROL"])
     if self.CP.flags & HyundaiFlags.CANFD_ALT_DOORS_BLINKERS:
       ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, cp.vl["BLINKERS_ALT"]["LEFT_LAMP"],
                                                                         cp.vl["BLINKERS_ALT"]["RIGHT_LAMP"])
