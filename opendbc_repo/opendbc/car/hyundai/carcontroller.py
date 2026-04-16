@@ -396,25 +396,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.low_speed_cam_latched = False
     # Combined passthrough flag. Forwards camera bytes when:
     #   (a) driver has the wheel (passthrough_latched), OR
-    #   (b) creep speed < 2 km/h (low_speed_cam_latched), OR
-    #   (c) aci_active has not latched yet (authority < 0.30)
+    #   (b) low speed < 5 km/h (low_speed_cam_latched)
     #
-    # Gate (c) is critical: when aci_active is False, the LKAS_ALT
-    # active path produces an INCONSISTENT payload — the camera's own
-    # LKAS_BYTE13=0x09 (indicating active mode) is forwarded, but
-    # our LKAS_BYTE7 ACI bits remain 0x00 because aci_active=False.
-    # SCC detects this internal contradiction and faults (ACCEnable=3).
-    # Staying in passthrough until aci_active latches ensures ALL
-    # active-mode bytes flip simultaneously → consistent payload.
-    #
-    # This also naturally handles the low-speed ACC-in-parking-lot
-    # case: at < 3 km/h, speed_blend is low → authority < 0.30 →
-    # aci_active can't latch → passthrough. Camera's native LFA
-    # handles the steering. When speed rises, authority crosses 0.30,
-    # aci_active latches, and openpilot takes over with a fully
-    # consistent LKAS_ALT payload.
-    aci_not_ready = ccnc_lka_alt and not self.aci_active_latched
-    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched or aci_not_ready
+    # LKAS_ALT ACI bits now use lat_active directly (matching 77adfed
+    # which ran 40+ min on routes 28-2d). All binary activation bits
+    # flip simultaneously with lat_active → no intermediate state →
+    # no SCC byte-inconsistency fault. The aci_active hysteresis is
+    # retained for aci_gain_ramp smoothing but no longer gates binary
+    # bit selection in the LKAS_ALT payload.
+    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
 
     # First-order ramp of ACI gain on re-engagement (smooths the
     # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.

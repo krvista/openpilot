@@ -114,8 +114,9 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # authority floor (0.15) so MDPS still recognises openpilot as the
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      op_gain_floor = authority * 0.15 * aci_gain_ramp
-      effective_aci_gain = max(cam_aci_gain, op_gain_floor) if aci_active else cam_aci_gain
+      # Route 28 (77adfed) used 1.0 flat when lat_active — this worked
+      # for 40+ min drives. Restore that pattern.
+      effective_aci_gain = 1.0 if lat_active else cam_aci_gain
 
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
@@ -126,18 +127,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
-        "LKA_ASSIST":                1 if aci_active else lkas_alt_cam_msg["LKA_ASSIST"],
+        "LKA_ASSIST":                1 if lat_active else lkas_alt_cam_msg["LKA_ASSIST"],
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
         "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],
-        "LKAS_ANGLE_ACTIVE":         2 if aci_active else (1 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"]),
+        "LKAS_ANGLE_ACTIVE":         2 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        apply_angle,
         "ADAS_ACIAnglTqRedcGainVal": effective_aci_gain,
-        "LKAS_BYTE7_BITS4_5":        3 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
-        "LKAS_BYTE7_BIT7":           1 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
-        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if aci_active else 0),
+        "LKAS_BYTE7_BITS4_5":        3 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
+        "LKAS_BYTE7_BIT7":           1 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
+        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if lat_active else 0),
         "LKAS_BYTE28":               lkas_alt_cam_msg["LKAS_BYTE28"],
         "LKAS_BYTE29":               lkas_alt_cam_msg["LKAS_BYTE29"],
         "LKAS_BYTE30":               lkas_alt_cam_msg["LKAS_BYTE30"],
@@ -148,20 +149,20 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       lkas_values = {
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
-        "LKA_ICON": 2 if icon_green else 1,  # 2=green when openpilot steers
+        "LKA_ICON": 2 if icon_green else 1,
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
-        "LKA_ASSIST": 1 if aci_active else 0,
+        "LKA_ASSIST": 1 if lat_active else 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,
-        "LKAS_ANGLE_ACTIVE": 2 if aci_active else 1,
+        "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": authority * 0.15 * aci_gain_ramp if aci_active else 0,
-        "LKAS_BYTE7_BITS4_5": 3 if aci_active else 0,
-        "LKAS_BYTE7_BIT7": 1 if aci_active else 0,
-        "LKAS_BYTE13": 0x09 if aci_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": 1.0 if lat_active else 0,
+        "LKAS_BYTE7_BITS4_5": 3 if lat_active else 0,
+        "LKAS_BYTE7_BIT7": 1 if lat_active else 0,
+        "LKAS_BYTE13": 0x09 if lat_active else 0,
         "LKAS_BYTE28": 0x92,
         "LKAS_BYTE29": 0x01,
         "LKAS_BYTE30": 0xFF,
