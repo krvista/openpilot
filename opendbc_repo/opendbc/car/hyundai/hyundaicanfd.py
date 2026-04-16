@@ -65,18 +65,15 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # Pure camera passthrough — decided by carcontroller. Two triggers:
-    #   (a) driver-relaxed passthrough: op inactive + driver holding wheel
-    #   (b) low-speed creep passthrough: v < 2 km/h (emulate stock LFA's
-    #       passive behaviour at creep speed; MDPS idle, no op/MDPS fight)
-    # Either way we forward camera bytes verbatim so ADAS DRV runs stock LFA.
-    # LKA_ICON is overridden to green (2) when op is nominally engaged so
-    # the HUD still reflects op's lateral-guidance state to the driver.
-    if in_passthrough and lkas_alt_cam_msg is not None:
-      lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
-      if lat_active:
-        lkas_values["LKA_ICON"] = 2
-      return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
+    # IMPORTANT: NO separate passthrough code path. Route 28 (77adfed)
+    # proved that ALWAYS using the same dict-based frame construction
+    # works — 40+ min drives without fault. The raw-passthrough path
+    # (lines removed here) forwarded camera bytes verbatim via a
+    # DIFFERENT code path than the active path, producing structurally
+    # different frames. ADAS DRV detected the format switch at each
+    # passthrough→active transition and SCC faulted (ACCEnable=3).
+    # Routes 32-39 all confirmed this pattern. Now the same dict is
+    # used for BOTH passive (lat_active=False) and active (True).
 
     # Gradient ACI authority: blend based on driver torque, turn signal, and
     # speed. driver_torque_blend=1.0 means full ACI; 0.0 means none (driver
