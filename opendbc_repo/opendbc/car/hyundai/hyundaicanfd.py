@@ -111,29 +111,32 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # authority floor (0.15) so MDPS still recognises openpilot as the
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      # Low-speed comfort: scale ACIGain by speed_blend so MDPS is free
-      # at parking/creep speed. ACIGain=0 → MDPS ignores our angle
-      # command and does natural power assist (no catching/jerking).
-      # ACIGain=1.0 at road speed → MDPS follows our angle precisely.
-      # driver_torque_blend further reduces gain when driver steers,
-      # so unwinding the wheel at any speed feels natural.
+      # ALL ACI signals (binary bits + gain + angle) must be gated by
+      # the SAME condition to avoid internal inconsistency. Route 3a
+      # proved: setting binary ACI bits (byte 7/13) while ACIGain=0
+      # (byte 12) is just as fatal as the inverse — SCC detects ANY
+      # mismatch between "active mode" indicators and faults.
       #
-      # All ACI activation bits stay set (lat_active=True) regardless
-      # of gain — this keeps the frame FORMAT identical at all speeds,
-      # avoiding the structural transition that caused SCC faults.
-      # ADAS DRV stays in "active" mode but with zero torque authority
-      # at low speed = effectively transparent.
-      if lat_active:
-        effective_aci_gain = speed_blend * driver_torque_blend
-      else:
-        effective_aci_gain = cam_aci_gain
+      # Route 28 (77adfed) worked because lat_active gated everything
+      # AND ACIGain was always 1.0 when active. The speed_blend
+      # scaling (15→25 km/h) broke this by allowing ACIGain=0 with
+      # active bits set.
+      #
+      # Fix: compute a single boolean `steering_active` that gates
+      # ALL ACI signals. Active only when lat_active AND speed_blend
+      # provides meaningful authority (> 0.1). Below that threshold,
+      # EVERYTHING is passive = camera values. Above, EVERYTHING is
+      # active with full gain = no mismatch possible.
+      steering_active = lat_active and speed_blend > 0.1
 
-      # Angle command: at low speed where gain≈0, blend toward actual
-      # steering angle so there's no residual delta for MDPS to fight.
-      if lat_active and speed_blend < 1.0:
-        from opendbc.car.hyundai.carstate import CarState
-        actual_angle = lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
-        apply_angle = apply_angle * speed_blend + actual_angle * (1.0 - speed_blend)
+      # When active, ACIGain = 1.0 (Route 28 pattern). At parking
+      # speed, steering_active=False so gain=cam_val and all bits=cam_val.
+      effective_aci_gain = 1.0 if steering_active else cam_aci_gain
+
+      # Angle: when not steering_active, mirror camera's angle so
+      # ADAS DRV sees no delta from our side.
+      if not steering_active and lkas_alt_cam_msg is not None:
+        apply_angle = lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
 
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
@@ -144,18 +147,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
-        "LKA_ASSIST":                1 if lat_active else lkas_alt_cam_msg["LKA_ASSIST"],
+        "LKA_ASSIST":                1 if steering_active else lkas_alt_cam_msg["LKA_ASSIST"],
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
         "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],
-        "LKAS_ANGLE_ACTIVE":         2 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
+        "LKAS_ANGLE_ACTIVE":         2 if steering_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        apply_angle,
         "ADAS_ACIAnglTqRedcGainVal": effective_aci_gain,
-        "LKAS_BYTE7_BITS4_5":        3 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
-        "LKAS_BYTE7_BIT7":           1 if lat_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
-        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if lat_active else 0),
+        "LKAS_BYTE7_BITS4_5":        3 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
+        "LKAS_BYTE7_BIT7":           1 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
+        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if steering_active else 0),
         "LKAS_BYTE28":               lkas_alt_cam_msg["LKAS_BYTE28"],
         "LKAS_BYTE29":               lkas_alt_cam_msg["LKAS_BYTE29"],
         "LKAS_BYTE30":               lkas_alt_cam_msg["LKAS_BYTE30"],
@@ -163,23 +166,24 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       }
     else:
       # Fallback (startup before camera message received)
+      steering_active = lat_active and speed_blend > 0.1
       lkas_values = {
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
         "LKA_ICON": 2 if icon_green else 1,
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
-        "LKA_ASSIST": 1 if lat_active else 0,
+        "LKA_ASSIST": 1 if steering_active else 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,
-        "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+        "LKAS_ANGLE_ACTIVE": 2 if steering_active else 1,
         "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": 1.0 if lat_active else 0,
-        "LKAS_BYTE7_BITS4_5": 3 if lat_active else 0,
-        "LKAS_BYTE7_BIT7": 1 if lat_active else 0,
-        "LKAS_BYTE13": 0x09 if lat_active else 0,
+        "ADAS_ACIAnglTqRedcGainVal": 1.0 if steering_active else 0,
+        "LKAS_BYTE7_BITS4_5": 3 if steering_active else 0,
+        "LKAS_BYTE7_BIT7": 1 if steering_active else 0,
+        "LKAS_BYTE13": 0x09 if steering_active else 0,
         "LKAS_BYTE28": 0x92,
         "LKAS_BYTE29": 0x01,
         "LKAS_BYTE30": 0xFF,
