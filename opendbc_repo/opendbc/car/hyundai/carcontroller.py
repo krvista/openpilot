@@ -97,8 +97,8 @@ ACI_GAIN_OP_FLOOR = 0.15
 # the camera commands |Δ|≈0 and LKAS_ANGLE_ACTIVE=1 (MDPS idle), so the
 # driver gets no assist AND no resistance from op — the stock feel.
 # Hysteresis band: 1 km/h (enter 2, exit 3).
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 2.0 / 3.6   # ≈ 0.556 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 5.0 / 3.6   # ≈ 1.389 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 7.0 / 3.6   # ≈ 1.944 m/s
 
 
 class CameraTrustEstimator:
