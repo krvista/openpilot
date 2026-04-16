@@ -111,9 +111,29 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # authority floor (0.15) so MDPS still recognises openpilot as the
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      # Route 28 (77adfed) used 1.0 flat when lat_active — this worked
-      # for 40+ min drives. Restore that pattern.
-      effective_aci_gain = 1.0 if lat_active else cam_aci_gain
+      # Low-speed comfort: scale ACIGain by speed_blend so MDPS is free
+      # at parking/creep speed. ACIGain=0 → MDPS ignores our angle
+      # command and does natural power assist (no catching/jerking).
+      # ACIGain=1.0 at road speed → MDPS follows our angle precisely.
+      # driver_torque_blend further reduces gain when driver steers,
+      # so unwinding the wheel at any speed feels natural.
+      #
+      # All ACI activation bits stay set (lat_active=True) regardless
+      # of gain — this keeps the frame FORMAT identical at all speeds,
+      # avoiding the structural transition that caused SCC faults.
+      # ADAS DRV stays in "active" mode but with zero torque authority
+      # at low speed = effectively transparent.
+      if lat_active:
+        effective_aci_gain = speed_blend * driver_torque_blend
+      else:
+        effective_aci_gain = cam_aci_gain
+
+      # Angle command: at low speed where gain≈0, blend toward actual
+      # steering angle so there's no residual delta for MDPS to fight.
+      if lat_active and speed_blend < 1.0:
+        from opendbc.car.hyundai.carstate import CarState
+        actual_angle = lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
+        apply_angle = apply_angle * speed_blend + actual_angle * (1.0 - speed_blend)
 
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
