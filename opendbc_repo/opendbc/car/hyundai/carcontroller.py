@@ -201,6 +201,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # dual-publisher race — see Appendix H of the masterplan).
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS", "1") != "0"
     self.hod_bypass_counter = 0
+    self._acc_engage_frame = None  # tracks when ACC first engaged for stabilization delay
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -367,7 +368,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       authority *= 0.2
     ACI_ENTER = 0.30
     ACI_EXIT  = 0.05
-    if CC.latActive and not (ccnc_lka_alt and not CS.out.cruiseState.enabled):
+    if CC.latActive and not acc_not_ready:
       if authority >= ACI_ENTER:
         self.aci_active_latched = True
       elif authority < ACI_EXIT:
@@ -394,21 +395,35 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
     # Combined passthrough flag. Either reason (driver-relaxed OR creep
-    # speed OR factory ACC not engaged) forwards camera bytes.
+    # speed OR factory ACC not ready) forwards camera bytes.
     #
-    # Factory ACC gate (HDA2-ALT + CCNC only): when the user hasn't pressed
-    # ACC, the SCC ECU is not coordinating with ADAS DRV. If we inject
-    # active-steering LKAS_ALT bytes (LKA_ASSIST=1, LKAS_ANGLE_ACTIVE=2,
-    # BYTE7 ACI bits set) into that uncoordinated state, ADAS DRV
-    # accepts them but SCC detects the unexpected mode transition → SCC
-    # faults ACCEnable=3 → 6 cluster warnings + ADAS death. Fixed by
-    # forcing camera passthrough until factory ACC is engaged, so our
-    # active steering only reaches ADAS DRV while SCC is in a state
-    # that expects it. Empirically confirmed: routes 32/33 (2026-04-16)
-    # showed ACCEnable=3 fault exactly when LKAS_ALT transitioned to
-    # active-steering bytes while ACC was off.
-    acc_not_engaged = ccnc_lka_alt and not CS.out.cruiseState.enabled
-    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched or acc_not_engaged
+    # Factory ACC stabilization gate (HDA2-ALT + CCNC only):
+    # When ACC first engages, SCC begins coordinating with ADAS DRV.
+    # If we switch LKAS_ALT from camera-passthrough to active-steering
+    # in the very same frame, SCC detects the abrupt mode transition
+    # and faults (ACCEnable=3). Empirically confirmed on routes 32-35
+    # (2026-04-16): the fault occurs 0.02s after the FIRST active-
+    # steering frame, regardless of whether it coincides with ACC
+    # engage or precedes it.
+    #
+    # Fix: hold camera passthrough for ACC_STABILIZE_FRAMES after ACC
+    # engage, giving SCC time to complete its ADAS DRV handshake
+    # before we inject active-steering bits. During the hold window
+    # the driver still has factory LFA; after the window, openpilot's
+    # angle-control takes over smoothly.
+    ACC_STABILIZE_S = 3.0  # seconds to hold passthrough after ACC engage
+    ACC_STABILIZE_FRAMES = int(ACC_STABILIZE_S / DT_CTRL)  # 300 frames at 100 Hz
+    if ccnc_lka_alt:
+      if not CS.out.cruiseState.enabled:
+        self._acc_engage_frame = None
+      elif self._acc_engage_frame is None:
+        self._acc_engage_frame = self.frame
+    acc_not_ready = ccnc_lka_alt and (
+      not CS.out.cruiseState.enabled or
+      self._acc_engage_frame is None or
+      (self.frame - self._acc_engage_frame) < ACC_STABILIZE_FRAMES
+    )
+    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched or acc_not_ready
 
     # First-order ramp of ACI gain on re-engagement (smooths the
     # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
