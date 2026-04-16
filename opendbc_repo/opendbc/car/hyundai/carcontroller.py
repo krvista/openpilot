@@ -344,8 +344,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
     # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
     # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
-    ACI_SPEED_FULL_MS = 20.0 / 3.6  # full authority at/above 20 km/h (clear of parking)
-    ACI_SPEED_ZERO_MS = 7.0 / 3.6   # zero authority at/below 7 km/h (parking maneuvers)
+    # Data-driven thresholds from route 36 underground descent (B1→B6)
+    # and parking failure routes (35-39):
+    #   0-15 km/h:  parking maneuvers, full-lock steering (p95=385-400°),
+    #               heavy driver torques (700-990 Nm) — MDPS must be free
+    #   15-25 km/h: transition zone, parking exit (p95=162-243°)
+    #   25+ km/h:   road driving, smaller angles (p95<160°)
+    ACI_SPEED_FULL_MS = 25.0 / 3.6  # full authority at/above 25 km/h (clear of parking)
+    ACI_SPEED_ZERO_MS = 15.0 / 3.6  # zero authority at/below 15 km/h (full-lock maneuvering)
     speed_blend = float(np.clip((CS.out.vEgoRaw - ACI_SPEED_ZERO_MS) /
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Toyota LTA-style gradient driver override blending.
