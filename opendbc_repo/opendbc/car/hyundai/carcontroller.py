@@ -394,19 +394,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
-    # Combined passthrough flag. Either reason (driver-relaxed OR creep
-    # speed) forwards camera bytes.
+    # Combined passthrough flag. Forwards camera bytes when:
+    #   (a) driver has the wheel (passthrough_latched), OR
+    #   (b) creep speed < 2 km/h (low_speed_cam_latched), OR
+    #   (c) aci_active has not latched yet (authority < 0.30)
     #
-    # Note: ACC gating was tried (commits 79cf52c, cf38738) and REMOVED.
-    # Forcing passthrough until ACC engage meant openpilot's aci_active
-    # bits were False at the instant of transition while the camera's own
-    # active bits (LKAS_BYTE13=0x09) were already set → LKAS_ALT internal
-    # inconsistency → SCC detected the mismatch → ACCEnable=3 fault.
-    # The OLD working code (routes 28-2d, safetyParam=177) never gated on
-    # ACC and ran 40+ min drives without faults. The fault root cause was
-    # SCC_CONTROL dual-publisher (fixed in c31e6a3), not active steering
-    # timing. Restoring the original ungated behavior.
-    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
+    # Gate (c) is critical: when aci_active is False, the LKAS_ALT
+    # active path produces an INCONSISTENT payload — the camera's own
+    # LKAS_BYTE13=0x09 (indicating active mode) is forwarded, but
+    # our LKAS_BYTE7 ACI bits remain 0x00 because aci_active=False.
+    # SCC detects this internal contradiction and faults (ACCEnable=3).
+    # Staying in passthrough until aci_active latches ensures ALL
+    # active-mode bytes flip simultaneously → consistent payload.
+    #
+    # This also naturally handles the low-speed ACC-in-parking-lot
+    # case: at < 3 km/h, speed_blend is low → authority < 0.30 →
+    # aci_active can't latch → passthrough. Camera's native LFA
+    # handles the steering. When speed rises, authority crosses 0.30,
+    # aci_active latches, and openpilot takes over with a fully
+    # consistent LKAS_ALT payload.
+    aci_not_ready = ccnc_lka_alt and not self.aci_active_latched
+    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched or aci_not_ready
 
     # First-order ramp of ACI gain on re-engagement (smooths the
     # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
