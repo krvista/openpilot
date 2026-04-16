@@ -562,8 +562,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # cruise cancel
         if CC.cruiseControl.cancel:
           if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
-            can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.cruise_info))
-            self.last_button_frame = self.frame
+            # HDA2-ALT + CCNC: do NOT send create_acc_cancel (SCC_CONTROL
+            # 0x1A0 on E-CAN). On this platform the SCC ECU natively
+            # publishes SCC_CONTROL on bus 1; our TX creates a dual-publisher
+            # race that the SCC ECU detects as a fault → ACCEnable=3 →
+            # 6 cluster warnings + total ADAS shutdown. The driver cancels
+            # ACC via the physical steering-wheel button instead.
+            # Empirically confirmed: routes 32/33/34 (2026-04-16) all show
+            # ACCEnable→3 within 0.02s of the first SCC_CONTROL sendcan frame.
+            if not ccnc_lka_alt:
+              can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.cruise_info))
+              self.last_button_frame = self.frame
           else:
             for _ in range(20):
               can_sends.append(hyundaicanfd.create_buttons(self.packer, self.CP, self.CAN, CS.buttons_counter + 1, Buttons.CANCEL))
