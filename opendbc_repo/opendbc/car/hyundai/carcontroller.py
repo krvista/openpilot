@@ -368,7 +368,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       authority *= 0.2
     ACI_ENTER = 0.30
     ACI_EXIT  = 0.05
-    if CC.latActive and not acc_not_ready:
+    if CC.latActive:
       if authority >= ACI_ENTER:
         self.aci_active_latched = True
       elif authority < ACI_EXIT:
@@ -395,35 +395,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
     # Combined passthrough flag. Either reason (driver-relaxed OR creep
-    # speed OR factory ACC not ready) forwards camera bytes.
+    # speed) forwards camera bytes.
     #
-    # Factory ACC stabilization gate (HDA2-ALT + CCNC only):
-    # When ACC first engages, SCC begins coordinating with ADAS DRV.
-    # If we switch LKAS_ALT from camera-passthrough to active-steering
-    # in the very same frame, SCC detects the abrupt mode transition
-    # and faults (ACCEnable=3). Empirically confirmed on routes 32-35
-    # (2026-04-16): the fault occurs 0.02s after the FIRST active-
-    # steering frame, regardless of whether it coincides with ACC
-    # engage or precedes it.
-    #
-    # Fix: hold camera passthrough for ACC_STABILIZE_FRAMES after ACC
-    # engage, giving SCC time to complete its ADAS DRV handshake
-    # before we inject active-steering bits. During the hold window
-    # the driver still has factory LFA; after the window, openpilot's
-    # angle-control takes over smoothly.
-    ACC_STABILIZE_S = 3.0  # seconds to hold passthrough after ACC engage
-    ACC_STABILIZE_FRAMES = int(ACC_STABILIZE_S / DT_CTRL)  # 300 frames at 100 Hz
-    if ccnc_lka_alt:
-      if not CS.out.cruiseState.enabled:
-        self._acc_engage_frame = None
-      elif self._acc_engage_frame is None:
-        self._acc_engage_frame = self.frame
-    acc_not_ready = ccnc_lka_alt and (
-      not CS.out.cruiseState.enabled or
-      self._acc_engage_frame is None or
-      (self.frame - self._acc_engage_frame) < ACC_STABILIZE_FRAMES
-    )
-    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched or acc_not_ready
+    # Note: ACC gating was tried (commits 79cf52c, cf38738) and REMOVED.
+    # Forcing passthrough until ACC engage meant openpilot's aci_active
+    # bits were False at the instant of transition while the camera's own
+    # active bits (LKAS_BYTE13=0x09) were already set → LKAS_ALT internal
+    # inconsistency → SCC detected the mismatch → ACCEnable=3 fault.
+    # The OLD working code (routes 28-2d, safetyParam=177) never gated on
+    # ACC and ran 40+ min drives without faults. The fault root cause was
+    # SCC_CONTROL dual-publisher (fixed in c31e6a3), not active steering
+    # timing. Restoring the original ungated behavior.
+    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
 
     # First-order ramp of ACI gain on re-engagement (smooths the
     # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
