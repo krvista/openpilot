@@ -129,9 +129,16 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # active with full gain = no mismatch possible.
       steering_active = lat_active and speed_blend > 0.1
 
-      # When active, ACIGain = 1.0 (Route 28 pattern). At parking
-      # speed, steering_active=False so gain=cam_val and all bits=cam_val.
-      effective_aci_gain = 1.0 if steering_active else cam_aci_gain
+      # When active, ramp ACIGain with speed_blend (0.15 floor to avoid
+      # the zero-gain-with-active-bits fault from route 3a). This gives:
+      #   16 km/h: ACIGain ≈ 0.15 (gentle start, minimal MDPS following)
+      #   20 km/h: ACIGain ≈ 0.50 (moderate)
+      #   25+ km/h: ACIGain = 1.0  (full openpilot lateral)
+      # driver_torque_blend further reduces gain when driver steers.
+      if steering_active:
+        effective_aci_gain = max(speed_blend, 0.15) * driver_torque_blend
+      else:
+        effective_aci_gain = cam_aci_gain
 
       # Angle: when not steering_active, mirror camera's angle so
       # ADAS DRV sees no delta from our side.
