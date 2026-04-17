@@ -580,6 +580,18 @@ _HOD_GRIP_STRONG = bytes([
 def create_hod_bypass(bus: int, counter: int) -> tuple[int, bytes, int]:
   """Return a (addr, data, bus) CAN message that announces
   GRIP_STRONG on 0x208 with a correct Hyundai CAN FD CRC.
+
+  R3 — counter contract:
+    * Factory 0x208 uses a 7-bit counter in byte[2] bits 1..7; bit 0 is a
+      reserved / validity flag that is always 0 on captured frames
+      (verified across 4593 frames in tools/ioniq6n_verify_0x208_crc.py).
+    * Caller increments by 2 per TX frame: 0, 2, 4, ..., 254, 0, 2, ...
+      yielding 128 distinct counter values before wrap — larger than the
+      factory ECU's hands-off integration window (~3 s @ 10 Hz = 30
+      frames), so wrap-around cannot be mistaken for a stuck counter.
+    * We AND with 0xFE here defensively to guarantee the low bit stays 0
+      regardless of caller bugs (e.g. counter accidentally seeded from
+      CS.counter which may be odd).
   """
   buf = bytearray(_HOD_GRIP_STRONG)
   buf[2] = counter & 0xFE
