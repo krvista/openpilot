@@ -140,12 +140,24 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # when inactive) could briefly disagree with the camera's frame.
       effective_angle = apply_angle if steering_active else lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
 
+      # Masterplan Phase 3: suppress camera's takeover-request signals
+      # while op is actively steering. The stock LFA camera raises
+      # LKA_WARNING and FCA_SYSWARN whenever it loses confidence —
+      # including moderate corners (>10° → 36% dropout, >20° → 76%).
+      # The CCNC cluster reads these bits to drive the "take over
+      # immediately" audible + visual alert. When op is driving with
+      # its own model-based plan (3-10× better MAE than camera at every
+      # speed bucket), these camera warnings are false positives that
+      # destroy the driving experience. Suppress them.
+      lka_warning_out = 0 if steering_active else lkas_alt_cam_msg["LKA_WARNING"]
+      fca_syswarn_out = 0 if steering_active else lkas_alt_cam_msg["FCA_SYSWARN"]
+
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
         "LKA_AVAILABLE":             lkas_alt_cam_msg["LKA_AVAILABLE"],
-        "LKA_WARNING":               lkas_alt_cam_msg["LKA_WARNING"],
+        "LKA_WARNING":               lka_warning_out,
         "LKA_ICON":                  2 if icon_green else lkas_alt_cam_msg["LKA_ICON"],
-        "FCA_SYSWARN":               lkas_alt_cam_msg["FCA_SYSWARN"],
+        "FCA_SYSWARN":               fca_syswarn_out,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
