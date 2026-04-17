@@ -65,18 +65,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
-    # Pure camera passthrough — decided by carcontroller. Two triggers:
-    #   (a) driver-relaxed passthrough: op inactive + driver holding wheel
-    #   (b) low-speed creep passthrough: v < 2 km/h (emulate stock LFA's
-    #       passive behaviour at creep speed; MDPS idle, no op/MDPS fight)
-    # Either way we forward camera bytes verbatim so ADAS DRV runs stock LFA.
-    # LKA_ICON is overridden to green (2) when op is nominally engaged so
-    # the HUD still reflects op's lateral-guidance state to the driver.
-    if in_passthrough and lkas_alt_cam_msg is not None:
-      lkas_values = {key: lkas_alt_cam_msg[key] for key in lkas_alt_cam_msg if key not in ('CHECKSUM', 'COUNTER')}
-      if lat_active:
-        lkas_values["LKA_ICON"] = 2
-      return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
+    # IMPORTANT: no separate passthrough code path. Earlier builds had an
+    # early-return that emitted camera bytes verbatim (forwarding the
+    # camera frame when `in_passthrough=True`). It was removed because the
+    # two code paths produced *structurally different* LKAS_ALT frames —
+    # field ordering from camera passthrough vs. the dict-constructed
+    # active frame — and ADAS DRV flagged the format switch at each
+    # passthrough→active transition as a fault (observed on routes 3a /
+    # 32 / 34 on ccnc-port-prebuilt). Now the SAME dict is used for both
+    # active and passive frames; `in_passthrough` is still used upstream
+    # (carcontroller.py) to drive `rate_lat_active` in the rate limiter,
+    # but the emitted frame always goes through the dict construction
+    # below.
 
     # Gradient ACI authority: blend based on driver torque, turn signal, and
     # speed. driver_torque_blend=1.0 means full ACI; 0.0 means none (driver
@@ -93,6 +93,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     if aci_active is None:
       # Legacy path: single threshold (no hysteresis). Kept for safety.
       aci_active = lat_active and authority > 0.05
+
+    # SINGLE SOURCE OF TRUTH for "op is actively commanding steering".
+    # ALL ACI-related signals (binary activation bits + gain + angle) must
+    # be driven by the same boolean. Routes 3a/32/34 on ccnc-port-prebuilt
+    # proved that ANY mismatch between activation indicators and
+    # ADAS_ACIAnglTqRedcGainVal — e.g. LKAS_ANGLE_ACTIVE=1 while
+    # ACIGain=0 — triggers the SCC/ADAS fault detector and cascades to
+    # ACCEnable=3 + 6 cluster warnings + ADAS shutdown. The
+    # speed_blend > 0.1 guard forces full passthrough below ~1.3 km/h so
+    # the `aci_active` hysteresis can't produce a transient partial state
+    # during creep.
+    steering_active = bool(lat_active) and bool(aci_active) and speed_blend > 0.1
 
     # LKA_ICON: stay green (2) whenever openpilot is providing lateral control,
     # independent of driver-torque blending or low-speed state. This matches
@@ -114,8 +126,19 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # authority floor (0.15) so MDPS still recognises openpilot as the
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      op_gain_floor = authority * 0.15 * aci_gain_ramp
-      effective_aci_gain = max(cam_aci_gain, op_gain_floor) if aci_active else cam_aci_gain
+      # Effective gain: when steering, ramp with speed_blend (0.15 floor
+      # prevents the 1.0-snap tick at the ACI-engage edge); when passive,
+      # mirror camera's gain verbatim (0 in practice).
+      if steering_active:
+        effective_aci_gain = max(speed_blend * aci_gain_ramp, 0.15) * driver_torque_blend
+      else:
+        effective_aci_gain = cam_aci_gain
+
+      # Angle command: when not steering, mirror camera's advisory so ADAS
+      # DRV sees no delta from op's side. This closes the remaining window
+      # where `apply_angle` (set by the rate limiter to actual wheel angle
+      # when inactive) could briefly disagree with the camera's frame.
+      effective_angle = apply_angle if steering_active else lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
 
       lkas_values = {
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
@@ -126,42 +149,43 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
-        "LKA_ASSIST":                1 if aci_active else lkas_alt_cam_msg["LKA_ASSIST"],
+        "LKA_ASSIST":                1 if steering_active else lkas_alt_cam_msg["LKA_ASSIST"],
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
         "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],
-        "LKAS_ANGLE_ACTIVE":         2 if aci_active else (1 if lat_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"]),
+        "LKAS_ANGLE_ACTIVE":         2 if steering_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
-        "ADAS_StrAnglReqVal":        apply_angle,
+        "ADAS_StrAnglReqVal":        effective_angle,
         "ADAS_ACIAnglTqRedcGainVal": effective_aci_gain,
-        "LKAS_BYTE7_BITS4_5":        3 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
-        "LKAS_BYTE7_BIT7":           1 if aci_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
-        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if aci_active else 0),
+        "LKAS_BYTE7_BITS4_5":        3 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
+        "LKAS_BYTE7_BIT7":           1 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
+        "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if steering_active else 0),
         "LKAS_BYTE28":               lkas_alt_cam_msg["LKAS_BYTE28"],
         "LKAS_BYTE29":               lkas_alt_cam_msg["LKAS_BYTE29"],
         "LKAS_BYTE30":               lkas_alt_cam_msg["LKAS_BYTE30"],
         "LKAS_BYTE31":               lkas_alt_cam_msg["LKAS_BYTE31"],
       }
     else:
-      # Fallback (startup before camera message received)
+      # Fallback (startup before camera message received). Same unified
+      # gate — everything is either fully passive or fully active.
       lkas_values = {
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
         "LKA_ICON": 2 if icon_green else 1,  # 2=green when openpilot steers
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
-        "LKA_ASSIST": 1 if aci_active else 0,
+        "LKA_ASSIST": 1 if steering_active else 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,
-        "LKAS_ANGLE_ACTIVE": 2 if aci_active else 1,
-        "ADAS_StrAnglReqVal": apply_angle,
-        "ADAS_ACIAnglTqRedcGainVal": authority * 0.15 * aci_gain_ramp if aci_active else 0,
-        "LKAS_BYTE7_BITS4_5": 3 if aci_active else 0,
-        "LKAS_BYTE7_BIT7": 1 if aci_active else 0,
-        "LKAS_BYTE13": 0x09 if aci_active else 0,
+        "LKAS_ANGLE_ACTIVE": 2 if steering_active else 1,
+        "ADAS_StrAnglReqVal": apply_angle if steering_active else 0.0,
+        "ADAS_ACIAnglTqRedcGainVal": max(speed_blend * aci_gain_ramp, 0.15) * driver_torque_blend if steering_active else 0,
+        "LKAS_BYTE7_BITS4_5": 3 if steering_active else 0,
+        "LKAS_BYTE7_BIT7": 1 if steering_active else 0,
+        "LKAS_BYTE13": 0x09 if steering_active else 0,
         "LKAS_BYTE28": 0x92,
         "LKAS_BYTE29": 0x01,
         "LKAS_BYTE30": 0xFF,

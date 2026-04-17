@@ -613,3 +613,81 @@ The `HOD_BYPASS=1` experimental path exists specifically to address
 this surface-level issue without resurrecting the 0x161/0x162
 dual-publisher flicker.
 
+---
+
+## Appendix J: Route 30 regression + `steering_active` unification
+
+### Incident
+
+Route `00000030--7dbb61a1f5` (recorded 2026-04-15 on commit `cce6140`,
+which pre-dates `4d59c6a`) surfaced the canonical 0x161/0x162 canError
+pattern: `canError` × 243 + `locationdTemporaryError` × 243 across 5
+segments, caused by 4,827 TX frames each of 0x161/0x162 on bus 1.
+User report: "또 오류가 나네 증상은 동일해" (same symptoms as before).
+
+### Analysis
+
+Verified via direct sendcan decode (`tools/ioniq6n_route30_regression.py`):
+
+* **V1 violation** (0x161/0x162 on bus 1): 9,654 frames (4,827 + 4,827).
+  Exactly what `4d59c6a` removed. The fix was already committed on this
+  branch; the deployed build (`cce6140`) simply lacked it.
+* **V2 violation** (LKAS_ALT partial-ACI-state): 0 frames. The
+  secondary fault class (active bits without gain, or vice versa)
+  fixed later on `ccnc-port-prebuilt` was not triggered by route 30.
+
+### Fix (this session, commit `<TBD>`)
+
+Part A — no action needed for route 30 itself; the canError fix is
+already in the branch. User needs to deploy `de18690` + `DEV-ceee9b98`.
+
+Part B — **defensive port of the `steering_active` unification** from
+`ccnc-port-prebuilt` (`a3b863a` + `85be50e` + `012f4d8`) into
+`opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py`:
+
+* **Deleted** the passthrough early-return block. A separate code path
+  emitted camera bytes verbatim (different field ordering) than the
+  active path's dict-constructed frame; ADAS DRV detected the format
+  switch at each passthrough→active transition and faulted on routes
+  3a/32/34.
+* **Introduced** `steering_active = lat_active ∧ aci_active ∧ speed_blend > 0.1`
+  as the single source of truth for every ACI-related field:
+  `LKA_ASSIST`, `LKAS_ANGLE_ACTIVE`, `LKAS_BYTE7_BITS4_5`,
+  `LKAS_BYTE7_BIT7`, `LKAS_BYTE13`, `ADAS_ACIAnglTqRedcGainVal`,
+  `ADAS_StrAnglReqVal`.
+* **Preserved** the `speed_blend` ramp (1→3 km/h) and passthrough latch
+  thresholds (2/3 km/h) — the ccnc-port-prebuilt widening (15→25 km/h)
+  was rejected because our parking-mode-toggle simulator
+  (`tools/ioniq6n_parking_mode_toggle_sim.py`) already verified 17/17
+  scenarios safe at the tighter settings.
+* **Removed** the prior `LKAS_ANGLE_ACTIVE: 2 if aci_active else
+  (1 if lat_active else cam_msg["LKAS_ANGLE_ACTIVE"])` three-way
+  expression — its middle branch allowed `LKAS_ANGLE_ACTIVE=1` while
+  `ACIGain=0`, the exact partial-ACI-state that SCC/ADAS faults on.
+* **Gain formula** now `max(speed_blend · aci_gain_ramp, 0.15) ·
+  driver_torque_blend` when `steering_active`, else camera verbatim
+  (which is always 0). The 0.15 floor prevents the 1.0-snap tick at
+  ACI-engage boundaries.
+* **Angle command** mirrors the camera's `ADAS_StrAnglReqVal` when
+  passive (rather than whatever the rate limiter set
+  `apply_angle_last` to) so ADAS DRV sees zero delta from op during
+  passthrough.
+
+### Regression coverage
+
+* `tools/ioniq6n_route30_regression.py` — asserts V1/V2 invariants on
+  any supplied route. Route 30 itself fails V1 (expected — old build);
+  after deployment, user drives again and re-runs this tool: expect
+  `✅ PASS` on the new drivelog.
+* `tools/ioniq6n_parking_mode_toggle_sim.py` — unchanged coverage,
+  must continue to report 17/17 SAFE (verified after port).
+* Panda firmware unchanged (`DEV-ceee9b98-DEBUG`).
+
+### Engagement matrix impact
+
+None. `steering_active` is stricter than the old `aci_active` in one
+direction only (`speed_blend > 0.1`) — at speeds below ~1.3 km/h we
+now emit the camera's fields verbatim inside op's own LKAS_ALT frame
+instead of the prior single-threshold aci_active behavior. Who drives
+lateral / longitudinal (see table above) is unchanged.
+

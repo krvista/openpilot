@@ -381,16 +381,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # Low-speed camera passthrough: at creep speed, stock LFA stays
     # fully passive (cam |Δ|≈0, LKAS_ANGLE_ACTIVE=1, ACIGain=0 — MDPS
-    # idle). Emulate that by forwarding the camera's LKAS_ALT verbatim,
-    # even while op is nominally engaged. Driver has no assist AND no
-    # resistance at creep speed — identical to stock LFA feel. Hysteresis
-    # on vEgoRaw prevents stop-and-go flapping.
+    # idle). Emulate that by keeping `steering_active=False` in the
+    # LKAS_ALT packer (via the speed_blend > 0.1 gate), which mirrors
+    # the camera's fields verbatim in the op-emitted frame. Driver has
+    # no assist AND no resistance at creep speed — identical to stock
+    # LFA feel. Hysteresis on vEgoRaw prevents stop-and-go flapping.
     if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
       self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
-    # Combined passthrough flag. Either reason (driver-relaxed OR creep
-    # speed) forwards camera bytes.
+    # Combined passthrough latch — used below to force `rate_lat_active=False`
+    # in the rate limiter so `apply_angle_last` tracks the actual wheel
+    # while passive. The LKAS_ALT packer no longer takes a separate
+    # passthrough code path (was a source of frame-format-switch faults
+    # on routes 3a/32/34); instead it uses the unified `steering_active`
+    # gate which resolves to passive for the same conditions.
     in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
 
     # First-order ramp of ACI gain on re-engagement (smooths the
