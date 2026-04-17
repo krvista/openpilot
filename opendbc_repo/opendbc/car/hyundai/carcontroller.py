@@ -193,6 +193,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.camref_q_last = CAMREF_TRUST_Q_MAX
     # Low-speed camera passthrough latch (hysteresis, ENTER 2 km/h / EXIT 3 km/h).
     self.low_speed_cam_latched = False
+    # F1: Camera message staleness tracker. If the camera ECU stops
+    # sending LKAS_ALT on bus 2, lkas_alt_cam_msg becomes stale. After
+    # CAM_STALE_FRAMES frames without an update, force steering_active=False
+    # to avoid emitting an active frame with stale camera bytes.
+    self.cam_msg_last_frame = 0
+    self.cam_msg_last_content = None
     # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
     # var; otherwise dormant. See Appendix H of the masterplan.
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
@@ -336,12 +342,26 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # steering control: HDA2-ALT + CCNC angle-control platform path
     ccnc_lka_alt = is_ccnc_angle_platform(self.CP.flags)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
+    # F1: Camera staleness detection. Track whether the camera msg changed
+    # since last frame. If stale for > 25 frames (500ms at 50Hz), treat
+    # as camera dropout and force steering_active=False in the packer.
+    CAM_STALE_FRAMES = 25
+    cam_stale = False
+    if ccnc_lka_alt and lkas_alt_cam_msg is not None:
+      cam_content_id = id(lkas_alt_cam_msg)
+      if cam_content_id != self.cam_msg_last_content:
+        self.cam_msg_last_frame = self.frame
+        self.cam_msg_last_content = cam_content_id
+      if (self.frame - self.cam_msg_last_frame) > CAM_STALE_FRAMES:
+        cam_stale = True
     # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
     # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
     # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
     ACI_SPEED_FULL_MS = 3.0 / 3.6   # full authority at/above 3 km/h
     ACI_SPEED_ZERO_MS = 1.0 / 3.6   # zero authority at/below 1 km/h
-    speed_blend = float(np.clip((CS.out.vEgoRaw - ACI_SPEED_ZERO_MS) /
+    # F8: Guard against NaN/inf from wheel sensor glitch
+    v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
+    speed_blend = float(np.clip((v_ego_safe - ACI_SPEED_ZERO_MS) /
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Toyota LTA-style gradient driver override blending.
     DRIVER_TORQUE_DEADZONE = 30   # below this: no reduction (normal driving)
@@ -466,7 +486,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
       self.apply_angle_last = apply_std_steer_angle_limits(
-        desired_angle_deg, self.apply_angle_last, CS.out.vEgoRaw,
+        desired_angle_deg, self.apply_angle_last, v_ego_safe,
         float(CS.out.steeringAngleDeg), rate_lat_active, angle_limits,
       )
 
@@ -479,14 +499,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
                                                              speed_blend=speed_blend,
-                                                             aci_active=self.aci_active_latched,
+                                                             aci_active=self.aci_active_latched and not cam_stale,
                                                              aci_gain_ramp=self.aci_gain_ramp,
                                                              in_passthrough=in_passthrough))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
     # pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
-    if self.frame % 5 == 0 and lka_steering:
+    # F5: Skip suppress_lfa on early boot frames before CAM parser has
+    # received CAM_0x362 (lfa_block_msg would have uninitialized keys,
+    # causing a stale or zero COUNTER that panda/ADAS might reject).
+    if self.frame % 5 == 0 and lka_steering and getattr(CS, 'lfa_block_msg', None):
       suppress_lanes = not bool(self.CP.flags & HyundaiFlags.CCNC)
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT,
@@ -533,7 +556,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
       can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
 
-    if self.CP.openpilotLongitudinalControl:
+    # F3: HDA2-ALT + CCNC platform NEVER does openpilot longitudinal —
+    # factory SCC handles it. Guard against misconfig that would TX
+    # SCC_CONTROL (0x1A0) on E-CAN, colliding with the factory SCC ECU.
+    if self.CP.openpilotLongitudinalControl and not ccnc_lka_alt:
       if lka_steering:
         can_sends.extend(hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame))
       elif not ccnc_non_hda2:
@@ -549,8 +575,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # cruise cancel
         if CC.cruiseControl.cancel:
           if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
-            can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.cruise_info))
-            self.last_button_frame = self.frame
+            # F3 (cont.): HDA2-ALT + CCNC must NOT TX SCC_CONTROL (0x1A0)
+            # for ACC cancel — factory SCC natively publishes on bus 1, and
+            # our TX creates a dual-publisher race (ACCEnable=3 within 20ms).
+            # Driver cancels via the physical steering-wheel button instead.
+            if not ccnc_lka_alt:
+              can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.cruise_info))
+              self.last_button_frame = self.frame
           else:
             for _ in range(20):
               can_sends.append(hyundaicanfd.create_buttons(self.packer, self.CP, self.CAN, CS.buttons_counter + 1, Buttons.CANCEL))

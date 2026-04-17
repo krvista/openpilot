@@ -169,23 +169,31 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     else:
       # Fallback (startup before camera message received). Same unified
       # gate — everything is either fully passive or fully active.
+      # F13: Includes all fields that ADAS DRV may validate, even on boot.
+      # steering_active is forced False here (no camera means no blend),
+      # so every frame is fully passive = stock-compatible.
+      steering_active = False
       lkas_values = {
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
-        "LKA_ICON": 2 if icon_green else 1,  # 2=green when openpilot steers
+        "LKA_WARNING": 0,
+        "LKA_ICON": 2 if icon_green else 1,
+        "FCA_SYSWARN": 0,
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
-        "LKA_ASSIST": 1 if steering_active else 0,
+        "LFA_BUTTON": 0,
+        "LKA_ASSIST": 0,
         "DAMP_FACTOR": 0,
         "STEER_MODE": 0,
+        "NEW_SIGNAL_2": 0,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,
-        "LKAS_ANGLE_ACTIVE": 2 if steering_active else 1,
-        "ADAS_StrAnglReqVal": apply_angle if steering_active else 0.0,
-        "ADAS_ACIAnglTqRedcGainVal": max(speed_blend * aci_gain_ramp, 0.15) * driver_torque_blend if steering_active else 0,
-        "LKAS_BYTE7_BITS4_5": 3 if steering_active else 0,
-        "LKAS_BYTE7_BIT7": 1 if steering_active else 0,
-        "LKAS_BYTE13": 0x09 if steering_active else 0,
+        "LKAS_ANGLE_ACTIVE": 1,
+        "ADAS_StrAnglReqVal": 0.0,
+        "ADAS_ACIAnglTqRedcGainVal": 0,
+        "LKAS_BYTE7_BITS4_5": 0,
+        "LKAS_BYTE7_BIT7": 0,
+        "LKAS_BYTE13": 0,
         "LKAS_BYTE28": 0x92,
         "LKAS_BYTE29": 0x01,
         "LKAS_BYTE30": 0xFF,
