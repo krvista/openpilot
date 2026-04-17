@@ -57,19 +57,27 @@ class CarControllerParams:
   # 176-segment drivelog (1.03M frames, 44 min op + 79 min stock LFA) analysis
   # shows op model emits |Δdesired| p99 demands of 75–100°/s in the 30–50 km/h
   # buckets, exceeding the previous table's 35–44°/s ceiling — explaining the
-  # "S-curve too slow, crosses lane markings" subjective complaint. New mid-
-  # speed rates cover p95 demand with ~50% headroom while staying below the
-  # p99 noise floor (which would re-introduce oscillation).
-  #
-  # UP/DOWN asymmetry: DOWN is ~20% faster so the system yields quickly when
-  # returning toward neutral (driver override / lane departure recovery).
-  #
   # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
-  # Rates apply each 20 ms; carcontroller TXs LKAS_ALT every 2 frames (50 Hz).
+  # v1 speed-dependent rate table kept as fallback for non-CCNC CANFD angle
+  # cars (if any future variant exists). CCNC angle platform uses v2
+  # VM-based jerk/accel limits (see ANGLE_LIMITS_VM below).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
     ([0., 3., 7., 12., 18., 25., 30.], [0.6, 0.9, 1.3, 1.0, 0.6, 0.4, 0.25]),   # UP   (deg/20ms @ 50Hz)
     ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.2, 0.75, 0.55, 0.35]), # DOWN (deg/20ms @ 50Hz)
+  )
+
+  # Phase 4-A: VM-based jerk/accel limits for CCNC angle-control platform.
+  # Physics-based instead of lookup-table: at highway, jerk limit naturally
+  # tightens the angle rate (smoother than Tesla's 3.6 m/s³); at low speed,
+  # MAX_ANGLE_RATE caps the per-step change to prevent parking jerk.
+  ANGLE_LIMITS_VM: AngleSteeringLimits = AngleSteeringLimits(
+    176.7,
+    ([], []),  # v1 tables unused — VM computes per-step limits
+    ([], []),
+    MAX_LATERAL_ACCEL=3.3,   # m/s² — ISO 3.0 + moderate road roll
+    MAX_LATERAL_JERK=3.5,    # m/s³ — between Tesla (3.6) and Toyota (~2-3)
+    MAX_ANGLE_RATE=1.3,      # deg/20ms — caps low-speed per-step (= current peak at 25 km/h)
   )
 
   def __init__(self, CP):
@@ -88,6 +96,9 @@ class CarControllerParams:
       self.STEER_THRESHOLD = 250
       self.STEER_DELTA_UP = 2
       self.STEER_DELTA_DOWN = 3
+      if CP.flags & HyundaiFlags.CCNC:
+        self.STEER_STEP = 2  # 50 Hz TX on CCNC angle platform
+        self.ANGLE_LIMITS = CarControllerParams.ANGLE_LIMITS_VM
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
