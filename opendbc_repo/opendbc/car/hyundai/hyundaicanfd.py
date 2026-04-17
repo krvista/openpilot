@@ -577,16 +577,13 @@ _HOD_GRIP_STRONG = bytes([
 ])
 
 
-def create_hod_bypass(bus: int, counter: int) -> tuple[int, int, bytes, int]:
-  """Return a (addr, _timing_hint, data, bus) CAN message that announces
+def create_hod_bypass(bus: int, counter: int) -> tuple[int, bytes, int]:
+  """Return a (addr, data, bus) CAN message that announces
   GRIP_STRONG on 0x208 with a correct Hyundai CAN FD CRC.
-
-  counter is a running +2-per-emit sequence number (mod 256, low bit
-  always 0).
   """
   buf = bytearray(_HOD_GRIP_STRONG)
-  buf[2] = counter & 0xFE  # force bit 0 = 0 as observed in factory frames
+  buf[2] = counter & 0xFE
   crc = hkg_can_fd_checksum(HOD_ADDR, None, buf)
   buf[0] = crc & 0xFF
   buf[1] = (crc >> 8) & 0xFF
-  return HOD_ADDR, 0, bytes(buf), bus
+  return HOD_ADDR, bytes(buf), bus
