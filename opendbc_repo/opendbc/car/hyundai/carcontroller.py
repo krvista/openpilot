@@ -193,15 +193,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.camref_q_last = CAMREF_TRUST_Q_MAX
     # Low-speed camera passthrough latch (hysteresis, ENTER 2 km/h / EXIT 3 km/h).
     self.low_speed_cam_latched = False
-    # HOD (hands-on detection) bypass state. Default ON for the HDA2-ALT
-    # + CCNC angle-control platform: whenever openpilot is driving laterally
-    # (CC.latActive), we announce GRIP_STRONG on 0x208 so the factory
-    # hands-off supervisor never trips. Escape hatch: set HOD_BYPASS=0 in
-    # the launch environment to opt out (e.g. if CCNC flickers from the
-    # dual-publisher race — see Appendix H of the masterplan).
+    # F1: Camera message staleness tracker. If the camera ECU stops
+    # sending LKAS_ALT on bus 2, lkas_alt_cam_msg becomes stale. After
+    # CAM_STALE_FRAMES frames without an update, force steering_active=False
+    # to avoid emitting an active frame with stale camera bytes.
+    self.cam_msg_last_frame = 0
+    self.cam_msg_last_content = None
+    # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
+    # var; otherwise dormant. See Appendix H of the masterplan.
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS", "1") != "0"
     self.hod_bypass_counter = 0
-    self._acc_engage_frame = None  # tracks when ACC first engaged for stabilization delay
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -341,18 +342,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # steering control: HDA2-ALT + CCNC angle-control platform path
     ccnc_lka_alt = is_ccnc_angle_platform(self.CP.flags)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
-    # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
-    # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
-    # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
-    # Data-driven thresholds from route 36 underground descent (B1→B6)
-    # and parking failure routes (35-39):
-    #   0-15 km/h:  parking maneuvers, full-lock steering (p95=385-400°),
-    #               heavy driver torques (700-990 Nm) — MDPS must be free
-    #   15-25 km/h: transition zone, parking exit (p95=162-243°)
-    #   25+ km/h:   road driving, smaller angles (p95<160°)
-    ACI_SPEED_FULL_MS = 25.0 / 3.6  # full authority at/above 25 km/h (clear of parking)
-    ACI_SPEED_ZERO_MS = 15.0 / 3.6  # zero authority at/below 15 km/h (full-lock maneuvering)
-    speed_blend = float(np.clip((CS.out.vEgoRaw - ACI_SPEED_ZERO_MS) /
+    # F1: Camera staleness detection. Track whether the camera msg changed
+    # since last frame. If stale for > 25 frames (500ms at 50Hz), treat
+    # as camera dropout and force steering_active=False in the packer.
+    CAM_STALE_FRAMES = 25
+    cam_stale = False
+    if ccnc_lka_alt and lkas_alt_cam_msg is not None:
+      cam_content_id = id(lkas_alt_cam_msg)
+      if cam_content_id != self.cam_msg_last_content:
+        self.cam_msg_last_frame = self.frame
+        self.cam_msg_last_content = cam_content_id
+      if (self.frame - self.cam_msg_last_frame) > CAM_STALE_FRAMES:
+        cam_stale = True
+    # Smooth low-speed authority ramp. Data-driven thresholds from route 36
+    # underground descent and parking failure routes (35-39):
+    #   0-15 km/h:  full-lock steering, heavy driver torque — MDPS must be free
+    #   15-25 km/h: parking exit transition zone
+    #   25+ km/h:   road driving, smaller angles
+    ACI_SPEED_FULL_MS = 25.0 / 3.6  # full authority at/above 25 km/h
+    ACI_SPEED_ZERO_MS = 15.0 / 3.6  # zero authority at/below 15 km/h
+    # F8: Guard against NaN/inf from wheel sensor glitch
+    v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
+    speed_blend = float(np.clip((v_ego_safe - ACI_SPEED_ZERO_MS) /
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Toyota LTA-style gradient driver override blending.
     DRIVER_TORQUE_DEADZONE = 30   # below this: no reduction (normal driving)
@@ -392,24 +403,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # Low-speed camera passthrough: at creep speed, stock LFA stays
     # fully passive (cam |Δ|≈0, LKAS_ANGLE_ACTIVE=1, ACIGain=0 — MDPS
-    # idle). Emulate that by forwarding the camera's LKAS_ALT verbatim,
-    # even while op is nominally engaged. Driver has no assist AND no
-    # resistance at creep speed — identical to stock LFA feel. Hysteresis
-    # on vEgoRaw prevents stop-and-go flapping.
+    # idle). Emulate that by keeping `steering_active=False` in the
+    # LKAS_ALT packer (via the speed_blend > 0.1 gate), which mirrors
+    # the camera's fields verbatim in the op-emitted frame. Driver has
+    # no assist AND no resistance at creep speed — identical to stock
+    # LFA feel. Hysteresis on vEgoRaw prevents stop-and-go flapping.
     if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
       self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
-    # Combined passthrough flag. Forwards camera bytes when:
-    #   (a) driver has the wheel (passthrough_latched), OR
-    #   (b) low speed < 5 km/h (low_speed_cam_latched)
-    #
-    # LKAS_ALT ACI bits now use lat_active directly (matching 77adfed
-    # which ran 40+ min on routes 28-2d). All binary activation bits
-    # flip simultaneously with lat_active → no intermediate state →
-    # no SCC byte-inconsistency fault. The aci_active hysteresis is
-    # retained for aci_gain_ramp smoothing but no longer gates binary
-    # bit selection in the LKAS_ALT payload.
+    # Combined passthrough latch — used below to force `rate_lat_active=False`
+    # in the rate limiter so `apply_angle_last` tracks the actual wheel
+    # while passive. The LKAS_ALT packer no longer takes a separate
+    # passthrough code path (was a source of frame-format-switch faults
+    # on routes 3a/32/34); instead it uses the unified `steering_active`
+    # gate which resolves to passive for the same conditions.
     in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
 
     # First-order ramp of ACI gain on re-engagement (smooths the
@@ -480,7 +488,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
       self.apply_angle_last = apply_std_steer_angle_limits(
-        desired_angle_deg, self.apply_angle_last, CS.out.vEgoRaw,
+        desired_angle_deg, self.apply_angle_last, v_ego_safe,
         float(CS.out.steeringAngleDeg), rate_lat_active, angle_limits,
       )
 
@@ -493,14 +501,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
                                                              speed_blend=speed_blend,
-                                                             aci_active=self.aci_active_latched,
+                                                             aci_active=self.aci_active_latched and not cam_stale,
                                                              aci_gain_ramp=self.aci_gain_ramp,
                                                              in_passthrough=in_passthrough))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
     # pass through camera's lane lines so ADAS DRV accepts LKAS_ALT
-    if self.frame % 5 == 0 and lka_steering:
+    # F5: Skip suppress_lfa on early boot frames before CAM parser has
+    # received CAM_0x362 (lfa_block_msg would have uninitialized keys,
+    # causing a stale or zero COUNTER that panda/ADAS might reject).
+    if self.frame % 5 == 0 and lka_steering and getattr(CS, 'lfa_block_msg', None):
       suppress_lanes = not bool(self.CP.flags & HyundaiFlags.CCNC)
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT,
@@ -531,15 +542,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
 
-    # HOD (hands-on detection) bypass — default ON on the HDA2-ALT +
-    # CCNC angle-control platform (Ioniq 6 N today). TX 0x208 on E-CAN
-    # at 10 Hz matching factory rate with byte 10=4 (GRIP_STRONG) and
-    # correct CRC whenever openpilot is driving laterally (CC.latActive).
-    # Factory publisher is still active on bus 1 (native, cannot be
-    # relay-blocked) — we rely on the hands-off timer being the single
-    # consumer and "latest frame wins" semantics to keep the timer
-    # continuously reset. If CCNC flickers like 0x161 did, export
-    # HOD_BYPASS=0 in the launch environment to disable.
+    # HOD (hands-on detection) bypass — experimental, opt-in via
+    # HOD_BYPASS=1 env var. Only on the HDA2-ALT + CCNC angle-control
+    # platform (Ioniq 6 N today). TX 0x208 on E-CAN at 10 Hz matching
+    # factory rate with byte 10=4 (GRIP_STRONG) and correct CRC. Factory
+    # publisher is still active on bus 1 (native, cannot be relay-blocked)
+    # — we rely on the hands-off timer being the single consumer and
+    # "latest frame wins" semantics to keep the timer continuously reset.
+    # If CCNC flickers like 0x161 did, disable this flag and revisit.
     if self.hod_bypass_enabled and ccnc_lka_alt and self.frame % 10 == 0 and CC.latActive:
       can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
       self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
@@ -548,7 +558,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
       can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
 
-    if self.CP.openpilotLongitudinalControl:
+    # F3: HDA2-ALT + CCNC platform NEVER does openpilot longitudinal —
+    # factory SCC handles it. Guard against misconfig that would TX
+    # SCC_CONTROL (0x1A0) on E-CAN, colliding with the factory SCC ECU.
+    if self.CP.openpilotLongitudinalControl and not ccnc_lka_alt:
       if lka_steering:
         can_sends.extend(hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame))
       elif not ccnc_non_hda2:
@@ -564,14 +577,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # cruise cancel
         if CC.cruiseControl.cancel:
           if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
-            # HDA2-ALT + CCNC: do NOT send create_acc_cancel (SCC_CONTROL
-            # 0x1A0 on E-CAN). On this platform the SCC ECU natively
-            # publishes SCC_CONTROL on bus 1; our TX creates a dual-publisher
-            # race that the SCC ECU detects as a fault → ACCEnable=3 →
-            # 6 cluster warnings + total ADAS shutdown. The driver cancels
-            # ACC via the physical steering-wheel button instead.
-            # Empirically confirmed: routes 32/33/34 (2026-04-16) all show
-            # ACCEnable→3 within 0.02s of the first SCC_CONTROL sendcan frame.
+            # F3 (cont.): HDA2-ALT + CCNC must NOT TX SCC_CONTROL (0x1A0)
+            # for ACC cancel — factory SCC natively publishes on bus 1, and
+            # our TX creates a dual-publisher race (ACCEnable=3 within 20ms).
+            # Driver cancels via the physical steering-wheel button instead.
             if not ccnc_lka_alt:
               can_sends.append(hyundaicanfd.create_acc_cancel(self.packer, self.CP, self.CAN, CS.cruise_info))
               self.last_button_frame = self.frame
