@@ -194,11 +194,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Low-speed camera passthrough latch (hysteresis, ENTER 2 km/h / EXIT 3 km/h).
     self.low_speed_cam_latched = False
     # F1: Camera message staleness tracker. If the camera ECU stops
-    # sending LKAS_ALT on bus 2, lkas_alt_cam_msg becomes stale. After
-    # CAM_STALE_FRAMES frames without an update, force steering_active=False
-    # to avoid emitting an active frame with stale camera bytes.
+    # sending LKAS_ALT on bus 2, the dict still arrives (CANParser caches)
+    # but the COUNTER signal stops incrementing. After CAM_STALE_FRAMES
+    # frames without COUNTER change, force steering_active=False so we
+    # never emit an active frame with stale camera bytes.
+    # (R4) Previous revision used id() of the dict, but carstate does
+    # copy.copy() every frame → id() always changed → staleness never
+    # detected. Tracking COUNTER fixes that.
     self.cam_msg_last_frame = 0
-    self.cam_msg_last_content = None
+    self.cam_msg_last_counter = -1
     # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
     # var; otherwise dormant. See Appendix H of the masterplan.
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS", "1") != "0"
@@ -209,6 +213,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     LeadDataCarController.update(self, CC_SP)
     MadsCarController.update(self, self.CP, CC, CC_SP, self.frame)
     if self.frame % 5 == 0:
+      # R5: On the HDA2-ALT + CCNC angle-control platform we never TX
+      # SCC_CONTROL (gated out by F3 at line ~576), so the tuning state
+      # produced here is only read by new_actuators.accel as a telemetry
+      # report. Keeping the 5-frame cadence is intentional — it matches
+      # non-CCNC Hyundai cars and avoids branching the call site.
       LongitudinalController.update(self, CC, CS)
 
     actuators = CC.actuators
@@ -263,7 +272,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             stopping, hud_control, actuators, CS, CC))
 
     # Intelligent Cruise Button Management
-    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CS, CC_SP, self.packer, self.frame, self.last_button_frame, self.CAN))
+    # R2: On the HDA2-ALT + CCNC angle-control platform the factory SCC
+    # owns longitudinal; injecting resume/set buttons from openpilot at
+    # MADS-engage time creates a race against the driver's own ACC button
+    # press on the same MCU (CANFD_ALT_BUTTONS path). I6N already has
+    # ALT_BUTTONS so the current ICBM is a no-op, but gating here makes
+    # the safety contract explicit and future-proofs any new CCNC trim.
+    if not is_ccnc_angle_platform(self.CP.flags):
+      can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CS, CC_SP, self.packer, self.frame, self.last_button_frame, self.CAN))
 
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
@@ -342,16 +358,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # steering control: HDA2-ALT + CCNC angle-control platform path
     ccnc_lka_alt = is_ccnc_angle_platform(self.CP.flags)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
-    # F1: Camera staleness detection. Track whether the camera msg changed
-    # since last frame. If stale for > 25 frames (500ms at 50Hz), treat
-    # as camera dropout and force steering_active=False in the packer.
+    # F1 / R4: Camera staleness detection via LKAS_ALT COUNTER field.
+    # carstate does copy.copy(cp_cam.vl["LKAS_ALT"]) every frame, so the
+    # dict identity cannot indicate freshness — only the camera-driven
+    # COUNTER does. If COUNTER doesn't change for CAM_STALE_FRAMES (≥ 25
+    # frames ≈ 500 ms at 50 Hz), treat camera as dropped and force
+    # steering_active=False in the packer.
     CAM_STALE_FRAMES = 25
     cam_stale = False
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
-      cam_content_id = id(lkas_alt_cam_msg)
-      if cam_content_id != self.cam_msg_last_content:
+      cam_counter = int(lkas_alt_cam_msg.get("COUNTER", -1))
+      if cam_counter != self.cam_msg_last_counter:
         self.cam_msg_last_frame = self.frame
-        self.cam_msg_last_content = cam_content_id
+        self.cam_msg_last_counter = cam_counter
       if (self.frame - self.cam_msg_last_frame) > CAM_STALE_FRAMES:
         cam_stale = True
     # Smooth low-speed authority ramp. Data-driven thresholds from route 36
@@ -361,14 +380,24 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     #   25+ km/h:   road driving, smaller angles
     ACI_SPEED_FULL_MS = 25.0 / 3.6  # full authority at/above 25 km/h
     ACI_SPEED_ZERO_MS = 15.0 / 3.6  # zero authority at/below 15 km/h
-    # F8: Guard against NaN/inf from wheel sensor glitch
+    # F8 / R1: Guard against NaN/inf from wheel sensors and planner.
+    # vEgoRaw: MDPS/wheel-speed glitch. steeringAngleDeg / steeringTorque:
+    # STEERING_SENSORS CAN frame can go all-1s during a bus error or
+    # harness fault. actuators.steeringAngleDeg: LatControlAngle can emit
+    # NaN if the planner ever divides by zero. Any single NaN reaching
+    # np.clip or float() downstream propagates and crashes the rate
+    # limiter / trust estimator — so we clamp at the boundary.
     v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
+    steer_angle_safe = float(CS.out.steeringAngleDeg) if np.isfinite(CS.out.steeringAngleDeg) else 0.0
+    steer_torque_safe = float(CS.out.steeringTorque) if np.isfinite(CS.out.steeringTorque) else 0.0
+    op_curv_raw = float(CC.actuators.steeringAngleDeg)
+    op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
     speed_blend = float(np.clip((v_ego_safe - ACI_SPEED_ZERO_MS) /
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Toyota LTA-style gradient driver override blending.
     DRIVER_TORQUE_DEADZONE = 30   # below this: no reduction (normal driving)
     DRIVER_TORQUE_FULL_OVERRIDE = 150  # at/above this: fully surrendered
-    driver_abs_torque = abs(CS.out.steeringTorque)
+    driver_abs_torque = abs(steer_torque_safe)
     override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
                                      (DRIVER_TORQUE_FULL_OVERRIDE - DRIVER_TORQUE_DEADZONE), 0.0, 1.0))
     driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
@@ -437,7 +466,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       # Feedforward from LatControlAngle (includes live steerRatio,
       # angleOffsetDeg, roll compensation — r=0.985 without additional PID).
-      op_curv_angle_deg = float(CC.actuators.steeringAngleDeg)
+      # R1: op_curv_safe already NaN-guarded above.
+      op_curv_angle_deg = op_curv_safe
 
       # ── Stage 4: camera-referenced feedforward blend ──
       # Stage 0 re-analysis showed the camera's ADAS_StrAnglReqVal has MAE
@@ -455,11 +485,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # driver torque gate so override frames don't poison the RMSE.
         cam_driving = (not CC.latActive) and (driver_torque_blend > 0.5)
         self.camref_q_last = self.camera_trust.update(
-          cam_angle_deg, float(CS.out.steeringAngleDeg), cam_driving)
+          cam_angle_deg, steer_angle_safe, cam_driving)
 
       desired_angle_deg = op_curv_angle_deg
       if cam_angle_deg is not None and CC.latActive and self.aci_active_latched:
-        alpha_base = float(np.interp(CS.out.vEgoRaw, CAMREF_ALPHA_BP, CAMREF_ALPHA_V))
+        alpha_base = float(np.interp(v_ego_safe, CAMREF_ALPHA_BP, CAMREF_ALPHA_V))
         alpha_eff = alpha_base * self.camref_q_last
         # Nav-gate: when planner disagrees with camera by > NAV_DISAGREE_DEG,
         # clamp α so lane-change / obstacle-avoidance maneuvers aren't
@@ -475,7 +505,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # position as driver torque increases (Toyota LTA TORQUE_WIND_DOWN style).
       if override_factor > 0:
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
-                            override_factor * float(CS.out.steeringAngleDeg)
+                            override_factor * steer_angle_safe
 
       # When ACI is NOT latched (passthrough / driver taking over), force
       # `lat_active=False` into the rate limiter so it returns the actual
@@ -489,7 +519,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       self.apply_angle_last = apply_std_steer_angle_limits(
         desired_angle_deg, self.apply_angle_last, v_ego_safe,
-        float(CS.out.steeringAngleDeg), rate_lat_active, angle_limits,
+        steer_angle_safe, rate_lat_active, angle_limits,
       )
 
     # Steering message TX: 50 Hz on the HDA2-ALT + CCNC angle-control
