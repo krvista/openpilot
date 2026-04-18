@@ -2,12 +2,13 @@ import os
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
+from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR
 from opendbc.car.interfaces import CarControllerBase
+from opendbc.car.vehicle_model import VehicleModel
 
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
 from opendbc.sunnypilot.car.hyundai.icbm import IntelligentCruiseButtonManagementInterface
@@ -38,104 +39,27 @@ def is_ccnc_angle_platform(flags):
   return bool(flags & HyundaiFlags.CCNC) and bool(flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
 
-# ── Masterplan Phase 1: op-primary, camera-secondary blending ──
-# Data-driven α profile from /home/user/openpilot/analyze_lkas_alt.py
-# across 1.22M frames / 380 segments on an Ioniq 6 N:
-#
-#   Speed (km/h)  Cam MAE   Op MAE   Cam dropout   → α recommendation
-#   0-5           13.27°    0.30°    37.5%           0.00 (camera unusable)
-#   5-15          54.66°    5.34°    45.0%           0.00 (camera free-wheels)
-#   15-30         6.33°     1.68°    26.3%           0.15 (low trust)
-#   30-50         0.74°     0.87°    10.9%           0.30 (camera helps smooth)
-#   50-80         0.47°     0.53°    9.5%            0.40 (peak trust zone)
-#   80+           0.31°     0.31°    5.3%            0.30 (op and cam converge)
-#
-# Old profile had α=0.95 below 15 km/h — blending in a source with 54°
-# MAE and 45% dropout, which is the direct cause of:
-#   (a) "take over immediately" false alerts on moderate corners, and
-#   (b) low-speed steering twitches near stops.
-#
-# New policy: op's own curvature-derived plan is the PRIMARY source;
-# camera is only a minor refinement at highway speeds with small angles.
-# At 80 km/h cruise on a gentle bend, camera MAE is 0.47° vs op 0.53° —
-# indistinguishable, so α=0.40 costs nothing and gains smoothing from
-# stock-LFA's internal low-pass.
-CAMREF_ALPHA_BP = [4.17, 8.33, 13.89, 22.22, 30.56]  # m/s: 15, 30, 50, 80, 110 km/h
-CAMREF_ALPHA_V  = [0.00, 0.15,  0.30,  0.40,  0.30]
-
-# Angle-magnitude gate. Camera dropout rises sharply with commanded
-# angle magnitude (13% at |angle|<5°, but 76% at |angle|>20°). When op
-# is driving a moderate corner, the camera's "I give up" frames would
-# otherwise pollute the blend with near-zero advisory angles.
-#   |op angle| ≤ 5° : full α
-#   |op angle| 5-10°: taper to 30%
-#   |op angle| >10° : α=0 — op commands alone
-CAMREF_ANGLE_GATE_BP = [5.0, 10.0, 15.0]
-CAMREF_ANGLE_GATE_V  = [1.0,  0.3,  0.0]
-
-# nav-disagreement gate: clamp α when camera and planner visibly disagree
-# (|cam_angle - op_curv_angle| > NAV_DISAGREE_DEG), so navigation maneuvers
-# (lane change, obstacle avoidance) aren't overridden by the camera.
-CAMREF_NAV_DISAGREE_DEG = 3.0
-CAMREF_NAV_ALPHA_CAP    = 0.30
-
-# Online camera-trust estimator parameters
-CAMREF_TRUST_WINDOW_S = 30.0    # rolling RMSE window
-CAMREF_TRUST_RMSE_REF = 1.5     # deg — above this, q collapses toward Q_MIN
-CAMREF_TRUST_Q_MIN    = 0.20
-CAMREF_TRUST_Q_MAX    = 1.00
-
-# Stage 2b: ACIGain floor when op is actively steering. The camera itself
-# commands ADAS_ACIAnglTqRedcGainVal = 0.000 at all times (DBC-decoded on
-# 1.24M frames), so "camera-mirrored" in the old code always collapsed to
-# `authority * 0.6` = op-forced 0.6-1.0 gain. That kept MDPS in a more
-# authoritative (less assistive) state than stock LFA ever does and is a
-# plausible contributor to the low-speed tick. Drop to a small floor so
-# MDPS still recognises us as the source of truth but can do its natural
-# smoothing on our angle command, matching stock LFA behavior.
+# ACIGain floor when op is actively steering.
 ACI_GAIN_OP_FLOOR = 0.15
 
-# Low-speed camera passthrough latch. Below LOW_SPEED_PASSTHROUGH_ENTER_MS
-# we forward the camera's LKAS_ALT verbatim regardless of op engagement;
-# exit at LOW_SPEED_PASSTHROUGH_EXIT_MS so stop-and-go traffic doesn't
-# flap the latch. This matches stock LFA's creep-speed behaviour where
-# the camera commands |Δ|≈0 and LKAS_ANGLE_ACTIVE=1 (MDPS idle), so the
-# driver gets no assist AND no resistance from op — the stock feel.
-# Hysteresis band: 1 km/h (enter 2, exit 3).
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 5.0 / 3.6   # ≈ 1.389 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 7.0 / 3.6   # ≈ 1.944 m/s
+# Low-speed camera passthrough latch (hysteresis 2/3 km/h).
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 2.0 / 3.6   # ≈ 0.556 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 
+# Phase 4-B: low-speed LPF on desired angle before rate limiter.
+# Suppresses planner noise that the MDPS 4°/s quantized sensor amplifies
+# into perceivable jerk. Ford-inspired exponential smoothing with
+# speed-dependent tau: max at standstill, fades to 0 at 15 km/h.
+LOWSPEED_LPF_TAU_BP = [0.0, 4.17]   # m/s: 0, 15 km/h
+LOWSPEED_LPF_TAU_V  = [0.16, 0.0]   # seconds: 160ms at 0, 0 at 15 km/h
+LPF_DT = DT_CTRL * 2                # 20 ms (50 Hz TX cadence)
 
-class CameraTrustEstimator:
-  """Rolling RMSE of (cam_angle - actual) during lfa_passthrough periods.
-
-  Produces a trust multiplier q ∈ [Q_MIN, Q_MAX]. When the camera is noisy
-  (construction zone, lane-marking occlusion, heavy rain), rolling RMSE
-  grows → q shrinks → the camera-reference blend falls back toward op's
-  own curvature-derived plan. Slow-changing by design (30s window) so no
-  contribution to high-frequency oscillation.
-  """
-  def __init__(self, window_s=CAMREF_TRUST_WINDOW_S, dt=0.02,
-               rmse_ref=CAMREF_TRUST_RMSE_REF,
-               q_min=CAMREF_TRUST_Q_MIN, q_max=CAMREF_TRUST_Q_MAX):
-    import collections as _c
-    self._buf = _c.deque(maxlen=int(window_s / dt))
-    self._rmse_ref = rmse_ref
-    self._q_min = q_min
-    self._q_max = q_max
-    self._last_q = q_max
-
-  def update(self, cam_angle, actual_angle, cam_driving):
-    if cam_driving:
-      self._buf.append(cam_angle - actual_angle)
-    if len(self._buf) >= 100:
-      s = 0.0
-      for e in self._buf:
-        s += e * e
-      rmse = (s / len(self._buf)) ** 0.5
-      q = self._q_max - (rmse / self._rmse_ref) * (self._q_max - self._q_min)
-      self._last_q = max(self._q_min, min(self._q_max, q))
-    return self._last_q
+# Phase 4-B addendum: VW-inspired stuck-angle jitter break.
+# If apply_angle hasn't changed by > JITTER_DEADBAND for JITTER_FRAMES,
+# inject a ±0.05° micro-step to keep MDPS responsive.
+JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
+JITTER_FRAMES = 20        # ~400ms at 50 Hz
+JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -191,13 +115,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.aci_active_latched = False
     self.passthrough_latched = False
     self.aci_gain_ramp = 0.0
-    # Stage 4: online camera-trust estimator (30s rolling RMSE on passthrough).
-    self.camera_trust = CameraTrustEstimator()
-    # Logging aids for Stage 4 evaluation (readable via cereal reuse if wired later)
-    self.camref_alpha_last = 0.0
-    self.camref_q_last = CAMREF_TRUST_Q_MAX
-    # Low-speed camera passthrough latch (hysteresis, ENTER 2 km/h / EXIT 3 km/h).
     self.low_speed_cam_latched = False
+    # Phase 4-A: vehicle model for VM-based jerk/accel limiting
+    if is_ccnc_angle_platform(CP.flags):
+      self.VM = VehicleModel(CP)
+    # Phase 4-B: low-speed LPF state
+    self.lpf_angle_last = 0.0
+    # Phase 4-B: stuck-angle jitter break counter
+    self.jitter_counter = 0
+    self.jitter_sign = 1
     # F1: Camera message staleness tracker. If the camera ECU stops
     # sending LKAS_ALT on bus 2, the dict still arrives (CANParser caches)
     # but the COUNTER signal stops incrementing. After CAM_STALE_FRAMES
@@ -208,21 +134,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # detected. Tracking COUNTER fixes that.
     self.cam_msg_last_frame = 0
     self.cam_msg_last_counter = -1
-    # Masterplan Phase 2: handoff-smoothing state.
-    # When `steering_active` flips active→passive (e.g., vehicle slowing
-    # below the ACI speed band or driver takeover), the emitted angle
-    # jumps from `apply_angle_last` (rate-limited planner) to `cam_angle`
-    # (stock LFA's advisory) in a single frame. When those two disagree
-    # by >1-2° — which happens routinely, since stock LFA often commands
-    # ≈0 while op commands a correction — MDPS sees a step and the
-    # driver feels a twitch at creep speed. `emit_angle_last` tracks the
-    # actually-emitted angle; on the active→passive flip we rate-limit
-    # the emit toward cam_angle so the physical wheel sees a ramp, not
-    # a step. Fast response is preserved in active mode (emit = apply
-    # directly, no filter).
-    self.emit_angle_last = 0.0
-    self.prev_steering_active = False
-    self.disarm_frames = 0
     # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
     # var; otherwise dormant. See Appendix H of the masterplan.
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS", "1") != "0"
@@ -309,12 +220,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # controlsd's lateral controller.
     if is_ccnc_angle_platform(self.CP.flags):
       new_actuators.steeringAngleDeg = self.apply_angle_last
-      # Stage 4 diagnostics: report the blend weights that produced the
-      # angle above so drivelog analysis can attribute per-frame tracking
-      # error changes to camera-reference blend dynamics. Both 0 outside
-      # the HDA2-ALT + CCNC angle-control platform.
-      new_actuators.camrefAlpha = float(self.camref_alpha_last)
-      new_actuators.camrefQTrust = float(self.camref_q_last)
     new_actuators.accel = self.tuning.actual_accel
 
     self.frame += 1
@@ -393,13 +298,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.cam_msg_last_counter = cam_counter
       if (self.frame - self.cam_msg_last_frame) > CAM_STALE_FRAMES:
         cam_stale = True
-    # Smooth low-speed authority ramp. Data-driven thresholds from route 36
-    # underground descent and parking failure routes (35-39):
-    #   0-15 km/h:  full-lock steering, heavy driver torque — MDPS must be free
-    #   15-25 km/h: parking exit transition zone
-    #   25+ km/h:   road driving, smaller angles
-    ACI_SPEED_FULL_MS = 25.0 / 3.6  # full authority at/above 25 km/h
-    ACI_SPEED_ZERO_MS = 15.0 / 3.6  # zero authority at/below 15 km/h
+    # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
+    # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
+    # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
+    ACI_SPEED_FULL_MS = 3.0 / 3.6   # full authority at/above 3 km/h
+    ACI_SPEED_ZERO_MS = 1.0 / 3.6   # zero authority at/below 1 km/h
     # F8 / R1: Guard against NaN/inf from wheel sensors and planner.
     # vEgoRaw: MDPS/wheel-speed glitch. steeringAngleDeg / steeringTorque:
     # STEERING_SENSORS CAN frame can go all-1s during a bus error or
@@ -477,110 +380,45 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       self.aci_gain_ramp = 0.0
 
-    # HDA2-ALT + CCNC angle control: standard speed-dependent rate limiter
-    # at 50 Hz, matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian
-    # architecture. No output filter — rate limit itself provides natural
-    # smoothing.
+    # HDA2-ALT + CCNC angle control: op-only, VM-based jerk/accel limiter
+    # at 50 Hz. Camera blend removed — 12-route analysis showed op beats
+    # stock LFA in rate and oscillation at all speeds.
     if ccnc_lka_alt and self.frame % 2 == 0:
-      angle_limits = CarControllerParams.ANGLE_LIMITS
+      desired_angle_deg = op_curv_safe
 
-      # Feedforward from LatControlAngle (includes live steerRatio,
-      # angleOffsetDeg, roll compensation — r=0.985 without additional PID).
-      # R1: op_curv_safe already NaN-guarded above.
-      op_curv_angle_deg = op_curv_safe
-
-      # ── Masterplan Phase 1: op-primary blend ──
-      # op's curvature-derived angle is the primary source. Camera is a
-      # minor refinement at highway speeds with small angles where it is
-      # actually trustworthy (see CAMREF_ALPHA_V comment block for the
-      # per-speed analysis on 1.22M frames). At low speeds or moderate
-      # corners we drop α→0; op's plan stands alone.
-      #   α_eff = α₀(v) · gate(|op_angle|) · q_trust
-      # The q_trust estimator is retained as a camera-noise safety valve
-      # (construction zones, occluded lanes) — it can only REDUCE α.
-      cam_angle_deg = None
-      if lkas_alt_cam_msg is not None:
-        cam_angle_deg = float(lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", 0.0))
-        # Feed the trust estimator: camera is "driving" the wheel whenever
-        # openpilot is not (so actual ≈ response to cam_angle), with a light
-        # driver torque gate so override frames don't poison the RMSE.
-        cam_driving = (not CC.latActive) and (driver_torque_blend > 0.5)
-        self.camref_q_last = self.camera_trust.update(
-          cam_angle_deg, steer_angle_safe, cam_driving)
-
-      desired_angle_deg = op_curv_angle_deg
-      if cam_angle_deg is not None and CC.latActive and self.aci_active_latched:
-        alpha_base = float(np.interp(v_ego_safe, CAMREF_ALPHA_BP, CAMREF_ALPHA_V))
-        # Masterplan Phase 1: angle-magnitude gate. Camera dropout rises
-        # 13% → 76% as |angle| grows 0 → 20°. Taper α so the blend can't
-        # pick up a camera-zero frame mid-corner.
-        angle_gate = float(np.interp(abs(op_curv_angle_deg),
-                                     CAMREF_ANGLE_GATE_BP, CAMREF_ANGLE_GATE_V))
-        alpha_eff = alpha_base * self.camref_q_last * angle_gate
-        # Nav-gate: when planner disagrees with camera by > NAV_DISAGREE_DEG,
-        # clamp α so lane-change / obstacle-avoidance maneuvers aren't
-        # overridden by camera's lane-centering bias.
-        if abs(cam_angle_deg - op_curv_angle_deg) > CAMREF_NAV_DISAGREE_DEG:
-          alpha_eff = min(alpha_eff, CAMREF_NAV_ALPHA_CAP)
-        desired_angle_deg = alpha_eff * cam_angle_deg + (1.0 - alpha_eff) * op_curv_angle_deg
-        self.camref_alpha_last = alpha_eff
-      else:
-        self.camref_alpha_last = 0.0
-
-      # Gradient driver override blend: smoothly yield toward actual wheel
-      # position as driver torque increases (Toyota LTA TORQUE_WIND_DOWN style).
+      # Gradient driver override blend (Toyota LTA TORQUE_WIND_DOWN style)
       if override_factor > 0:
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
                             override_factor * steer_angle_safe
 
-      # When ACI is NOT latched (passthrough / driver taking over), force
-      # `lat_active=False` into the rate limiter so it returns the actual
-      # wheel angle. This keeps self.apply_angle_last tracking the physical
-      # wheel during manual / passthrough periods — so when ACI re-engages,
-      # apply_angle_last matches reality and the first active command has
-      # NO step. Previously, a stale apply_angle_last could be several
-      # degrees off from actual after driver input, causing a tick as the
-      # rate limiter ramped it back.
+      # Phase 4-B: low-speed LPF — suppress planner noise below 15 km/h
+      tau_s = float(np.interp(v_ego_safe, LOWSPEED_LPF_TAU_BP, LOWSPEED_LPF_TAU_V))
+      if tau_s > 0.001:
+        alpha_lpf = LPF_DT / (tau_s + LPF_DT)
+        desired_angle_deg = alpha_lpf * desired_angle_deg + (1.0 - alpha_lpf) * self.lpf_angle_last
+      self.lpf_angle_last = desired_angle_deg
+
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
-      self.apply_angle_last = apply_std_steer_angle_limits(
+      # Phase 4-A: VM-based jerk/accel limiter (replaces v1 rate table)
+      self.apply_angle_last = apply_steer_angle_limits_vm(
         desired_angle_deg, self.apply_angle_last, v_ego_safe,
-        steer_angle_safe, rate_lat_active, angle_limits,
+        steer_angle_safe, rate_lat_active, self.params, self.VM,
       )
 
-    # Masterplan Phase 2: pre-disarm handoff smoothing.
-    # When steering_active is about to flip active→passive (typically as
-    # vEgoRaw crosses down through the ACI band near a stop, or the
-    # driver releases then re-engages), the emitted angle jumps from
-    # apply_angle_last to cam_angle in a single 20 ms frame. If those
-    # disagree by more than ~1°, MDPS sees a step and the driver feels
-    # a twitch at creep speed. Mitigation: when we detect an impending
-    # disarm and an angle mismatch, hold the ACI-active emission for a
-    # short window while rate-limiting apply_angle_last toward cam_angle.
-    # Once they converge, the actual passive flip produces no step.
-    cam_angle_live = float(lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", 0.0)) if lkas_alt_cam_msg else 0.0
-    raw_active = bool(CC.latActive) and self.aci_active_latched and (speed_blend > 0.1) and not cam_stale
-    if ccnc_lka_alt:
-      would_disarm = self.prev_steering_active and not raw_active
-      angle_mismatch = abs(self.apply_angle_last - cam_angle_live) > 0.3
-      DISARM_FRAMES_MAX = 15        # ~300 ms at 50 Hz
-      DISARM_STEP_DEG   = 1.0       # ≈ 50°/s — comfortable, imperceptible
-      if would_disarm and angle_mismatch:
-        self.disarm_frames = DISARM_FRAMES_MAX
-      if self.disarm_frames > 0 and abs(self.apply_angle_last - cam_angle_live) > 0.2:
-        delta = cam_angle_live - self.apply_angle_last
-        self.apply_angle_last += max(-DISARM_STEP_DEG, min(DISARM_STEP_DEG, delta))
-        self.disarm_frames -= 1
-        emit_active = True          # keep ACI signals active during ramp
-        emit_speed_blend = max(speed_blend, 0.2)   # force past the > 0.1 gate
+      # Phase 4-B addendum: stuck-angle jitter break (VW HCA pattern)
+      if rate_lat_active:
+        if abs(self.apply_angle_last - self.lpf_angle_last) < JITTER_DEADBAND:
+          self.jitter_counter += 1
+        else:
+          self.jitter_counter = 0
+        if self.jitter_counter >= JITTER_FRAMES:
+          self.apply_angle_last += self.jitter_sign * JITTER_STEP
+          self.jitter_sign *= -1
+          self.jitter_counter = 0
       else:
-        self.disarm_frames = 0
-        emit_active = raw_active
-        emit_speed_blend = speed_blend
-      self.prev_steering_active = emit_active and emit_speed_blend > 0.1
-    else:
-      emit_active = raw_active
-      emit_speed_blend = speed_blend
+        self.jitter_counter = 0
+        self.lpf_angle_last = steer_angle_safe
 
     # Steering message TX: 50 Hz on the HDA2-ALT + CCNC angle-control
     # platform (matching Toyota/Tesla/Nissan), 100 Hz for other Hyundai
@@ -590,8 +428,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
-                                                             speed_blend=emit_speed_blend,
-                                                             aci_active=emit_active,
+                                                             speed_blend=speed_blend,
+                                                             aci_active=self.aci_active_latched and not cam_stale,
                                                              aci_gain_ramp=self.aci_gain_ramp,
                                                              in_passthrough=in_passthrough))
 
