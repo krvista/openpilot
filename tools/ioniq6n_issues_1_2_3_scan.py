@@ -30,9 +30,8 @@ def process_route(route_num):
     
     frame_count = 0
     prev_speed = 0
+    prev_ts = 0
     prev_desired_angle = 0
-    prev_lane_state = None
-    lanechange_start_ts = None
     
     for seg_idx, segment_path in enumerate(segments):
         try:
@@ -62,18 +61,20 @@ def process_route(route_num):
                         'speed': speed, 'angle': steering_angle, 'torque': driver_torque
                     })
                 
-                # ISSUE 2: Lane-change overshoot tracking
-                # Note: laneChangeState not available in capnp schema for this route
-                
                 # ISSUE 3: Rapid acceleration instability
-                # Find frames where vEgo increases by > 5 m/s within 2s (~60 frames @ 30Hz)
-                accel = (speed - prev_speed) / 0.033  # ~30 Hz frame rate
-                if accel > 2.5 and speed > 0:
-                    issue3_accel_events.append({
-                        'ts': ts, 'seg': seg_idx, 'speed': speed, 'accel': accel
-                    })
+                # Only compute when we have valid time delta
+                if prev_ts > 0:
+                    dt = ts - prev_ts
+                    if 0.01 < dt < 0.1:  # Only valid frames (10-100ms apart)
+                        accel = (speed - prev_speed) / dt
+                        if accel > 2.5:  # >= 2.5 m/s²
+                            issue3_accel_events.append({
+                                'ts': ts, 'seg': seg_idx, 'speed': speed, 
+                                'accel': accel, 'dt': dt
+                            })
                 
                 prev_speed = speed
+                prev_ts = ts
                 
             elif msg.which() == 'carControl':
                 cc = msg.carControl
@@ -107,17 +108,20 @@ def analyze_issue1(data):
     avg_error = np.mean(errors) if errors else 0
     peak_error = max(errors) if errors else 0
     
+    lat_active_count = sum(1 for e in events if e.get('lat_active', False))
+    
     # Top 5 worst events
     top_events = sorted(events, key=lambda x: x.get('error', 0), reverse=True)[:5]
     
     summary = f"Issue 1 (Low-speed override fight @~30 km/h, >90° turns):\n"
     summary += f"  Total high-steering events: {len(events)}\n"
     summary += f"  Avg steering error: {avg_error:.2f}°, Peak: {peak_error:.2f}°\n"
+    summary += f"  Lateral control active during conflict: {lat_active_count} frames\n"
     if top_events:
         summary += f"  Top 5 worst conflicts:\n"
         for i, evt in enumerate(top_events[:5], 1):
             lat_active_str = evt.get('lat_active', False)
-            summary += f"    {i}. Seg{evt['seg']}, ts={evt['ts']:.1f}s, v={evt['speed']:.1f}m/s, error={evt.get('error', 0):.2f}°, latActive={lat_active_str}\n"
+            summary += f"    {i}. Seg{evt['seg']:02d}, t={evt['ts']:.1f}s, v={evt['speed']:.1f}m/s, Δangle={evt.get('error', 0):.1f}°, latActive={lat_active_str}\n"
     return summary
 
 def analyze_issue2(data):
@@ -126,7 +130,7 @@ def analyze_issue2(data):
     
     summary = f"Issue 2 (Lane-change overshoot):\n"
     if not lc_events:
-        summary += "  No lane changes detected (laneChangeState unavailable in schema)\n"
+        summary += "  No lane changes detected (laneChangeState field unavailable in capnp schema)\n"
     else:
         summary += f"  Lane changes found: {len(lc_events)}\n"
     return summary
@@ -141,16 +145,22 @@ def analyze_issue3(data):
     avg_accel = np.mean(accels) if accels else 0
     peak_accel = max(accels) if accels else 0
     
+    # Filter out outliers (frame drops > 100ms cause artificially high accel)
+    valid_events = [e for e in events if e['dt'] < 0.08]
+    valid_accels = [e['accel'] for e in valid_events]
+    avg_valid = np.mean(valid_accels) if valid_accels else 0
+    
     summary = f"Issue 3 (Rapid acceleration instability):\n"
-    summary += f"  High-accel events (>2.5 m/s²): {len(events)}\n"
+    summary += f"  High-accel frames (>2.5 m/s²): {len(events)}\n"
     summary += f"  Avg accel: {avg_accel:.2f} m/s², Peak: {peak_accel:.2f} m/s²\n"
+    summary += f"  Valid accel (dt<80ms): {len(valid_events)}, Avg: {avg_valid:.2f} m/s²\n"
     
     # Peak events
-    top_events = sorted(events, key=lambda x: x['accel'], reverse=True)[:3]
+    top_events = sorted(valid_events, key=lambda x: x['accel'], reverse=True)[:3]
     if top_events:
-        summary += f"  Top 3 peak accelerations:\n"
+        summary += f"  Top 3 peak accelerations (valid frames):\n"
         for i, evt in enumerate(top_events, 1):
-            summary += f"    {i}. Seg{evt['seg']}, ts={evt['ts']:.1f}s, v={evt['speed']:.1f}m/s, a={evt['accel']:.2f}m/s²\n"
+            summary += f"    {i}. Seg{evt['seg']:02d}, t={evt['ts']:.1f}s, v={evt['speed']:.1f}m/s, a={evt['accel']:.1f}m/s²\n"
     return summary
 
 def main():
@@ -185,10 +195,10 @@ def main():
     print("\n" + "=" * 75)
     print("LIMITATIONS & NOTES")
     print("=" * 75)
-    print("- laneChangeState field unavailable in capnp schema (Issue 2 cannot be fully analyzed)")
+    print("- laneChangeState field unavailable in capnp schema (Issue 2 cannot be analyzed)")
     print("- Steering error approximation uses frame timestamps (<50ms tolerance)")
     print("- Lateral acceleration computation requires curvature/heading (not extracted)")
-    print("- Analysis captures discrete high-torque steering + high-accel frames only")
+    print("- Frame drops (gaps >100ms) cause artificial accel spikes; filtered in Issue 3")
 
 if __name__ == '__main__':
     main()
