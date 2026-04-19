@@ -231,12 +231,21 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   return ret
 
 
-def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt, suppress_lanes=True):
+def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt, suppress_lanes=True,
+                        override_counter=None):
   suppress_msg = "CAM_0x362" if lka_steering_alt else "CAM_0x2a4"
   msg_bytes = 32 if lka_steering_alt else 24
 
   values = {f"BYTE{i}": lfa_block_msg[f"BYTE{i}"] for i in range(3, msg_bytes) if i != 7}
-  values["COUNTER"] = lfa_block_msg["COUNTER"]
+  # Panda relay blocks the camera's original 0x362/0x2a4 on a_can (see
+  # hyundai_canfd.h: check_relay=(a_can)==0), so ADAS DRV only observes
+  # our TX stream. Forwarding the camera's native COUNTER through a
+  # frame%5==0 downsample produces visible gaps (e.g. 0x1a→0x1c) whenever
+  # our TX slot is skipped by one tick — an ECU with a +1-per-frame
+  # continuity check treats that as frame corruption. Caller owns a
+  # monotonic counter to keep the observed stream clean.
+  values["COUNTER"] = (override_counter & 0xFF) if override_counter is not None \
+                       else lfa_block_msg["COUNTER"]
   values["SET_ME_0"] = 0
   values["SET_ME_0_2"] = 0
   if suppress_lanes:

@@ -146,6 +146,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
     self.hod_bypass_counter = 0
 
+    # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
+    # camera-TX rate vs our frame%5==0 downsample. Wraps at 256, well above
+    # any realistic continuity-watchdog window.
+    self.suppress_lfa_counter = 0
+
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -499,7 +504,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       suppress_lanes = not bool(self.CP.flags & HyundaiFlags.CCNC)
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT,
-                                                        suppress_lanes=suppress_lanes))
+                                                        suppress_lanes=suppress_lanes,
+                                                        override_counter=self.suppress_lfa_counter))
+      self.suppress_lfa_counter = (self.suppress_lfa_counter + 1) & 0xFF
 
     # LFA and HDA icons
     # Non-HDA2 CCNC cars get our create_ccnc() frame so we can render
