@@ -26,6 +26,7 @@ from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.structs import CarParams
 from opendbc.car.hyundai.values import CAR as HCAR
 from opendbc.car.toyota.values import CAR as TCAR
+from opendbc.car.tesla.values import CAR as TSCAR
 
 DRIVELOG = "/home/user/openpilot/drivelog"
 DT = 0.01                # controlsState is 100Hz
@@ -58,11 +59,14 @@ def build_vm(specs, steer_ratio_override=None):
 # a conservative Toyota estimate of 2.5 m/s³ jerk / 3.0 m/s² accel per
 # the Tesla/Toyota commentary in hyundai/values.py.
 
+# (specs, max_jerk m/s³, max_accel m/s², max_angle_rate deg/step)
 CAR_SPECS = {
-  'Ioniq6N':   (HCAR.HYUNDAI_IONIQ_6_N.config.specs, 3.5, 3.3),   # jerk, accel
-  'Ioniq5':    (HCAR.HYUNDAI_IONIQ_5.config.specs,   3.5, 3.3),
-  'RAV4_TSS2': (TCAR.TOYOTA_RAV4_TSS2_2022.config.specs, 2.5, 3.0),
-  'Corolla':   (TCAR.TOYOTA_COROLLA_TSS2.config.specs,   2.5, 3.0),
+  'Ioniq6N':   (HCAR.HYUNDAI_IONIQ_6_N.config.specs, 3.5, 3.3, 1.3),
+  'Ioniq5':    (HCAR.HYUNDAI_IONIQ_5.config.specs,   3.5, 3.3, 1.3),
+  'Model3':    (TSCAR.TESLA_MODEL_3.config.specs,     3.6, 3.6, 5.0),
+  'ModelY':    (TSCAR.TESLA_MODEL_Y.config.specs,     3.6, 3.6, 5.0),
+  'RAV4_TSS2': (TCAR.TOYOTA_RAV4_TSS2_2022.config.specs, 2.5, 3.0, 5.0),
+  'Corolla':   (TCAR.TOYOTA_COROLLA_TSS2.config.specs,   2.5, 3.0, 5.0),
 }
 
 
@@ -128,7 +132,7 @@ def extract_drive(path, src_vm):
   return (np.array(curv_arr), np.array(v_arr), np.array(roll_arr), np.array(pressed_arr))
 
 
-def sim_car(curv, v, roll, pressed, name, vm, max_jerk, max_accel):
+def sim_car(curv, v, roll, pressed, name, vm, max_jerk, max_accel, max_angle_rate=1.3):
   n = len(curv)
   target = np.zeros(n)
   for i in range(n):
@@ -136,7 +140,7 @@ def sim_car(curv, v, roll, pressed, name, vm, max_jerk, max_accel):
   achieved = np.zeros(n)
   achieved[0] = target[0]
   for i in range(1, n):
-    achieved[i] = rate_limit_step(target[i], achieved[i - 1], v[i], vm, max_jerk, max_accel)
+    achieved[i] = rate_limit_step(target[i], achieved[i - 1], v[i], vm, max_jerk, max_accel, max_angle_rate)
   err = np.abs(target - achieved)
   # primary MAE: only moving frames (v > SAT_MIN_SPEED = 5 m/s = 18 km/h) —
   # matches the regime where steerSaturated gating is active
@@ -192,8 +196,8 @@ def run_route(route_hex, src_vm, cars_vm):
       continue
     if len(curv) < 10:
       continue
-    for name, (vm, mj, ma) in cars_vm.items():
-      r = sim_car(curv, v, roll, pressed, name, vm, mj, ma)
+    for name, (vm, mj, ma, mar) in cars_vm.items():
+      r = sim_car(curv, v, roll, pressed, name, vm, mj, ma, mar)
       t = total[name]
       t['n'] += r['n']
       t['err_sum'] += r['mae'] * r['n']
@@ -223,8 +227,8 @@ def main(route_hexes):
   src_specs = HCAR.HYUNDAI_IONIQ_6_N.config.specs
   src_vm = build_vm(src_specs)
   cars_vm = {}
-  for name, (specs, mj, ma) in CAR_SPECS.items():
-    cars_vm[name] = (build_vm(specs), mj, ma)
+  for name, (specs, mj, ma, mar) in CAR_SPECS.items():
+    cars_vm[name] = (build_vm(specs), mj, ma, mar)
 
   grand = {name: dict(n=0, err_sum=0.0, p95_sum=0.0, err_max=0.0,
                       sat_frames=0, alert_frames=0, events=0)
