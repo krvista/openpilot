@@ -400,6 +400,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
+      # Phase 4-C: speed-dependent per-step cap (loosens low-speed ceiling so
+      # op planner peak demand at parking/city-low isn't clipped; tightens
+      # at highway where jerk limit already dominates).  Applied BEFORE the
+      # VM limiter so jerk/accel still have the final say when binding.
+      per_step_cap = float(np.interp(v_ego_safe, CarControllerParams.ANGLE_RATE_BP,
+                                     CarControllerParams.ANGLE_RATE_V))
+      desired_angle_deg = float(np.clip(desired_angle_deg,
+                                        self.apply_angle_last - per_step_cap,
+                                        self.apply_angle_last + per_step_cap))
+
       # Phase 4-A: VM-based jerk/accel limiter (replaces v1 rate table)
       self.apply_angle_last = apply_steer_angle_limits_vm(
         desired_angle_deg, self.apply_angle_last, v_ego_safe,

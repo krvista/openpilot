@@ -81,12 +81,18 @@ def test_limiter_sweep(CP, VM):
   assert params.STEER_STEP == 2, f"expected STEER_STEP=2, got {params.STEER_STEP}"
   assert params.ANGLE_LIMITS.MAX_LATERAL_ACCEL == 3.3
   assert params.ANGLE_LIMITS.MAX_LATERAL_JERK == 3.5
-  assert params.ANGLE_LIMITS.MAX_ANGLE_RATE == 1.3
+  # Phase 4-C: MAX_ANGLE_RATE is now the HARD safety ceiling; the effective
+  # per-step rate is picked from ANGLE_RATE_BP/V at runtime.
+  assert params.ANGLE_LIMITS.MAX_ANGLE_RATE == 3.0
   assert params.ANGLE_LIMITS.STEER_ANGLE_MAX == 176.7
+  assert list(params.ANGLE_RATE_BP) == [0., 7., 11., 17., 23., 30.]
+  assert list(params.ANGLE_RATE_V)  == [2.5, 2.5, 2.0, 1.5, 1.3, 1.0]
+  assert max(params.ANGLE_RATE_V) <= params.ANGLE_LIMITS.MAX_ANGLE_RATE  # table ≤ hard ceil
   print(f"  ✓ STEER_STEP={params.STEER_STEP}, "
         f"ANGLE_LIMITS_VM (jerk={params.ANGLE_LIMITS.MAX_LATERAL_JERK}, "
         f"accel={params.ANGLE_LIMITS.MAX_LATERAL_ACCEL}, "
-        f"rate={params.ANGLE_LIMITS.MAX_ANGLE_RATE})")
+        f"hard_ceil={params.ANGLE_LIMITS.MAX_ANGLE_RATE})")
+  print(f"  ✓ ANGLE_RATE table: {list(zip(params.ANGLE_RATE_BP, params.ANGLE_RATE_V))}")
 
   ntests = 0
   for v_ego in [0.0, 0.5, 1.0, 5.0, 10.0, 20.0, 30.0, 40.0, 55.0]:
