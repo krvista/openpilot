@@ -80,14 +80,26 @@ def test_limiter_sweep(CP, VM):
   # Verify STEER_STEP=2 (50 Hz) and ANGLE_LIMITS_VM was applied
   assert params.STEER_STEP == 2, f"expected STEER_STEP=2, got {params.STEER_STEP}"
   assert params.ANGLE_LIMITS.MAX_LATERAL_ACCEL == 3.3
-  assert params.ANGLE_LIMITS.MAX_LATERAL_JERK == 3.5
-  # Phase 4-C: MAX_ANGLE_RATE is now the HARD safety ceiling; the effective
+  # Phase 5: MAX_LATERAL_JERK raised 3.5→5.0 (matches release-mici).
+  assert params.ANGLE_LIMITS.MAX_LATERAL_JERK == 5.0
+  # Phase 4-C: MAX_ANGLE_RATE is the HARD safety ceiling; the effective
   # per-step rate is picked from ANGLE_RATE_BP/V at runtime.
   assert params.ANGLE_LIMITS.MAX_ANGLE_RATE == 3.0
   assert params.ANGLE_LIMITS.STEER_ANGLE_MAX == 176.7
+  # Phase 5: loosened ANGLE_RATE_V at city-high/suburban/highway for ramps.
   assert list(params.ANGLE_RATE_BP) == [0., 7., 11., 17., 23., 30.]
-  assert list(params.ANGLE_RATE_V)  == [2.5, 2.5, 2.0, 1.5, 1.3, 1.0]
+  assert list(params.ANGLE_RATE_V)  == [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]
   assert max(params.ANGLE_RATE_V) <= params.ANGLE_LIMITS.MAX_ANGLE_RATE  # table ≤ hard ceil
+  # Phase 5: driver-override thresholds
+  assert params.DRIVER_TORQUE_DEADZONE == 25.0
+  assert params.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V  == 60.0
+  assert params.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V == 120.0
+  assert params.DRIVER_TORQUE_LOW_V_SPEED  == 8.0
+  assert params.DRIVER_TORQUE_HIGH_V_SPEED == 15.0
+  assert params.OVERRIDE_SNAP_ENTER_FACTOR == 0.95
+  assert params.OVERRIDE_SNAP_EXIT_FACTOR  == 0.05
+  assert params.OVERRIDE_SNAP_ENTER_FRAMES == 3
+  assert params.OVERRIDE_SNAP_EXIT_FRAMES  == 25
   print(f"  ✓ STEER_STEP={params.STEER_STEP}, "
         f"ANGLE_LIMITS_VM (jerk={params.ANGLE_LIMITS.MAX_LATERAL_JERK}, "
         f"accel={params.ANGLE_LIMITS.MAX_LATERAL_ACCEL}, "
