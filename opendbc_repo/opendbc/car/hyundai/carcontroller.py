@@ -121,6 +121,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.VM = VehicleModel(CP)
     # Phase 4-B: low-speed LPF state
     self.lpf_angle_last = 0.0
+    # Phase 5: driver-override snap state — tracks whether MADS has
+    # yielded to the driver (apply_angle_last follows actual wheel),
+    # plus hysteresis counters so re-engage only happens after the
+    # driver has fully released for OVERRIDE_SNAP_EXIT_FRAMES.
+    self.override_snapped = False
+    self.override_enter_cnt = 0
+    self.override_exit_cnt  = 0
     # Phase 4-B: stuck-angle jitter break counter
     self.jitter_counter = 0
     self.jitter_sign = 1
@@ -317,13 +324,45 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
     speed_blend = float(np.clip((v_ego_safe - ACI_SPEED_ZERO_MS) /
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
-    # Toyota LTA-style gradient driver override blending.
-    DRIVER_TORQUE_DEADZONE = 30   # below this: no reduction (normal driving)
-    DRIVER_TORQUE_FULL_OVERRIDE = 150  # at/above this: fully surrendered
+    # Phase 5: speed-dependent gradient driver override blending.
+    # Fixed 150 Nm full-override threshold was unreachable at low speed
+    # (driver turning wheel 90° at 30 km/h applies only 60-80 Nm) → MADS
+    # kept fighting the driver. Lower the full-override torque at low v,
+    # keep the higher value at highway for stability.
+    DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
+    full_override_torque = float(np.interp(v_ego_safe,
+                                           [CarControllerParams.DRIVER_TORQUE_LOW_V_SPEED,
+                                            CarControllerParams.DRIVER_TORQUE_HIGH_V_SPEED],
+                                           [CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V,
+                                            CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V]))
     driver_abs_torque = abs(steer_torque_safe)
     override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
-                                     (DRIVER_TORQUE_FULL_OVERRIDE - DRIVER_TORQUE_DEADZONE), 0.0, 1.0))
+                                     max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
     driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
+
+    # Phase 5: snap-to-wheel + grace-window state machine.
+    # Enter snap after sustained full override; exit only after sustained
+    # full release (OVERRIDE_SNAP_EXIT_FRAMES). While snapped, apply_angle_last
+    # is forced to follow the actual wheel angle so MADS cannot build up a
+    # restoring torque; on exit the rate limiter naturally ramps from there.
+    if override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR:
+      self.override_enter_cnt += 1
+      self.override_exit_cnt = 0
+    elif override_factor <= CarControllerParams.OVERRIDE_SNAP_EXIT_FACTOR:
+      self.override_exit_cnt += 1
+      self.override_enter_cnt = 0
+    else:
+      # in-between: hold counters (don't accumulate, don't reset)
+      pass
+    if not self.override_snapped and self.override_enter_cnt >= CarControllerParams.OVERRIDE_SNAP_ENTER_FRAMES:
+      self.override_snapped = True
+    elif self.override_snapped and self.override_exit_cnt >= CarControllerParams.OVERRIDE_SNAP_EXIT_FRAMES:
+      self.override_snapped = False
+    if not CC.latActive:
+      # disengaged: reset so next engage doesn't inherit stale state
+      self.override_snapped = False
+      self.override_enter_cnt = 0
+      self.override_exit_cnt = 0
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     # ---- Hysteresis on ACI engagement (fixes residual low-speed tick) ----
@@ -399,6 +438,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.lpf_angle_last = desired_angle_deg
 
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
+
+      # Phase 5: if driver is currently overriding past threshold, snap our
+      # reference angle to the actual wheel so MADS doesn't build up a
+      # counter-torque. This is held through the grace window on release;
+      # once released, the rate limiter smoothly ramps from here.
+      if self.override_snapped:
+        self.apply_angle_last = steer_angle_safe
 
       # Phase 4-C: speed-dependent per-step cap (loosens low-speed ceiling so
       # op planner peak demand at parking/city-low isn't clipped; tightens

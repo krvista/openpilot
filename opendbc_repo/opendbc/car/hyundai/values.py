@@ -67,40 +67,63 @@ class CarControllerParams:
     ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.2, 0.75, 0.55, 0.35]), # DOWN (deg/20ms @ 50Hz)
   )
 
-  # Phase 4-A: VM-based jerk/accel limits for CCNC angle-control platform.
-  # Physics-based instead of lookup-table: at highway, jerk limit naturally
-  # tightens the angle rate (smoother than Tesla's 3.6 m/s³); at low speed,
-  # a speed-dependent per-step cap (see ANGLE_RATE_BP/V below) prevents
-  # parking jerk while allowing the op planner's low-speed peak demand.
-  # MAX_ANGLE_RATE is kept as a HARD absolute ceiling (never exceeded even
-  # if a future table tuning allows higher, catches any regression).
+  # Phase 5: VM-based jerk/accel limits for CCNC angle-control platform.
+  # MAX_LATERAL_JERK raised 3.5 → 5.0 to match release-mici's clip_curvature
+  # (drive_helpers.py MAX_LATERAL_JERK=5.0).  This is the root fix for both
+  # user issue #5 (planner commands arrive too late) and #6 (cannot exit
+  # 40-60 km/h ramps fast enough): jerk dominates the angle-rate limit via
+  # max_curv_rate = JERK/v², so a 30% lower jerk was compressing the whole
+  # operating range.  ANGLE_RATE_V table is loosened accordingly to avoid
+  # being the new bottleneck.
   ANGLE_LIMITS_VM: AngleSteeringLimits = AngleSteeringLimits(
     176.7,
     ([], []),  # v1 tables unused — VM computes per-step limits
     ([], []),
     MAX_LATERAL_ACCEL=3.3,   # m/s² — ISO 3.0 + moderate road roll
-    MAX_LATERAL_JERK=3.5,    # m/s³ — between Tesla (3.6) and Toyota (~2-3)
+    MAX_LATERAL_JERK=5.0,    # m/s³ — matches release-mici (was 3.5, +43%)
     MAX_ANGLE_RATE=3.0,      # deg/20ms — hard safety ceiling; speed table clamps below
   )
 
-  # Speed-dependent angle-rate cap (deg/20ms @ 50Hz).
-  # Tuned from 413-segment drivelog probe (tools/ioniq6n_rate_limit_probe.py):
-  #   - Stock LFA camera p99 ≤ 2.3°/20ms at any speed (OEM safety envelope)
-  #   - Op planner p99 at city-high (40-60 km/h) = 1.62°/20ms
-  #     (previous scalar cap of 1.3 was clipping 2.1% of frames)
-  #   - Op planner p99 at city-low (25-40 km/h) = 4-6°/20ms (not all realisable —
-  #     values include pre-rate-limit spikes, but the cap shouldn't be the
-  #     bottleneck here either)
+  # Phase 5: Speed-dependent per-step cap (deg/20ms @ 50Hz).
+  # Loosened at city-high/suburban/highway so off-ramp maneuvers at 40-60 km/h
+  # can swing 90° in ≤0.8 s (user issue #6).  Jerk 5.0 is the binding
+  # constraint at most speeds; this table is an absolute ceiling.
   # Breakpoints:
-  #   0 m/s  (stopped)     : 2.5   — parking/stopped, factory p99 × 1.1
-  #   7 m/s  (25 km/h)     : 2.5   — parking exit (user reported tick here)
-  #  11 m/s  (40 km/h)     : 2.0   — city-low top, below factory p99 × 1.2
-  #  17 m/s  (60 km/h)     : 1.5   — city-high top, matches op planner p99
-  #  23 m/s  (83 km/h)     : 1.3   — suburban top (preserves old cap here)
-  #  30 m/s  (108 km/h)    : 1.0   — highway, jerk limit already binding
+  #   0 m/s  (stopped)     : 2.5   — parking/stopped
+  #   7 m/s  (25 km/h)     : 2.5   — parking-exit (user-reported tick here)
+  #  11 m/s  (40 km/h)     : 2.5   — city-low top   (was 2.0) → ramp capable
+  #  17 m/s  (60 km/h)     : 2.3   — city-high top  (was 1.5) → ramp capable
+  #  23 m/s  (83 km/h)     : 2.3   — suburban top   (was 1.3)
+  #  30 m/s  (108 km/h)    : 1.5   — highway        (was 1.0) — jerk still binds
   # Values are clamped to ANGLE_LIMITS_VM.MAX_ANGLE_RATE=3.0 as absolute ceiling.
   ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
-  ANGLE_RATE_V  = [2.5, 2.5, 2.0, 1.5, 1.3, 1.0]  # deg/20ms
+  ANGLE_RATE_V  = [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]  # deg/20ms
+
+  # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
+  # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
+  # applies only 60-80 Nm torque, never reaching the old fixed 150 Nm
+  # FULL_OVERRIDE threshold → MADS kept fighting back (user-reported "tic
+  # tic"). Fix: speed-dependent full-override torque.
+  #   - below LOW_V_SPEED  (~29 km/h): FULL at 60 Nm  (responsive at low speed)
+  #   - above HIGH_V_SPEED (~54 km/h): FULL at 120 Nm (stable at high speed)
+  #   - between: linear interpolation
+  # DEADZONE also reduced 30 → 25 Nm for earlier onset of override ramp.
+  DRIVER_TORQUE_DEADZONE = 25.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V  = 60.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V = 120.0
+  DRIVER_TORQUE_LOW_V_SPEED  = 8.0    # m/s ≈ 29 km/h
+  DRIVER_TORQUE_HIGH_V_SPEED = 15.0   # m/s ≈ 54 km/h
+
+  # Snap + grace-window re-engage for angle-control:
+  #   - enter snap when override_factor > 0.95 for N frames →
+  #     apply_angle_last follows actual wheel angle (stop MADS fighting).
+  #   - exit snap only after override_factor < 0.05 for GRACE_FRAMES
+  #     (25 frames = 0.5 s @ 50 Hz) — prevents flickering in/out of override
+  #     and guarantees a smooth re-engage through the rate limiter.
+  OVERRIDE_SNAP_ENTER_FACTOR = 0.95
+  OVERRIDE_SNAP_ENTER_FRAMES = 3      # 60 ms — quick reaction
+  OVERRIDE_SNAP_EXIT_FACTOR  = 0.05
+  OVERRIDE_SNAP_EXIT_FRAMES  = 25     # 500 ms — grace window
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
