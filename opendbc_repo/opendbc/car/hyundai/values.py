@@ -70,15 +70,37 @@ class CarControllerParams:
   # Phase 4-A: VM-based jerk/accel limits for CCNC angle-control platform.
   # Physics-based instead of lookup-table: at highway, jerk limit naturally
   # tightens the angle rate (smoother than Tesla's 3.6 m/s³); at low speed,
-  # MAX_ANGLE_RATE caps the per-step change to prevent parking jerk.
+  # a speed-dependent per-step cap (see ANGLE_RATE_BP/V below) prevents
+  # parking jerk while allowing the op planner's low-speed peak demand.
+  # MAX_ANGLE_RATE is kept as a HARD absolute ceiling (never exceeded even
+  # if a future table tuning allows higher, catches any regression).
   ANGLE_LIMITS_VM: AngleSteeringLimits = AngleSteeringLimits(
     176.7,
     ([], []),  # v1 tables unused — VM computes per-step limits
     ([], []),
     MAX_LATERAL_ACCEL=3.3,   # m/s² — ISO 3.0 + moderate road roll
     MAX_LATERAL_JERK=3.5,    # m/s³ — between Tesla (3.6) and Toyota (~2-3)
-    MAX_ANGLE_RATE=1.3,      # deg/20ms — caps low-speed per-step (= current peak at 25 km/h)
+    MAX_ANGLE_RATE=3.0,      # deg/20ms — hard safety ceiling; speed table clamps below
   )
+
+  # Speed-dependent angle-rate cap (deg/20ms @ 50Hz).
+  # Tuned from 413-segment drivelog probe (tools/ioniq6n_rate_limit_probe.py):
+  #   - Stock LFA camera p99 ≤ 2.3°/20ms at any speed (OEM safety envelope)
+  #   - Op planner p99 at city-high (40-60 km/h) = 1.62°/20ms
+  #     (previous scalar cap of 1.3 was clipping 2.1% of frames)
+  #   - Op planner p99 at city-low (25-40 km/h) = 4-6°/20ms (not all realisable —
+  #     values include pre-rate-limit spikes, but the cap shouldn't be the
+  #     bottleneck here either)
+  # Breakpoints:
+  #   0 m/s  (stopped)     : 2.5   — parking/stopped, factory p99 × 1.1
+  #   7 m/s  (25 km/h)     : 2.5   — parking exit (user reported tick here)
+  #  11 m/s  (40 km/h)     : 2.0   — city-low top, below factory p99 × 1.2
+  #  17 m/s  (60 km/h)     : 1.5   — city-high top, matches op planner p99
+  #  23 m/s  (83 km/h)     : 1.3   — suburban top (preserves old cap here)
+  #  30 m/s  (108 km/h)    : 1.0   — highway, jerk limit already binding
+  # Values are clamped to ANGLE_LIMITS_VM.MAX_ANGLE_RATE=3.0 as absolute ceiling.
+  ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
+  ANGLE_RATE_V  = [2.5, 2.5, 2.0, 1.5, 1.3, 1.0]  # deg/20ms
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
