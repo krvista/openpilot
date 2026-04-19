@@ -61,8 +61,9 @@ def build_vm(specs, steer_ratio_override=None):
 
 # (specs, max_jerk m/s³, max_accel m/s², max_angle_rate deg/step)
 CAR_SPECS = {
-  'Ioniq6N':   (HCAR.HYUNDAI_IONIQ_6_N.config.specs, 3.5, 3.3, 1.3),
-  'Ioniq5':    (HCAR.HYUNDAI_IONIQ_5.config.specs,   3.5, 3.3, 1.3),
+  # Ioniq6N Phase 5: MAX_LATERAL_JERK=5.0, ANGLE_RATE_V peak=2.5.
+  'Ioniq6N':   (HCAR.HYUNDAI_IONIQ_6_N.config.specs, 5.0, 3.3, 2.5),
+  'Ioniq5':    (HCAR.HYUNDAI_IONIQ_5.config.specs,   5.0, 3.3, 2.5),
   'Model3':    (TSCAR.TESLA_MODEL_3.config.specs,     3.6, 3.6, 5.0),
   'ModelY':    (TSCAR.TESLA_MODEL_Y.config.specs,     3.6, 3.6, 5.0),
   'RAV4_TSS2': (TCAR.TOYOTA_RAV4_TSS2_2022.config.specs, 2.5, 3.0, 5.0),
