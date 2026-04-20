@@ -121,6 +121,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.VM = VehicleModel(CP)
     # Phase 4-B: low-speed LPF state
     self.lpf_angle_last = 0.0
+    # Phase 6: curvature LPF state (filters model noise before conversion)
+    self.curv_lpf = 0.0
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -428,7 +430,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # at 50 Hz. Camera blend removed — 12-route analysis showed op beats
     # stock LFA in rate and oscillation at all speeds.
     if ccnc_lka_alt and self.frame % 2 == 0:
-      desired_angle_deg = op_curv_safe
+      # Phase 6: curvature LPF — filter model noise before downstream processing.
+      # Applied on the LatControlAngle-converted angle (op_curv_safe) which
+      # already includes roll compensation and speed-dependent VM factors.
+      # LPF on angle ≡ LPF on curvature for near-linear conversions.
+      curv_tau = CarControllerParams.CURV_LPF_TAU
+      if CC.latActive and curv_tau > 0.001:
+        alpha_curv = LPF_DT / (curv_tau + LPF_DT)
+        self.curv_lpf = alpha_curv * op_curv_safe + (1.0 - alpha_curv) * self.curv_lpf
+      else:
+        self.curv_lpf = op_curv_safe
+      desired_angle_deg = self.curv_lpf
 
       # Gradient driver override blend (Toyota LTA TORQUE_WIND_DOWN style)
       if override_factor > 0:
