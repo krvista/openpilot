@@ -99,6 +99,12 @@ class CarControllerParams:
   ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
   ANGLE_RATE_V  = [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]  # deg/20ms
 
+  # Phase 6: curvature LPF time constant (seconds).
+  # MAE analysis (9 routes, 1.66M frames, 56-combo 2D sweep) showed τ=0.20
+  # is optimal: MAE_all −9.2%, sharp-curve MAE −8%, no regression.
+  # Filters model curvature noise before angle conversion.  Set to 0 to disable.
+  CURV_LPF_TAU = 0.20
+
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
   # applies only 60-80 Nm torque, never reaching the old fixed 150 Nm
