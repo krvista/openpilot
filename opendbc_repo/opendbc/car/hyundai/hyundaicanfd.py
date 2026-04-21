@@ -40,7 +40,8 @@ class CanBus(CanBusBase):
 
 def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
-                             aci_active=None, aci_gain_ramp=1.0, in_passthrough=False):
+                             aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
+                             mads_lka_icon=None):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
@@ -106,12 +107,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     # during creep.
     steering_active = bool(lat_active) and bool(aci_active) and speed_blend > 0.1
 
-    # LKA_ICON: stay green (2) whenever openpilot is providing lateral control,
-    # independent of driver-torque blending or low-speed state. This matches
-    # the operational indicator convention used by official openpilot and
-    # prevents the icon from flickering white during minor driver input or
-    # near a stop.
-    icon_green = lat_active
+    if mads_lka_icon is not None:
+      icon_value = mads_lka_icon
+    else:
+      icon_value = 2 if lat_active else None
 
     if lkas_alt_cam_msg is not None:
       # Mirror camera values, override ADAS_StrAnglReqVal + activation signals.
@@ -156,7 +155,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
         "LKA_AVAILABLE":             lkas_alt_cam_msg["LKA_AVAILABLE"],
         "LKA_WARNING":               lka_warning_out,
-        "LKA_ICON":                  2 if icon_green else lkas_alt_cam_msg["LKA_ICON"],
+        "LKA_ICON":                  icon_value if icon_value is not None else lkas_alt_cam_msg["LKA_ICON"],
         "FCA_SYSWARN":               fca_syswarn_out,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
@@ -244,7 +243,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
 
 
 def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt, suppress_lanes=True,
-                        override_counter=None):
+                        override_counter=None, force_lanes=False):
   suppress_msg = "CAM_0x362" if lka_steering_alt else "CAM_0x2a4"
   msg_bytes = 32 if lka_steering_alt else 24
 
@@ -263,8 +262,10 @@ def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt, suppress_l
   if suppress_lanes:
     values["LEFT_LANE_LINE"] = 0
     values["RIGHT_LANE_LINE"] = 0
+  elif force_lanes:
+    values["LEFT_LANE_LINE"] = 3
+    values["RIGHT_LANE_LINE"] = 3
   else:
-    # Forward camera's lane detection to ADAS DRV so it accepts LKAS_ALT commands
     values["LEFT_LANE_LINE"] = lfa_block_msg["LEFT_LANE_LINE"]
     values["RIGHT_LANE_LINE"] = lfa_block_msg["RIGHT_LANE_LINE"]
   return packer.make_can_msg(suppress_msg, CAN.ACAN, values)

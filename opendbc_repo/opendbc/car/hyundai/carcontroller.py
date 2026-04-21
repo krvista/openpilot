@@ -496,6 +496,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Steering message TX: 50 Hz on the HDA2-ALT + CCNC angle-control
     # platform (matching Toyota/Tesla/Nissan), 100 Hz for other Hyundai
     # CAN FD cars (torque-based, unchanged).
+    # Issue 3: MADS-driven LKA_ICON for LKAS_ALT message.
+    # When cruiseState.available (ACC main on): reflect MADS state (green/off).
+    # When ACC main off: None → camera passthrough (stock LFA icon).
+    if ccnc_lka_alt and CS.out.cruiseState.available:
+      mads_lka_icon = 2 if CC.latActive else 0
+    else:
+      mads_lka_icon = None
+
     if not ccnc_lka_alt or self.frame % 2 == 0:
       can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
@@ -504,7 +512,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              speed_blend=speed_blend,
                                                              aci_active=self.aci_active_latched and not cam_stale,
                                                              aci_gain_ramp=self.aci_gain_ramp,
-                                                             in_passthrough=in_passthrough))
+                                                             in_passthrough=in_passthrough,
+                                                             mads_lka_icon=mads_lka_icon))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
@@ -514,10 +523,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # causing a stale or zero COUNTER that panda/ADAS might reject).
     if self.frame % 5 == 0 and lka_steering and getattr(CS, 'lfa_block_msg', None):
       suppress_lanes = not bool(self.CP.flags & HyundaiFlags.CCNC)
+      force_lanes = not suppress_lanes and bool(CC.latActive)
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT,
                                                         suppress_lanes=suppress_lanes,
-                                                        override_counter=self.suppress_lfa_counter))
+                                                        override_counter=self.suppress_lfa_counter,
+                                                        force_lanes=force_lanes))
       self.suppress_lfa_counter = (self.suppress_lfa_counter + 1) & 0xFF
 
     # LFA and HDA icons
@@ -545,15 +556,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
 
-    # HOD (hands-on detection) bypass — experimental, opt-in via
-    # HOD_BYPASS=1 env var. Only on the HDA2-ALT + CCNC angle-control
-    # platform (Ioniq 6 N today). TX 0x208 on E-CAN at 10 Hz matching
-    # factory rate with byte 10=4 (GRIP_STRONG) and correct CRC. Factory
-    # publisher is still active on bus 1 (native, cannot be relay-blocked)
-    # — we rely on the hands-off timer being the single consumer and
-    # "latest frame wins" semantics to keep the timer continuously reset.
-    # If CCNC flickers like 0x161 did, disable this flag and revisit.
-    if self.hod_bypass_enabled and ccnc_lka_alt and self.frame % 10 == 0 and CC.latActive:
+    # HOD (hands-on detection) bypass on HDA2-ALT + CCNC. TX 0x208 on
+    # E-CAN at 10 Hz with GRIP_STRONG to keep the hands-off timer reset.
+    # Active whenever MADS is providing lateral control (CC.latActive).
+    # Disabled when latActive=False so stock HOD works during manual driving.
+    if ccnc_lka_alt and self.frame % 10 == 0 and CC.latActive:
       can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
       self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
 
