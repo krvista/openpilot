@@ -167,3 +167,72 @@ CC.latActive = _lat_active
 | `fce7575` | Phase 7 adaptive look-ahead curvature | capnp slicing 크래시 유발 |
 | `c202d6d` | MDPS 진단 로깅 (CarStateSP 확장) | 정상 |
 | `bd05edf` | capnp slicing 크래시 수정 (np.fromiter) | 문제 해결 |
+
+
+## Lesson 7: STEERING_COL_TORQUE 는 플랫폼마다 의미가 다르다
+
+Route 0x49 (433dad5bb2) 분석 중 발견. 동일한 CAN 시그널 이름
+(`STEERING_COL_TORQUE` / `carState.steeringTorque`) 이 플랫폼마다 다른 것을
+측정한다는 사실을 놓치면 드라이버 오버라이드 판정이 완전히 잘못된다.
+
+### 관측
+
+아이오닉 6 N (CCNC + CANFD_LKA_STEERING_ALT, **앵글 제어**), route 0x49,
+latActive=True 구간 ~116k 프레임:
+
+| 조건 | p50 | p75 | p90 | max |
+|------|-----|-----|-----|-----|
+| 가볍게 잡기만 (steeringPressed=False) | **36** | **92** | **184** | 601 |
+| 실제로 돌림 (steeringPressed=True) | 381 | 488 | 619 | 895 |
+
+토크 제어 차량 (예: 아이오닉 5 N) 에서는 같은 조건의 p90 이 한 자릿수
+~10 Nm 수준. 동일한 임계값 (DZ=25, Full=60/120) 을 그대로 쓰면 앵글 제어
+플랫폼은 **손만 올려도 full override** 로 판정.
+
+### 원인
+
+- 토크 제어 MDPS: `STEERING_COL_TORQUE` = 토션바 토크 ≈ 순수 드라이버 입력
+  (EPS 어시스트가 더해지기 **전**의 값).
+- 앵글 제어 MDPS: EPS 가 목표 각도로 휠을 돌릴 때 토션바에 걸리는
+  **반력** 이 같은 필드에 포함됨. 드라이버가 손을 얹지 않아도 커브
+  구간에서 100+ Nm 읽힘.
+
+### 영향
+
+`driver_torque_blend (DTB)` → `authority` → `aci_active_latched` →
+`LKAS_ANGLE_ACTIVE` 의 연쇄에서,
+- DTB=0.0 (완전 override) 판정: 47%
+- → authority=0 → latched=False → `LKAS_ANGLE_ACTIVE=1` (흰색 LFA 아이콘)
+- → MDPS 수동 → 스티어링 어시스트 미동작
+
+증상으로는:
+- A: LFA 아이콘 깜빡임 / 흰색으로 유지
+- B: ACC+LFA ON 인데도 스티어링 어시스트 안함
+- C: 차선 변경에서 authority 붕괴로 핸들 넘김 실패
+
+### 방지 규칙
+
+- 새로운 플랫폼이 `STEERING_COL_TORQUE` (또는 그에 상당하는 필드) 를
+  드라이버 오버라이드 판정에 쓸 때는 **반드시 실측 분포를 먼저 뽑아라**:
+  - `steeringPressed=False` (가볍게 잡기만) 구간의 p90
+  - `steeringPressed=True` (실제로 돌림) 구간의 p25
+  - 두 값 사이 간격이 DEADZONE ↔ FULL_OVERRIDE 사이에 와야 함.
+- 토크 제어 vs 앵글 제어 플랫폼은 **동일 상수를 공유하지 말 것**. 플래그
+  (`is_ccnc_angle_platform`) 로 분기해 별도 상수를 쓰는 것이 안전.
+- `STEER_THRESHOLD` (steeringPressed 판정 임계값) 은 이미 CAN-FD 기본
+  `250` 으로 높게 설정돼 있지만, 오버라이드 램프 임계값은 별도로
+  reviewed 되어야 한다.
+
+### 연관 수정
+
+- `opendbc_repo/opendbc/car/hyundai/values.py:135-137` —
+  `DRIVER_TORQUE_DEADZONE_ANGLE=100`, `FULL_OVERRIDE_LOW_V_ANGLE=300`,
+  `FULL_OVERRIDE_HIGH_V_ANGLE=500` 신설.
+- `opendbc_repo/opendbc/car/hyundai/carcontroller.py:339-352` —
+  `ccnc_lka_alt` 분기로 플랫폼별 상수 선택.
+- `opendbc_repo/opendbc/car/hyundai/carcontroller.py:393-403` —
+  블링커 감쇠를 `driver_torque_blend < 0.7` 조건부로 변경 (op 주도 LC
+  에서는 감쇠 없음).
+
+검증: 동일 route 시뮬레이션에서 DTB=0.0 비율 38.9% → 14.1%,
+DTB=1.0 비율 38.5% → 65.0% (tools/ioniq6n_route49_fix_verify.py).

@@ -336,12 +336,24 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # (driver turning wheel 90° at 30 km/h applies only 60-80 Nm) → MADS
     # kept fighting the driver. Lower the full-override torque at low v,
     # keep the higher value at highway for stability.
-    DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
+    # Route 0x49 discovery: on angle-control MDPS the reported column torque
+    # INCLUDES EPS reaction force during angle tracking. Light hand grip
+    # reads p50=36 / p90=184 Nm (not pure driver input like torque-control
+    # cars), so the torque-control thresholds flag every hand placement as
+    # full override. Branch on ccnc_lka_alt to use the wider angle-calibrated
+    # thresholds.
+    if ccnc_lka_alt:
+      DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
+      override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
+      override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
+    else:
+      DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
+      override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V
+      override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V
     full_override_torque = float(np.interp(v_ego_safe,
                                            [CarControllerParams.DRIVER_TORQUE_LOW_V_SPEED,
                                             CarControllerParams.DRIVER_TORQUE_HIGH_V_SPEED],
-                                           [CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V,
-                                            CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V]))
+                                           [override_low_v, override_high_v]))
     driver_abs_torque = abs(steer_torque_safe)
     override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
@@ -379,8 +391,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # re-arms the EPS actuator → the driver felt a tick when the wheel returned
     # to center at creep. Dual thresholds hold state through small wiggles.
     authority = driver_torque_blend * speed_blend if CC.latActive else 0.0
-    if blinker_on:
-      authority *= 0.2
+    # Route 0x49 finding: the old unconditional `authority *= 0.2` collapsed
+    # every op-led lane change (DTB≈1.0, blinker_on) to authority=0.2 which
+    # is below ACI_ENTER=0.30 → once latched=False the system could never
+    # re-enter until the blinker cleared. Attenuate only when the driver is
+    # actually fighting (driver_torque_blend < 0.7 → they pushed past the
+    # deadzone into the override ramp). Factor raised to 0.3 so that even
+    # with real override intent authority stays at ACI_ENTER boundary, not
+    # far below it.
+    if blinker_on and driver_torque_blend < 0.7:
+      authority *= 0.3
     ACI_ENTER = 0.30
     ACI_EXIT  = 0.05
     if CC.latActive:
