@@ -120,6 +120,22 @@ class CarControllerParams:
   DRIVER_TORQUE_LOW_V_SPEED  = 8.0    # m/s ≈ 29 km/h
   DRIVER_TORQUE_HIGH_V_SPEED = 15.0   # m/s ≈ 54 km/h
 
+  # Angle-control MDPS (Ioniq 6 N CCNC + CANFD_LKA_STEERING_ALT) reports
+  # STEERING_COL_TORQUE that INCLUDES EPS reaction force during angle tracking,
+  # not just driver input like torque-control cars. Route 0x49 (433dad5bb2)
+  # evidence on ~210k latActive frames:
+  #   - Light hand grip (steeringPressed=False): p50=36, p75=92, p90=184 Nm
+  #   - Active driver steering (steeringPressed=True): p50=381, p75=488, p90=619 Nm
+  # Torque-control thresholds (DZ=25, Full=60/120) flag normal hand placement
+  # as full override → 47% of latActive frames collapse to DTB=0.0 → authority
+  # collapse → aci_active_latched=False → white LFA icon + no assist.
+  # Angle-control thresholds widen the gap to cover EPS reaction: p90 light
+  # grip 184 ≪ 300 (low-v full override), while active-steering p25≈250 starts
+  # override ramp and p75≈488 reaches full override.
+  DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 300.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 500.0
+
   # Snap + grace-window re-engage for angle-control:
   #   - enter snap when override_factor > 0.95 for N frames →
   #     apply_angle_last follows actual wheel angle (stop MADS fighting).
