@@ -2,6 +2,8 @@
 import math
 from numbers import Number
 
+import numpy as np
+
 from cereal import car, log
 import cereal.messaging as messaging
 from openpilot.common.constants import CV
@@ -74,6 +76,39 @@ class Controls(ControlsExt):
       device_pose = Pose.from_live_pose(self.sm['livePose'])
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
 
+  def _lookahead_curvature(self, model_v2, v_ego):
+    """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance."""
+    fallback = model_v2.action.desiredCurvature
+
+    pos_x = model_v2.position.x
+    pos_y = model_v2.position.y
+    if len(pos_x) < 5:
+      return fallback
+
+    abs_curv = abs(fallback)
+    base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8], [0.05, 0.07, 0.09]))
+    boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.10]))
+    t_ahead = min(base_s + boost_s, 0.20)
+    dist_ahead = min(v_ego * t_ahead, 10.0)
+
+    if dist_ahead < 0.3:
+      return fallback
+
+    n = min(len(pos_x), 12)
+    x = np.array(pos_x[:n], dtype=np.float64)
+    y = np.array(pos_y[:n], dtype=np.float64)
+
+    if x[-1] < dist_ahead or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+      return fallback
+
+    try:
+      c = np.polyfit(x, y, 3)
+    except (np.linalg.LinAlgError, ValueError):
+      return fallback
+
+    curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
+    return float(curv) if np.isfinite(curv) else fallback
+
   def state_control(self):
     CS = self.sm['carState']
 
@@ -135,7 +170,7 @@ class Controls(ControlsExt):
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+    new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo) if CC.latActive else self.curvature
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
