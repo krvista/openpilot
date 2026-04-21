@@ -170,3 +170,7 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
+  mdpsSteeringAngle: float = auto_field()
+  mdpsLkaAngleActive: int = auto_field()
+  mdpsLkaAngleFault: bool = auto_field()
+  mdpsCounter: int = auto_field()

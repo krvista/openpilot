@@ -84,3 +84,8 @@ class CarStateExt:
     self.aBasis = cp.vl["TCS"]["aBasis"]
 
     ret_sp.speedLimit = self.update_speed_limit(cp, cp_cam) * speed_factor
+
+    ret_sp.mdpsSteeringAngle = cp.vl["MDPS"]["STEERING_ANGLE"]
+    ret_sp.mdpsLkaAngleActive = int(cp.vl["MDPS"]["LKA_ANGLE_ACTIVE"])
+    ret_sp.mdpsLkaAngleFault = cp.vl["MDPS"]["LKA_ANGLE_FAULT"] != 0
+    ret_sp.mdpsCounter = int(cp.vl["MDPS"]["COUNTER"])
