@@ -80,9 +80,11 @@ class Controls(ControlsExt):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance."""
     fallback = model_v2.action.desiredCurvature
 
+    # capnp _DynamicListReader does not support slicing, so use np.fromiter
     pos_x = model_v2.position.x
     pos_y = model_v2.position.y
-    if len(pos_x) < 5:
+    n = len(pos_x)
+    if n < 5:
       return fallback
 
     abs_curv = abs(fallback)
@@ -94,9 +96,9 @@ class Controls(ControlsExt):
     if dist_ahead < 0.3:
       return fallback
 
-    n = min(len(pos_x), 12)
-    x = np.array(pos_x[:n], dtype=np.float64)
-    y = np.array(pos_y[:n], dtype=np.float64)
+    n = min(n, 12)
+    x = np.fromiter((pos_x[i] for i in range(n)), dtype=np.float64, count=n)
+    y = np.fromiter((pos_y[i] for i in range(n)), dtype=np.float64, count=n)
 
     if x[-1] < dist_ahead or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
       return fallback
