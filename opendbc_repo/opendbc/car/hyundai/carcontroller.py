@@ -571,11 +571,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         raw_gain = max(speed_blend, 0.20) * self.aci_gain_ramp * driver_torque_factor * lon_comfort_factor
         target_aci_gain = float(np.clip(raw_gain, 0.10, CarControllerParams.ACI_GAIN_CEILING))
       else:
-        target_aci_gain = cam_aci_gain
-      # Asymmetric rate limit: decrease 3.5× faster (quick driver override yield)
-      effective_aci_gain = rate_limit(target_aci_gain, self.aci_gain_last,
-                                      CarControllerParams.ACI_GAIN_RATE_DOWN_50HZ,
-                                      CarControllerParams.ACI_GAIN_RATE_UP_50HZ)
+        target_aci_gain = 0.0  # panda safety: ACTIVE=1 requires gain=0
+      # Asymmetric rate limit (active→active only; active→passive is instant 0)
+      if steering_active:
+        effective_aci_gain = rate_limit(target_aci_gain, self.aci_gain_last,
+                                        CarControllerParams.ACI_GAIN_RATE_DOWN_50HZ,
+                                        CarControllerParams.ACI_GAIN_RATE_UP_50HZ)
+      else:
+        effective_aci_gain = 0.0
       # Quantize to DBC signal resolution
       q = CarControllerParams.ACI_GAIN_QUANT
       effective_aci_gain = round(effective_aci_gain / q) * q
