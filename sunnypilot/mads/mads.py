@@ -160,8 +160,16 @@ class ModularAssistiveDrivingSystem:
       if self.main_enabled_toggle:
         if CS.cruiseState.available and not self.selfdrive.CS_prev.cruiseState.available:
           self.events_sp.add(EventNameSP.lkasEnable)
-        elif self._boot_enable_pending and CS.cruiseState.available and not self.enabled:
-          self.events_sp.add(EventNameSP.silentLkasEnable)
+      # Boot-enable: retry silently every frame until MADS engages.
+      # Separated from main_enabled_toggle so it fires regardless of
+      # MadsMainCruiseAllowed — covers the race condition where vehicle
+      # boots before comma (cruiseState.available already True, rising
+      # edge fires during NO_ENTRY window and is never retried).
+      # For allow_always platforms (CANFD Hyundai), this guarantees MADS
+      # auto-enables on boot even if MadsMainCruiseAllowed=False.
+      if self._boot_enable_pending and CS.cruiseState.available and not self.enabled and \
+         (self.main_enabled_toggle or self.allow_always):
+        self.events_sp.add(EventNameSP.silentLkasEnable)
 
     for be in CS.buttonEvents:
       if be.type == ButtonType.cancel:
