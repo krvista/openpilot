@@ -105,6 +105,15 @@ class CarControllerParams:
   # Filters model curvature noise before angle conversion.  Set to 0 to disable.
   CURV_LPF_TAU = 0.20
 
+  # Longitudinal-aware lateral comfort: modulate ACIGain and curvature LPF
+  # tau based on measured vehicle acceleration (CS.out.aEgo).  During hard
+  # braking/accel the MDPS smooths lateral commands more (lower ACIGain) and
+  # the curvature filter increases (higher tau) to reduce composite jolt.
+  LON_COMFORT_ACCEL_BP = [1.0, 2.5, 4.0]           # |aEgo| m/s²
+  LON_COMFORT_GAIN_V   = [1.0, 0.7, 0.5]           # ACIGain multiplier
+  CURV_LPF_TAU_BRAKE_BP = [-4.0, -2.5, -1.0]       # aEgo m/s² (braking only)
+  CURV_LPF_TAU_BRAKE_V  = [0.40, 0.30, CURV_LPF_TAU]  # seconds
+
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
   # applies only 60-80 Nm torque, never reaching the old fixed 150 Nm
