@@ -327,6 +327,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
     steer_angle_safe = float(CS.out.steeringAngleDeg) if np.isfinite(CS.out.steeringAngleDeg) else 0.0
     steer_torque_safe = float(CS.out.steeringTorque) if np.isfinite(CS.out.steeringTorque) else 0.0
+    lon_accel = float(CS.out.aEgo) if np.isfinite(CS.out.aEgo) else 0.0
     op_curv_raw = float(CC.actuators.steeringAngleDeg)
     op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
     speed_blend = float(np.clip((v_ego_safe - ACI_SPEED_ZERO_MS) /
@@ -450,7 +451,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Applied on the LatControlAngle-converted angle (op_curv_safe) which
       # already includes roll compensation and speed-dependent VM factors.
       # LPF on angle ≡ LPF on curvature for near-linear conversions.
-      curv_tau = CarControllerParams.CURV_LPF_TAU
+      curv_tau_base = CarControllerParams.CURV_LPF_TAU
+      if lon_accel < -1.0:
+        curv_tau = float(np.interp(lon_accel, CarControllerParams.CURV_LPF_TAU_BRAKE_BP,
+                                   CarControllerParams.CURV_LPF_TAU_BRAKE_V))
+      else:
+        curv_tau = curv_tau_base
       if CC.latActive and curv_tau > 0.001:
         alpha_curv = LPF_DT / (curv_tau + LPF_DT)
         self.curv_lpf = alpha_curv * op_curv_safe + (1.0 - alpha_curv) * self.curv_lpf
@@ -529,7 +535,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              aci_active=self.aci_active_latched,
                                                              aci_gain_ramp=self.aci_gain_ramp,
                                                              in_passthrough=in_passthrough,
-                                                             mads_lka_icon=mads_lka_icon))
+                                                             mads_lka_icon=mads_lka_icon,
+                                                             lon_accel=lon_accel))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):

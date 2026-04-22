@@ -3,7 +3,7 @@ import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.crc import CRC16_XMODEM
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import CarControllerParams, HyundaiFlags
 from opendbc.sunnypilot.car.hyundai.lead_data_ext import CanFdLeadData
 
 
@@ -41,7 +41,7 @@ class CanBus(CanBusBase):
 def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
                              aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
-                             mads_lka_icon=None):
+                             mads_lka_icon=None, lon_accel=0.0):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
@@ -113,8 +113,11 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # responsive. At highway: full gain. During override (DTB→0): gain
       # approaches floor 0.10 — MDPS applies minimal effort the driver
       # easily overcomes.
+      lon_comfort_factor = float(np.interp(abs(lon_accel),
+                                          CarControllerParams.LON_COMFORT_ACCEL_BP,
+                                          CarControllerParams.LON_COMFORT_GAIN_V))
       if steering_active:
-        raw_gain = max(speed_blend, 0.20) * aci_gain_ramp * driver_torque_blend
+        raw_gain = max(speed_blend, 0.20) * aci_gain_ramp * driver_torque_blend * lon_comfort_factor
         effective_aci_gain = max(raw_gain, 0.10)
       else:
         effective_aci_gain = cam_aci_gain
