@@ -384,32 +384,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.override_exit_cnt = 0
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
-    # ---- Hysteresis on ACI engagement (fixes residual low-speed tick) ----
-    # The old single-threshold `aci_active = authority > 0.05` flipped
-    # LKAS_ANGLE_ACTIVE (1↔2) and LKA_ASSIST (0↔1) in a single 20 ms frame at
-    # the boundary. ADAS ECU observes the flip as a mode change and briefly
-    # re-arms the EPS actuator → the driver felt a tick when the wheel returned
-    # to center at creep. Dual thresholds hold state through small wiggles.
-    authority = driver_torque_blend * speed_blend if CC.latActive else 0.0
-    # Route 0x49 finding: the old unconditional `authority *= 0.2` collapsed
-    # every op-led lane change (DTB≈1.0, blinker_on) to authority=0.2 which
-    # is below ACI_ENTER=0.30 → once latched=False the system could never
-    # re-enter until the blinker cleared. Attenuate only when the driver is
-    # actually fighting (driver_torque_blend < 0.7 → they pushed past the
-    # deadzone into the override ramp). Factor raised to 0.3 so that even
-    # with real override intent authority stays at ACI_ENTER boundary, not
-    # far below it.
-    if blinker_on and driver_torque_blend < 0.7:
-      authority *= 0.3
-    ACI_ENTER = 0.30
-    ACI_EXIT  = 0.05
-    if CC.latActive:
-      if authority >= ACI_ENTER:
-        self.aci_active_latched = True
-      elif authority < ACI_EXIT:
-        self.aci_active_latched = False
+    # ---- ACI engagement: always-active for angle-control platforms ----
+    # Angle-control MDPS: LKAS_ANGLE_ACTIVE=2 whenever latActive=True.
+    # The hysteresis (authority enter/exit thresholds) that previously gated
+    # the binary ACTIVE flag caused 23.9% of latActive frames to drop to
+    # steering_active=False on route 0x49. Instead, ACIGain handles all
+    # smooth modulation (speed, driver torque, blinker) while the ACTIVE
+    # flag stays stable. MDPS's own internal safety limits handle edge cases.
+    if ccnc_lka_alt:
+      self.aci_active_latched = bool(CC.latActive)
     else:
-      self.aci_active_latched = False
+      authority = driver_torque_blend * speed_blend if CC.latActive else 0.0
+      if blinker_on and driver_torque_blend < 0.7:
+        authority *= 0.3
+      ACI_ENTER = 0.30
+      ACI_EXIT  = 0.05
+      if CC.latActive:
+        if authority >= ACI_ENTER:
+          self.aci_active_latched = True
+        elif authority < ACI_EXIT:
+          self.aci_active_latched = False
+      else:
+        self.aci_active_latched = False
 
     # Camera passthrough latch: engage passthrough when clearly not driving
     # (not lat_active AND driver has the wheel). Dual threshold on
@@ -530,7 +526,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
                                                              speed_blend=speed_blend,
-                                                             aci_active=self.aci_active_latched and not cam_stale,
+                                                             aci_active=self.aci_active_latched,
                                                              aci_gain_ramp=self.aci_gain_ramp,
                                                              in_passthrough=in_passthrough,
                                                              mads_lka_icon=mads_lka_icon))

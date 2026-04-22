@@ -79,33 +79,14 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     # but the emitted frame always goes through the dict construction
     # below.
 
-    # Gradient ACI authority: blend based on driver torque, turn signal, and
-    # speed. driver_torque_blend=1.0 means full ACI; 0.0 means none (driver
-    # fully in control). speed_blend smoothly fades authority to 0 as speed
-    # approaches zero, avoiding the discontinuous kick at the 3 km/h boundary.
-    authority = driver_torque_blend * speed_blend if lat_active else 0.0
-    if blinker_on:
-      authority *= 0.2  # large gain reduction during turn signals (natural lane change feel)
-
-    # aci_active drives the angle-control signaling to ADAS DRV. With hysteresis
-    # (passed in from carcontroller), LKAS_ANGLE_ACTIVE / LKA_ASSIST / LKAS_BYTE7
-    # signals stop binary-flipping at the authority boundary — the ADAS ECU sees
-    # a stable engagement state across small authority wiggles at creep speeds.
-    if aci_active is None:
-      # Legacy path: single threshold (no hysteresis). Kept for safety.
-      aci_active = lat_active and authority > 0.05
-
-    # SINGLE SOURCE OF TRUTH for "op is actively commanding steering".
-    # ALL ACI-related signals (binary activation bits + gain + angle) must
-    # be driven by the same boolean. Routes 3a/32/34 on ccnc-port-prebuilt
-    # proved that ANY mismatch between activation indicators and
-    # ADAS_ACIAnglTqRedcGainVal — e.g. LKAS_ANGLE_ACTIVE=1 while
-    # ACIGain=0 — triggers the SCC/ADAS fault detector and cascades to
-    # ACCEnable=3 + 6 cluster warnings + ADAS shutdown. The
-    # speed_blend > 0.1 guard forces full passthrough below ~1.3 km/h so
-    # the `aci_active` hysteresis can't produce a transient partial state
-    # during creep.
-    steering_active = bool(lat_active) and bool(aci_active) and speed_blend > 0.1
+    # Always-active strategy: when latActive=True, always signal ACTIVE=2
+    # to MDPS. The five intermediate gates (authority hysteresis, cam_stale,
+    # speed_blend, blinker attenuation) that previously controlled the binary
+    # ACTIVE flag caused intermittent dropouts (route 0x49: 23.9% of
+    # latActive frames had steering_active=False). Instead, modulate effort
+    # via ACIGain continuously (0.0-1.0) while keeping ACTIVE=2 stable.
+    # MDPS's internal safety limits handle edge cases (standstill, override).
+    steering_active = bool(lat_active)
 
     if mads_lka_icon is not None:
       icon_value = mads_lka_icon
@@ -125,11 +106,16 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # authority floor (0.15) so MDPS still recognises openpilot as the
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      # Effective gain: when steering, ramp with speed_blend (0.15 floor
-      # prevents the 1.0-snap tick at the ACI-engage edge); when passive,
-      # mirror camera's gain verbatim (0 in practice).
+      # Effective gain: continuous modulation while ACTIVE=2. Speed, ramp,
+      # and driver torque all reduce gain smoothly; absolute floor of 0.10
+      # prevents gain=0 which MDPS could interpret as "no command".
+      # At standstill (speed_blend=0): floor 0.20 keeps MDPS minimally
+      # responsive. At highway: full gain. During override (DTB→0): gain
+      # approaches floor 0.10 — MDPS applies minimal effort the driver
+      # easily overcomes.
       if steering_active:
-        effective_aci_gain = max(speed_blend * aci_gain_ramp, 0.15) * driver_torque_blend
+        raw_gain = max(speed_blend, 0.20) * aci_gain_ramp * driver_torque_blend
+        effective_aci_gain = max(raw_gain, 0.10)
       else:
         effective_aci_gain = cam_aci_gain
 
@@ -139,15 +125,9 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # when inactive) could briefly disagree with the camera's frame.
       effective_angle = apply_angle if steering_active else lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
 
-      # Masterplan Phase 3: suppress camera's takeover-request signals
-      # while op is actively steering. The stock LFA camera raises
-      # LKA_WARNING and FCA_SYSWARN whenever it loses confidence —
-      # including moderate corners (>10° → 36% dropout, >20° → 76%).
-      # The CCNC cluster reads these bits to drive the "take over
-      # immediately" audible + visual alert. When op is driving with
-      # its own model-based plan (3-10× better MAE than camera at every
-      # speed bucket), these camera warnings are false positives that
-      # destroy the driving experience. Suppress them.
+      # Suppress camera takeover-request signals while op is actively steering.
+      # The stock camera raises LKA_WARNING and FCA_SYSWARN in moderate corners
+      # — false positives when op has its own model-based plan.
       lka_warning_out = 0 if steering_active else lkas_alt_cam_msg["LKA_WARNING"]
       fca_syswarn_out = 0 if steering_active else lkas_alt_cam_msg["FCA_SYSWARN"]
 
@@ -188,7 +168,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKA_MODE": 0,
         "LKA_AVAILABLE": 0,
         "LKA_WARNING": 0,
-        "LKA_ICON": 2 if icon_green else 1,
+        "LKA_ICON": 2 if lat_active else 1,
         "FCA_SYSWARN": 0,
         "TORQUE_REQUEST": 0,
         "STEER_REQ": 0,
