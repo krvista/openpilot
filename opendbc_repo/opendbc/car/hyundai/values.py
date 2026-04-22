@@ -117,10 +117,10 @@ class CarControllerParams:
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
   # increase so driver override yields quickly while re-engagement is smooth.
   # Scaled from HDA1's -0.014/+0.004 @ 100Hz to our 50Hz TX cadence.
-  ACI_GAIN_RATE_DOWN_50HZ = -0.028   # per frame @ 50Hz (= -1.4/s)
-  ACI_GAIN_RATE_UP_50HZ   =  0.008   # per frame @ 50Hz (= +0.4/s)
+  ACI_GAIN_RATE_DOWN_50HZ = -0.07    # per frame @ 50Hz (= -3.5/s, 0.8→0 in 0.23s)
+  ACI_GAIN_RATE_UP_50HZ   =  0.008   # per frame @ 50Hz (= +0.4/s, 0→0.8 in 2.0s)
   ACI_GAIN_QUANT           =  0.004   # DBC signal resolution for ADAS_ACIAnglTqRedcGainVal
-  ACI_GAIN_CEILING         =  0.5    # steady-state max; stock cam always sends 0.000
+  ACI_GAIN_CEILING         =  0.8    # steady-state max; stock cam always sends 0.000
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
