@@ -176,6 +176,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.suppress_lfa_counter = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
+    self._cc_sp = CC_SP
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
     MadsCarController.update(self, self.CP, CC, CC_SP, self.frame)
@@ -549,8 +550,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Issue 3: MADS-driven LKA_ICON for LKAS_ALT message.
     # When cruiseState.available (ACC main on): reflect MADS state (green/off).
     # When ACC main off: None → camera passthrough (stock LFA icon).
+    mads_enabled = getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled
     if ccnc_lka_alt and CS.out.cruiseState.available:
-      mads_lka_icon = 2 if CC.latActive else 0
+      mads_lka_icon = 2 if mads_enabled else 0
     else:
       mads_lka_icon = None
 
@@ -561,13 +563,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     effective_aci_gain = None
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      steering_active = bool(CC.latActive)
+      steering_active = bool(CC.latActive) and not self.override_snapped and apply_steer_req
       lon_comfort_factor = float(np.interp(abs(lon_accel),
                                            CarControllerParams.LON_COMFORT_ACCEL_BP,
                                            CarControllerParams.LON_COMFORT_GAIN_V))
       if steering_active:
         raw_gain = max(speed_blend, 0.20) * self.aci_gain_ramp * driver_torque_factor * lon_comfort_factor
-        target_aci_gain = max(raw_gain, 0.10)
+        target_aci_gain = float(np.clip(raw_gain, 0.10, CarControllerParams.ACI_GAIN_CEILING))
       else:
         target_aci_gain = cam_aci_gain
       # Asymmetric rate limit: decrease 3.5× faster (quick driver override yield)
@@ -579,8 +581,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       effective_aci_gain = round(effective_aci_gain / q) * q
       self.aci_gain_last = effective_aci_gain
 
+    effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req) if ccnc_lka_alt else apply_steer_req
     if not ccnc_lka_alt or self.frame % 2 == 0:
-      can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
+      can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                              driver_torque_blend=driver_torque_blend,
                                                              blinker_on=blinker_on,
@@ -635,9 +638,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # HOD (hands-on detection) bypass on HDA2-ALT + CCNC. TX 0x208 on
     # E-CAN at 10 Hz with GRIP_STRONG to keep the hands-off timer reset.
-    # Active whenever MADS is providing lateral control (CC.latActive).
-    # Disabled when latActive=False so stock HOD works during manual driving.
-    if ccnc_lka_alt and self.frame % 10 == 0 and CC.latActive:
+    # Active whenever MADS is enabled (not just latActive) — prevents
+    # hands-on warning during transient latActive=False (driver override,
+    # low-speed passthrough). Disabled only when MADS is fully OFF.
+    if ccnc_lka_alt and self.frame % 10 == 0 and mads_enabled:
       can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
       self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
 
