@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs, rate_limit
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -62,6 +62,24 @@ JITTER_FRAMES = 20        # ~400ms at 50 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
 
+def compute_driver_torque_factor(steering_torque, v_ego, lat_active):
+  """538K-frame drivelog-calibrated 4-breakpoint speed-dependent torque→factor.
+  Returns [0.0, 1.0]: 1.0 = no driver override, 0.0 = full override.
+  For angle-control MDPS where reported column torque includes EPS reaction."""
+  if not lat_active:
+    return 0.0
+  bp1 = float(np.interp(v_ego, [3., 8., 15., 22.], [200., 220., 175., 80.]))
+  bp2 = float(np.interp(v_ego, [3., 8., 15., 22.], [300., 280., 260., 200.]))
+  bp3 = float(np.interp(v_ego, [3., 8., 15., 22.], [380., 330., 290., 290.]))
+  bp4 = float(np.interp(v_ego, [3., 8., 15., 22.], [500., 470., 420., 400.]))
+  ceiling = 1.0
+  shelf = float(np.interp(v_ego, [3., 22.], [0.65, 0.80]))
+  floor = float(np.interp(v_ego, [3., 22.], [0.15, 0.35]))
+  return float(np.interp(abs(steering_torque),
+                          [bp1, bp2, bp3, bp4],
+                          [ceiling, shelf, shelf, floor]))
+
+
 def process_hud_alert(enabled, fingerprint, hud_control):
   sys_warning = (hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw))
 
@@ -115,10 +133,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.aci_active_latched = False
     self.passthrough_latched = False
     self.aci_gain_ramp = 0.0
+    self.aci_gain_last = 0.0
     self.low_speed_cam_latched = False
     # Phase 4-A: vehicle model for VM-based jerk/accel limiting
     if is_ccnc_angle_platform(CP.flags):
       self.VM = VehicleModel(CP)
+      from opendbc.car.hyundai.interface import CarInterface
+      baseline_cp = CarInterface.get_non_essential_params("KIA_SPORTAGE_5TH_GEN")
+      self.BASELINE_VM = VehicleModel(baseline_cp)
     # Phase 4-B: low-speed LPF state
     self.lpf_angle_last = 0.0
     # Phase 6: curvature LPF state (filters model noise before conversion)
@@ -383,6 +405,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.override_snapped = False
       self.override_enter_cnt = 0
       self.override_exit_cnt = 0
+      self.aci_gain_last = 0.0
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     # ---- ACI engagement: always-active for angle-control platforms ----
@@ -500,6 +523,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle_deg, self.apply_angle_last, v_ego_safe,
         steer_angle_safe, rate_lat_active, self.params, self.VM,
       )
+      # Dual VM: clamp to baseline model limits (panda angle safety prep)
+      self.apply_angle_last = apply_steer_angle_limits_vm(
+        self.apply_angle_last, self.apply_angle_last, v_ego_safe,
+        steer_angle_safe, rate_lat_active, self.params, self.BASELINE_VM,
+      )
 
       # Phase 4-B addendum: stuck-angle jitter break (VW HCA pattern)
       if rate_lat_active:
@@ -526,6 +554,31 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
+    # ACIGain: compute in carcontroller for rate limiting / quantization.
+    # Use 4-breakpoint driver torque factor for CCNC angle (richer than linear blend).
+    driver_torque_factor = compute_driver_torque_factor(steer_torque_safe, v_ego_safe, CC.latActive) \
+                           if ccnc_lka_alt else driver_torque_blend
+    effective_aci_gain = None
+    if ccnc_lka_alt and lkas_alt_cam_msg is not None:
+      cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
+      steering_active = bool(CC.latActive)
+      lon_comfort_factor = float(np.interp(abs(lon_accel),
+                                           CarControllerParams.LON_COMFORT_ACCEL_BP,
+                                           CarControllerParams.LON_COMFORT_GAIN_V))
+      if steering_active:
+        raw_gain = max(speed_blend, 0.20) * self.aci_gain_ramp * driver_torque_factor * lon_comfort_factor
+        target_aci_gain = max(raw_gain, 0.10)
+      else:
+        target_aci_gain = cam_aci_gain
+      # Asymmetric rate limit: decrease 3.5× faster (quick driver override yield)
+      effective_aci_gain = rate_limit(target_aci_gain, self.aci_gain_last,
+                                      CarControllerParams.ACI_GAIN_RATE_DOWN_50HZ,
+                                      CarControllerParams.ACI_GAIN_RATE_UP_50HZ)
+      # Quantize to DBC signal resolution
+      q = CarControllerParams.ACI_GAIN_QUANT
+      effective_aci_gain = round(effective_aci_gain / q) * q
+      self.aci_gain_last = effective_aci_gain
+
     if not ccnc_lka_alt or self.frame % 2 == 0:
       can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
                                                              apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
@@ -536,7 +589,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                              aci_gain_ramp=self.aci_gain_ramp,
                                                              in_passthrough=in_passthrough,
                                                              mads_lka_icon=mads_lka_icon,
-                                                             lon_accel=lon_accel))
+                                                             lon_accel=lon_accel,
+                                                             effective_aci_gain=effective_aci_gain))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):

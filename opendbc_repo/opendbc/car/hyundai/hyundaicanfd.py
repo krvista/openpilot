@@ -41,7 +41,7 @@ class CanBus(CanBusBase):
 def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
                              aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
-                             mads_lka_icon=None, lon_accel=0.0):
+                             mads_lka_icon=None, lon_accel=0.0, effective_aci_gain=None):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
@@ -106,21 +106,17 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # authority floor (0.15) so MDPS still recognises openpilot as the
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
-      # Effective gain: continuous modulation while ACTIVE=2. Speed, ramp,
-      # and driver torque all reduce gain smoothly; absolute floor of 0.10
-      # prevents gain=0 which MDPS could interpret as "no command".
-      # At standstill (speed_blend=0): floor 0.20 keeps MDPS minimally
-      # responsive. At highway: full gain. During override (DTB→0): gain
-      # approaches floor 0.10 — MDPS applies minimal effort the driver
-      # easily overcomes.
-      lon_comfort_factor = float(np.interp(abs(lon_accel),
-                                          CarControllerParams.LON_COMFORT_ACCEL_BP,
-                                          CarControllerParams.LON_COMFORT_GAIN_V))
-      if steering_active:
-        raw_gain = max(speed_blend, 0.20) * aci_gain_ramp * driver_torque_blend * lon_comfort_factor
-        effective_aci_gain = max(raw_gain, 0.10)
-      else:
-        effective_aci_gain = cam_aci_gain
+      # Gain pre-computed by carcontroller (with rate limit + quantization).
+      # Fallback: compute inline if caller didn't supply it.
+      if effective_aci_gain is None:
+        lon_comfort_factor = float(np.interp(abs(lon_accel),
+                                            CarControllerParams.LON_COMFORT_ACCEL_BP,
+                                            CarControllerParams.LON_COMFORT_GAIN_V))
+        if steering_active:
+          raw_gain = max(speed_blend, 0.20) * aci_gain_ramp * driver_torque_blend * lon_comfort_factor
+          effective_aci_gain = max(raw_gain, 0.10)
+        else:
+          effective_aci_gain = cam_aci_gain
 
       # Angle command: when not steering, mirror camera's advisory so ADAS
       # DRV sees no delta from op's side. This closes the remaining window
