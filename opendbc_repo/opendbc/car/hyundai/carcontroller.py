@@ -15,6 +15,7 @@ from opendbc.sunnypilot.car.hyundai.icbm import IntelligentCruiseButtonManagemen
 from opendbc.sunnypilot.car.hyundai.longitudinal.controller import LongitudinalController
 from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadDataCarController
 from opendbc.sunnypilot.car.hyundai.mads import MadsCarController
+from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -174,6 +175,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # camera-TX rate vs our frame%5==0 downsample. Wraps at 256, well above
     # any realistic continuity-watchdog window.
     self.suppress_lfa_counter = 0
+    self.prev_fault_lfa = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -591,6 +593,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       q = CarControllerParams.ACI_GAIN_QUANT
       effective_aci_gain = round(effective_aci_gain / q) * q
       self.aci_gain_last = effective_aci_gain
+
+    if ccnc_lka_alt:
+      fault_lfa = getattr(CS, 'fault_lfa', 0)
+      if fault_lfa and not self.prev_fault_lfa:
+        cloudlog.warning(
+          f"FAULT_LFA onset: cam_stale={cam_stale} aci_active={self.aci_active_latched} "
+          f"gain={effective_aci_gain:.3f} speed_blend={speed_blend:.2f} "
+          f"steer_angle={steer_angle_safe:.1f} op_angle={op_curv_safe:.1f} "
+          f"lat_active={CC.latActive} override={self.override_snapped} "
+          f"cam_counter={self.cam_msg_last_counter} fault_das={getattr(CS, 'fault_das', 0)}"
+        )
+      elif not fault_lfa and self.prev_fault_lfa:
+        cloudlog.warning("FAULT_LFA cleared")
+      self.prev_fault_lfa = fault_lfa
 
     effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req) if ccnc_lka_alt else apply_steer_req
     if not ccnc_lka_alt or self.frame % 2 == 0:
