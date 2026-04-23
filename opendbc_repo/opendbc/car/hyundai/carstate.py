@@ -65,6 +65,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
 
     self.cruise_info = {}
     self.msg_161, self.msg_162, self.msg_1b5 = {}, {}, {}
+    self.fault_lfa = 0
+    self.fault_das = 0
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -357,6 +359,11 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if self.CP.openpilotLongitudinalControl:
       ret.cruiseState.available = self.get_main_cruise(ret)
 
+    if (self.CP.flags & HyundaiFlags.CCNC) and (self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT):
+      ccnc_162 = cp.vl["CCNC_0x162"]
+      self.fault_lfa = int(ccnc_162["FAULT_LFA"])
+      self.fault_das = int(ccnc_162["FAULT_DAS"])
+
     CarStateExt.update_canfd_ext(self, ret, ret_sp, can_parsers, speed_factor)
 
     ret.blockPcmEnable = not self.recent_button_interaction()
@@ -377,6 +384,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     # Register them here so we can disable counter checking before CarState accesses them.
     if CP.flags & HyundaiFlags.CCNC:
       msgs += [("ACCELERATOR", 50), ("MANUAL_SPEED_LIMIT_ASSIST", 5)]
+      if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+        msgs += [("CCNC_0x162", 20)]
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
@@ -384,7 +393,10 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     }
 
     if CP.flags & HyundaiFlags.CCNC:
-      for addr in [0x35, 0x2E0]:  # ACCELERATOR, MANUAL_SPEED_LIMIT_ASSIST
+      skip_addrs = [0x35, 0x2E0]  # ACCELERATOR, MANUAL_SPEED_LIMIT_ASSIST
+      if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+        skip_addrs.append(0x162)  # CCNC_0x162
+      for addr in skip_addrs:
         if addr in parsers[Bus.pt].message_states:
           parsers[Bus.pt].message_states[addr].ignore_counter = True
           parsers[Bus.pt].message_states[addr].ignore_alive = True
