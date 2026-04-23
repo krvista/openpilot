@@ -520,15 +520,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                         self.apply_angle_last + per_step_cap))
 
       # Phase 4-A: VM-based jerk/accel limiter (replaces v1 rate table)
-      self.apply_angle_last = apply_steer_angle_limits_vm(
+      apply_angle = apply_steer_angle_limits_vm(
         desired_angle_deg, self.apply_angle_last, v_ego_safe,
         steer_angle_safe, rate_lat_active, self.params, self.VM,
       )
       # Dual VM: clamp to baseline model limits (panda angle safety prep)
-      self.apply_angle_last = apply_steer_angle_limits_vm(
-        self.apply_angle_last, self.apply_angle_last, v_ego_safe,
-        steer_angle_safe, rate_lat_active, self.params, self.BASELINE_VM,
-      )
+      if apply_angle is not None:
+        apply_angle = apply_steer_angle_limits_vm(
+          apply_angle, self.apply_angle_last, v_ego_safe,
+          steer_angle_safe, rate_lat_active, self.params, self.BASELINE_VM,
+        )
+      # Failsafe: VM detected unavoidable safety violation — fall back to
+      # current wheel angle with zero gain to prevent panda TX block.
+      if apply_angle is None:
+        self.apply_angle_last = steer_angle_safe
+        apply_steer_req = False
+      else:
+        self.apply_angle_last = apply_angle
 
       # Phase 4-B addendum: stuck-angle jitter break (VW HCA pattern)
       if rate_lat_active:
