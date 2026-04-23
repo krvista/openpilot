@@ -326,7 +326,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # carstate does copy.copy(cp_cam.vl["LKAS_ALT"]) every frame, so the
     # dict identity cannot indicate freshness — only the camera-driven
     # COUNTER does. If COUNTER doesn't change for CAM_STALE_FRAMES (≥ 25
-    # frames ≈ 500 ms at 50 Hz), treat camera as dropped and force
+    # frames ≈ 250 ms at 100 Hz), treat camera as dropped and force
     # steering_active=False in the packer.
     CAM_STALE_FRAMES = 25
     cam_stale = False
@@ -554,9 +554,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.jitter_counter = 0
         self.lpf_angle_last = steer_angle_safe
 
-    # Steering message TX: 50 Hz on the HDA2-ALT + CCNC angle-control
-    # platform (matching Toyota/Tesla/Nissan), 100 Hz for other Hyundai
-    # CAN FD cars (torque-based, unchanged).
+    # Steering message TX: 100 Hz for all CAN FD platforms.
+    # CCNC angle-control was originally 50 Hz (frame%2), but rlog analysis
+    # (route 0x4e) proved the camera sends at 100 Hz and ADAS DRV expects
+    # that rate — the 50 Hz stream caused intermittent FAULT_LFA (3 episodes
+    # per 30-min drive). Rate limiter/LPF still runs at 50 Hz (line 475);
+    # the 100 Hz TX simply repeats the last computed angle on odd frames.
     # Issue 3: MADS-driven LKA_ICON for LKAS_ALT message.
     # When cruiseState.available (ACC main on): reflect MADS state (green/off).
     # When ACC main off: None → camera passthrough (stock LFA icon).
@@ -609,18 +612,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.prev_fault_lfa = fault_lfa
 
     effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req) if ccnc_lka_alt else apply_steer_req
-    if not ccnc_lka_alt or self.frame % 2 == 0:
-      can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
-                                                             apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
-                                                             driver_torque_blend=driver_torque_blend,
-                                                             blinker_on=blinker_on,
-                                                             speed_blend=speed_blend,
-                                                             aci_active=self.aci_active_latched,
-                                                             aci_gain_ramp=self.aci_gain_ramp,
-                                                             in_passthrough=in_passthrough,
-                                                             mads_lka_icon=mads_lka_icon,
-                                                             lon_accel=lon_accel,
-                                                             effective_aci_gain=effective_aci_gain))
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
+                                                         apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
+                                                         driver_torque_blend=driver_torque_blend,
+                                                         blinker_on=blinker_on,
+                                                         speed_blend=speed_blend,
+                                                         aci_active=self.aci_active_latched,
+                                                         aci_gain_ramp=self.aci_gain_ramp,
+                                                         in_passthrough=in_passthrough,
+                                                         mads_lka_icon=mads_lka_icon,
+                                                         lon_accel=lon_accel,
+                                                         effective_aci_gain=effective_aci_gain))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
