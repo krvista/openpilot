@@ -103,7 +103,7 @@ class CarControllerParams:
   # MAE analysis (9 routes, 1.66M frames, 56-combo 2D sweep) showed τ=0.20
   # is optimal: MAE_all −9.2%, sharp-curve MAE −8%, no regression.
   # Filters model curvature noise before angle conversion.  Set to 0 to disable.
-  CURV_LPF_TAU = 0.20
+  CURV_LPF_TAU = 0.35
 
   # Longitudinal-aware lateral comfort: modulate ACIGain and curvature LPF
   # tau based on measured vehicle acceleration (CS.out.aEgo).  During hard

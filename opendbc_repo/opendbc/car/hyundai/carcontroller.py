@@ -51,8 +51,8 @@ LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 # Suppresses planner noise that the MDPS 4°/s quantized sensor amplifies
 # into perceivable jerk. Ford-inspired exponential smoothing with
 # speed-dependent tau: max at standstill, fades to 0 at 15 km/h.
-LOWSPEED_LPF_TAU_BP = [0.0, 4.17]   # m/s: 0, 15 km/h
-LOWSPEED_LPF_TAU_V  = [0.16, 0.0]   # seconds: 160ms at 0, 0 at 15 km/h
+LOWSPEED_LPF_TAU_BP = [0.0, 5.56]   # m/s: 0, 20 km/h (was 15 km/h)
+LOWSPEED_LPF_TAU_V  = [0.35, 0.0]   # seconds: 350ms at 0 (was 160ms), 0 at 20 km/h
 LPF_DT = DT_CTRL * 2                # 20 ms (50 Hz TX cadence)
 
 # Phase 4-B addendum: VW-inspired stuck-angle jitter break.
@@ -176,6 +176,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # any realistic continuity-watchdog window.
     self.suppress_lfa_counter = 0
     self.prev_fault_lfa = 0
+    self.was_in_reverse = False
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -483,6 +484,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                    CarControllerParams.CURV_LPF_TAU_BRAKE_V))
       else:
         curv_tau = curv_tau_base
+      curv_delta = abs(op_curv_safe - self.curv_lpf)
+      curv_tau += min(curv_delta / 10.0, 1.0) * 0.30
       if CC.latActive and curv_tau > 0.001:
         alpha_curv = LPF_DT / (curv_tau + LPF_DT)
         self.curv_lpf = alpha_curv * op_curv_safe + (1.0 - alpha_curv) * self.curv_lpf
@@ -611,7 +614,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         cloudlog.warning("FAULT_LFA cleared")
       self.prev_fault_lfa = fault_lfa
 
-    effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req) if ccnc_lka_alt else apply_steer_req
+    if ccnc_lka_alt:
+      if CS.out.gearShifter == structs.CarState.GearShifter.reverse:
+        self.was_in_reverse = True
+      if self.was_in_reverse and CS.out.vEgo > 10 * CV.KPH_TO_MS:
+        self.was_in_reverse = False
+
+    effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req and not self.was_in_reverse) if ccnc_lka_alt else apply_steer_req
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                          driver_torque_blend=driver_torque_blend,
