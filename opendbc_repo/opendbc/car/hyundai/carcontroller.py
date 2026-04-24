@@ -53,7 +53,7 @@ LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 # speed-dependent tau: max at standstill, fades to 0 at 15 km/h.
 LOWSPEED_LPF_TAU_BP = [0.0, 5.56]   # m/s: 0, 20 km/h (was 15 km/h)
 LOWSPEED_LPF_TAU_V  = [0.35, 0.0]   # seconds: 350ms at 0 (was 160ms), 0 at 20 km/h
-LPF_DT = DT_CTRL * 2                # 20 ms (50 Hz TX cadence)
+LPF_DT = DT_CTRL                    # 10 ms (100 Hz — matches actual TX rate)
 
 # Phase 4-B addendum: VW-inspired stuck-angle jitter break.
 # If apply_angle hasn't changed by > JITTER_DEADBAND for JITTER_FRAMES,
@@ -630,8 +630,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Asymmetric rate limit (active→active only; active→passive is instant 0)
       if steering_active:
         effective_aci_gain = rate_limit(target_aci_gain, self.aci_gain_last,
-                                        CarControllerParams.ACI_GAIN_RATE_DOWN_50HZ,
-                                        CarControllerParams.ACI_GAIN_RATE_UP_50HZ)
+                                        CarControllerParams.ACI_GAIN_RATE_DOWN,
+                                        CarControllerParams.ACI_GAIN_RATE_UP)
       else:
         effective_aci_gain = 0.0
       # Quantize to DBC signal resolution

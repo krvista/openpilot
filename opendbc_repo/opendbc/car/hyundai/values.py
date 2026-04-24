@@ -116,9 +116,9 @@ class CarControllerParams:
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
   # increase so driver override yields quickly while re-engagement is smooth.
-  # Scaled from HDA1's -0.014/+0.004 @ 100Hz to our 50Hz TX cadence.
-  ACI_GAIN_RATE_DOWN_50HZ = -0.07    # per frame @ 50Hz (= -3.5/s, 0.8→0 in 0.23s)
-  ACI_GAIN_RATE_UP_50HZ   =  0.008   # per frame @ 50Hz (= +0.4/s, 0→0.8 in 2.0s)
+  # HDA1 reference: -0.014/+0.004 @ 100Hz. We use ~2.5x down / 1x up.
+  ACI_GAIN_RATE_DOWN = -0.035   # per frame @ 100Hz (= -3.5/s, 0.8→0 in 0.23s)
+  ACI_GAIN_RATE_UP   =  0.004   # per frame @ 100Hz (= +0.4/s, 0→0.8 in 2.0s)
   ACI_GAIN_QUANT           =  0.004   # DBC signal resolution for ADAS_ACIAnglTqRedcGainVal
   ACI_GAIN_CEILING         =  0.8    # steady-state max; stock cam always sends 0.000
 
