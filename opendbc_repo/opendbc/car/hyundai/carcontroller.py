@@ -679,7 +679,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Active whenever MADS is enabled (not just latActive) — prevents
     # hands-on warning during transient latActive=False (driver override,
     # low-speed passthrough). Disabled only when MADS is fully OFF.
-    if ccnc_lka_alt and self.frame % 10 == 0 and mads_enabled:
+    # Gated on hod_bypass_enabled (HOD_BYPASS=1 env var) — default OFF.
+    # Factory ECU already publishes 0x208 on bus 1; unconditional TX
+    # creates a dual-publisher collision causing CAN bus 1 bus-off
+    # (busOffCnt 0→1,456 over routes 0x28→0x4f, peak txErr=239/256).
+    if ccnc_lka_alt and self.frame % 10 == 0 and mads_enabled and self.hod_bypass_enabled:
       can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
       self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
 
