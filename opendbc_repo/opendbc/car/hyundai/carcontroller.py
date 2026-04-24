@@ -53,7 +53,7 @@ LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 # speed-dependent tau: max at standstill, fades to 0 at 15 km/h.
 LOWSPEED_LPF_TAU_BP = [0.0, 5.56]   # m/s: 0, 20 km/h (was 15 km/h)
 LOWSPEED_LPF_TAU_V  = [0.35, 0.0]   # seconds: 350ms at 0 (was 160ms), 0 at 20 km/h
-LPF_DT = DT_CTRL * 2                # 20 ms (50 Hz TX cadence)
+LPF_DT = DT_CTRL                    # 10 ms (100 Hz — matches actual TX rate)
 
 # Phase 4-B addendum: VW-inspired stuck-angle jitter break.
 # If apply_angle hasn't changed by > JITTER_DEADBAND for JITTER_FRAMES,
@@ -61,6 +61,12 @@ LPF_DT = DT_CTRL * 2                # 20 ms (50 Hz TX cadence)
 JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
 JITTER_FRAMES = 20        # ~400ms at 50 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
+
+# Parking mode: hands-on + low speed → fade out steering assist.
+PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
+PARKING_ENTER_FRAMES = 500            # 5 s at 100 Hz
+PARKING_EXIT_SPEED_FRAMES = 300       # 3 s at 100 Hz
+PARKING_FADE_RATE = 1.0 / 150         # 1.5 s full fade (100 Hz)
 
 
 def compute_driver_torque_factor(steering_torque, v_ego, lat_active):
@@ -168,7 +174,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.cam_msg_last_counter = -1
     # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
     # var; otherwise dormant. See Appendix H of the masterplan.
-    self.hod_bypass_enabled = os.environ.get("HOD_BYPASS", "1") != "0"
+    self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
     self.hod_bypass_counter = 0
 
     # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
@@ -177,6 +183,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.suppress_lfa_counter = 0
     self.prev_fault_lfa = 0
     self.was_in_reverse = False
+    self.parking_mode = False
+    self.parking_enter_cnt = 0
+    self.parking_exit_speed_cnt = 0
+    self.parking_fade = 1.0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -572,6 +582,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
+    # Parking mode: hands-on + <20 km/h for 5 s → fade out assist.
+    # Exit: hands released, MADS off, or ≥20 km/h for 3 s.
+    if ccnc_lka_alt:
+      parking_entry_ok = bool(mads_enabled and CS.out.steeringPressed and
+                              v_ego_safe < PARKING_SPEED_MS)
+      if not self.parking_mode:
+        self.parking_enter_cnt = self.parking_enter_cnt + 1 if parking_entry_ok else 0
+        if self.parking_enter_cnt >= PARKING_ENTER_FRAMES:
+          self.parking_mode = True
+          self.parking_enter_cnt = 0
+      else:
+        if not CS.out.steeringPressed or not mads_enabled:
+          self.parking_mode = False
+          self.parking_exit_speed_cnt = 0
+        else:
+          self.parking_exit_speed_cnt = self.parking_exit_speed_cnt + 1 \
+            if v_ego_safe >= PARKING_SPEED_MS else 0
+          if self.parking_exit_speed_cnt >= PARKING_EXIT_SPEED_FRAMES:
+            self.parking_mode = False
+            self.parking_exit_speed_cnt = 0
+
+      if self.parking_mode:
+        self.parking_fade = max(0.0, self.parking_fade - PARKING_FADE_RATE)
+      else:
+        self.parking_fade = min(1.0, self.parking_fade + PARKING_FADE_RATE)
+
     # ACIGain: compute in carcontroller for rate limiting / quantization.
     # Use 4-breakpoint driver torque factor for CCNC angle (richer than linear blend).
     driver_torque_factor = compute_driver_torque_factor(steer_torque_safe, v_ego_safe, CC.latActive) \
@@ -585,14 +621,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                            CarControllerParams.LON_COMFORT_GAIN_V))
       if steering_active:
         raw_gain = max(speed_blend, 0.20) * self.aci_gain_ramp * driver_torque_factor * lon_comfort_factor
-        target_aci_gain = float(np.clip(raw_gain, 0.10, CarControllerParams.ACI_GAIN_CEILING))
+        raw_gain *= self.parking_fade
+        gain_floor = 0.10 * self.parking_fade
+        target_aci_gain = float(np.clip(raw_gain, gain_floor, CarControllerParams.ACI_GAIN_CEILING)) \
+                          if raw_gain > 0.005 else 0.0
       else:
         target_aci_gain = 0.0  # panda safety: ACTIVE=1 requires gain=0
       # Asymmetric rate limit (active→active only; active→passive is instant 0)
       if steering_active:
         effective_aci_gain = rate_limit(target_aci_gain, self.aci_gain_last,
-                                        CarControllerParams.ACI_GAIN_RATE_DOWN_50HZ,
-                                        CarControllerParams.ACI_GAIN_RATE_UP_50HZ)
+                                        CarControllerParams.ACI_GAIN_RATE_DOWN,
+                                        CarControllerParams.ACI_GAIN_RATE_UP)
       else:
         effective_aci_gain = 0.0
       # Quantize to DBC signal resolution
@@ -620,7 +659,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if self.was_in_reverse and CS.out.vEgo > 10 * CV.KPH_TO_MS:
         self.was_in_reverse = False
 
-    effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req and not self.was_in_reverse) if ccnc_lka_alt else apply_steer_req
+    parking_fully_faded = self.parking_mode and self.parking_fade < 0.01
+    if parking_fully_faded:
+      self.apply_angle_last = steer_angle_safe
+    effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req
+                            and not self.was_in_reverse and not parking_fully_faded) if ccnc_lka_alt else apply_steer_req
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                          driver_torque_blend=driver_torque_blend,
