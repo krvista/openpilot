@@ -62,7 +62,6 @@ JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
 JITTER_FRAMES = 20        # ~400ms at 50 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
-# Parking mode: hands-on + low speed → fade out steering assist.
 PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
 PARKING_ENTER_FRAMES = 500            # 5 s at 100 Hz
 PARKING_EXIT_SPEED_FRAMES = 300       # 3 s at 100 Hz
@@ -585,10 +584,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode: hands-on + <20 km/h for 5 s → fade out assist.
-    # Exit: hands released, MADS off, or ≥20 km/h for 3 s.
+    # Parking mode: MADS on + ACC off + <20 km/h for 5 s → fade out assist.
+    # Exit: MADS off, ACC on, or ≥20 km/h for 3 s.
     if ccnc_lka_alt:
-      parking_entry_ok = bool(mads_enabled and CS.out.steeringPressed and
+      parking_entry_ok = bool(mads_enabled and not CS.out.cruiseState.enabled and
                               v_ego_safe < PARKING_SPEED_MS)
       if not self.parking_mode:
         self.parking_enter_cnt = self.parking_enter_cnt + 1 if parking_entry_ok else 0
@@ -596,7 +595,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           self.parking_mode = True
           self.parking_enter_cnt = 0
       else:
-        if not CS.out.steeringPressed or not mads_enabled:
+        if not mads_enabled or CS.out.cruiseState.enabled:
           self.parking_mode = False
           self.parking_exit_speed_cnt = 0
         else:
@@ -665,6 +664,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     parking_fully_faded = self.parking_mode and self.parking_fade < 0.01
     if parking_fully_faded:
       self.apply_angle_last = steer_angle_safe
+      if lkas_alt_cam_msg is not None:
+        lkas_alt_cam_msg = dict(lkas_alt_cam_msg)
+        lkas_alt_cam_msg["LKA_ASSIST"] = 0
+        lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"] = 1
+        lkas_alt_cam_msg["ADAS_StrAnglReqVal"] = steer_angle_safe
     effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req
                             and not self.was_in_reverse and not parking_fully_faded) if ccnc_lka_alt else apply_steer_req
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
