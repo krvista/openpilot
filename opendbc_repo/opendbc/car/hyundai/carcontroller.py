@@ -66,6 +66,7 @@ PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
 PARKING_ENTER_FRAMES = 500            # 5 s at 100 Hz
 PARKING_EXIT_SPEED_FRAMES = 300       # 3 s at 100 Hz
 PARKING_FADE_RATE = 1.0 / 150         # 1.5 s full fade (100 Hz)
+PARKING_ANGLE_THRESHOLD = 200         # deg — instant parking entry at large angle
 
 
 def compute_driver_torque_factor(steering_torque, v_ego, lat_active):
@@ -490,14 +491,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Applied on the LatControlAngle-converted angle (op_curv_safe) which
       # already includes roll compensation and speed-dependent VM factors.
       # LPF on angle ≡ LPF on curvature for near-linear conversions.
-      curv_tau_base = CarControllerParams.CURV_LPF_TAU
-      if lon_accel < -1.0:
-        curv_tau = float(np.interp(lon_accel, CarControllerParams.CURV_LPF_TAU_BRAKE_BP,
-                                   CarControllerParams.CURV_LPF_TAU_BRAKE_V))
+      entering_curve = abs(op_curv_safe) > abs(self.curv_lpf) + 0.5
+      if entering_curve:
+        curv_tau = CarControllerParams.CURV_LPF_TAU_ENTRY
       else:
-        curv_tau = curv_tau_base
-      curv_delta = abs(op_curv_safe - self.curv_lpf)
-      curv_tau += min(curv_delta / 10.0, 1.0) * 0.30
+        curv_tau = CarControllerParams.CURV_LPF_TAU_EXIT
+        curv_delta = abs(op_curv_safe - self.curv_lpf)
+        curv_tau += min(curv_delta / 10.0, 1.0) * 0.30
+        if lon_accel < -1.0:
+          curv_tau = max(curv_tau, float(np.interp(lon_accel, CarControllerParams.CURV_LPF_TAU_BRAKE_BP,
+                                                   CarControllerParams.CURV_LPF_TAU_BRAKE_V)))
       if CC.latActive and curv_tau > 0.001:
         alpha_curv = LPF_DT / (curv_tau + LPF_DT)
         self.curv_lpf = alpha_curv * op_curv_safe + (1.0 - alpha_curv) * self.curv_lpf
@@ -585,13 +588,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       mads_lka_icon = None
 
     # Parking mode: MADS on + ACC off + <20 km/h for 5 s → fade out assist.
+    # Instant entry: above conditions + |steeringAngle| > 200°.
     # Exit: MADS off, ACC on, or ≥20 km/h for 3 s.
     if ccnc_lka_alt:
       parking_entry_ok = bool(mads_enabled and not CS.out.cruiseState.enabled and
                               v_ego_safe < PARKING_SPEED_MS)
+      big_angle = abs(CS.out.steeringAngleDeg) > PARKING_ANGLE_THRESHOLD
       if not self.parking_mode:
         self.parking_enter_cnt = self.parking_enter_cnt + 1 if parking_entry_ok else 0
-        if self.parking_enter_cnt >= PARKING_ENTER_FRAMES:
+        if self.parking_enter_cnt >= PARKING_ENTER_FRAMES or (parking_entry_ok and big_angle):
           self.parking_mode = True
           self.parking_enter_cnt = 0
       else:

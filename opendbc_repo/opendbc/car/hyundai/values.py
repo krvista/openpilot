@@ -99,11 +99,11 @@ class CarControllerParams:
   ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
   ANGLE_RATE_V  = [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]  # deg/20ms
 
-  # Phase 6: curvature LPF time constant (seconds).
-  # MAE analysis (9 routes, 1.66M frames, 56-combo 2D sweep) showed τ=0.20
-  # is optimal: MAE_all −9.2%, sharp-curve MAE −8%, no regression.
-  # Filters model curvature noise before angle conversion.  Set to 0 to disable.
-  CURV_LPF_TAU = 0.35
+  # Phase 6: asymmetric curvature LPF (seconds).
+  # Curve entry: fast tracking (0.10s) to avoid late response / lane departure.
+  # Curve exit / straight: slow decay (0.35s) to suppress oscillation.
+  CURV_LPF_TAU_ENTRY = 0.10
+  CURV_LPF_TAU_EXIT  = 0.35
 
   # Longitudinal-aware lateral comfort: modulate ACIGain and curvature LPF
   # tau based on measured vehicle acceleration (CS.out.aEgo).  During hard
@@ -112,7 +112,7 @@ class CarControllerParams:
   LON_COMFORT_ACCEL_BP = [1.0, 2.5, 4.0]           # |aEgo| m/s²
   LON_COMFORT_GAIN_V   = [1.0, 0.7, 0.5]           # ACIGain multiplier
   CURV_LPF_TAU_BRAKE_BP = [-4.0, -2.5, -1.0]       # aEgo m/s² (braking only)
-  CURV_LPF_TAU_BRAKE_V  = [0.40, 0.30, CURV_LPF_TAU]  # seconds
+  CURV_LPF_TAU_BRAKE_V  = [0.40, 0.30, CURV_LPF_TAU_EXIT]  # seconds
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
   # increase so driver override yields quickly while re-engagement is smooth.
