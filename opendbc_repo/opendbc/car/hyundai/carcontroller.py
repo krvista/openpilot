@@ -70,18 +70,21 @@ PARKING_FADE_RATE = 1.0 / 150         # 1.5 s full fade (100 Hz)
 
 
 def compute_driver_torque_factor(steering_torque, v_ego, lat_active):
-  """538K-frame drivelog-calibrated 4-breakpoint speed-dependent torque→factor.
+  """Drivelog-calibrated 4-breakpoint speed-dependent torque→factor.
   Returns [0.0, 1.0]: 1.0 = no driver override, 0.0 = full override.
-  For angle-control MDPS where reported column torque includes EPS reaction."""
+  For angle-control MDPS where reported column torque includes EPS reaction.
+  Route 0x01 (a46e2136): previous bp1=200 caused 47% steeringPressed at seg10
+  → 44% PASSIVE time. Raised thresholds so light grip (p90=184 Nm) stays
+  at full authority; active steering (p25=250, p50=381) starts ramp."""
   if not lat_active:
     return 0.0
-  bp1 = float(np.interp(v_ego, [3., 8., 15., 22.], [200., 220., 175., 80.]))
-  bp2 = float(np.interp(v_ego, [3., 8., 15., 22.], [300., 280., 260., 200.]))
-  bp3 = float(np.interp(v_ego, [3., 8., 15., 22.], [380., 330., 290., 290.]))
-  bp4 = float(np.interp(v_ego, [3., 8., 15., 22.], [500., 470., 420., 400.]))
+  bp1 = float(np.interp(v_ego, [3., 8., 15., 22.], [300., 320., 280., 200.]))
+  bp2 = float(np.interp(v_ego, [3., 8., 15., 22.], [420., 400., 380., 320.]))
+  bp3 = float(np.interp(v_ego, [3., 8., 15., 22.], [500., 480., 420., 400.]))
+  bp4 = float(np.interp(v_ego, [3., 8., 15., 22.], [620., 600., 560., 520.]))
   ceiling = 1.0
-  shelf = float(np.interp(v_ego, [3., 22.], [0.65, 0.80]))
-  floor = float(np.interp(v_ego, [3., 22.], [0.15, 0.35]))
+  shelf = float(np.interp(v_ego, [3., 22.], [0.60, 0.75]))
+  floor = float(np.interp(v_ego, [3., 22.], [0.10, 0.30]))
   return float(np.interp(abs(steering_torque),
                           [bp1, bp2, bp3, bp4],
                           [ceiling, shelf, shelf, floor]))

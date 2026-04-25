@@ -143,15 +143,13 @@ class CarControllerParams:
   # evidence on ~210k latActive frames:
   #   - Light hand grip (steeringPressed=False): p50=36, p75=92, p90=184 Nm
   #   - Active driver steering (steeringPressed=True): p50=381, p75=488, p90=619 Nm
-  # Torque-control thresholds (DZ=25, Full=60/120) flag normal hand placement
-  # as full override → 47% of latActive frames collapse to DTB=0.0 → authority
-  # collapse → aci_active_latched=False → white LFA icon + no assist.
-  # Angle-control thresholds widen the gap to cover EPS reaction: p90 light
-  # grip 184 ≪ 300 (low-v full override), while active-steering p25≈250 starts
-  # override ramp and p75≈488 reaches full override.
-  DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
-  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 300.0
-  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 500.0
+  # Route 0x01 (a46e2136) confirmed: steeringPressed=47% at seg10 caused
+  # 44% PASSIVE time → steering "felt like stock LFA".
+  # Revised thresholds: DEADZONE covers p90 of light grip (184) with margin;
+  # override ramp starts only above active-steering p25 (~250 Nm).
+  DRIVER_TORQUE_DEADZONE_ANGLE              = 200.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 450.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 600.0
 
   # Snap + grace-window re-engage for angle-control:
   #   - enter snap when override_factor > 0.95 for N frames →
@@ -160,9 +158,9 @@ class CarControllerParams:
   #     (25 frames = 0.5 s @ 50 Hz) — prevents flickering in/out of override
   #     and guarantees a smooth re-engage through the rate limiter.
   OVERRIDE_SNAP_ENTER_FACTOR = 0.95
-  OVERRIDE_SNAP_ENTER_FRAMES = 3      # 60 ms — quick reaction
-  OVERRIDE_SNAP_EXIT_FACTOR  = 0.05
-  OVERRIDE_SNAP_EXIT_FRAMES  = 25     # 500 ms — grace window
+  OVERRIDE_SNAP_ENTER_FRAMES = 3      # 30 ms at 100Hz — quick reaction
+  OVERRIDE_SNAP_EXIT_FACTOR  = 0.10
+  OVERRIDE_SNAP_EXIT_FRAMES  = 15     # 150 ms at 100Hz — faster re-engage
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
@@ -183,6 +181,7 @@ class CarControllerParams:
       if CP.flags & HyundaiFlags.CCNC:
         self.STEER_STEP = 2  # 50 Hz TX on CCNC angle platform
         self.ANGLE_LIMITS = CarControllerParams.ANGLE_LIMITS_VM
+        self.STEER_THRESHOLD = 350  # angle-control: EPS reaction inflates torque
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
