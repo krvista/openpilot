@@ -88,9 +88,9 @@ class Controls(ControlsExt):
       return fallback
 
     abs_curv = abs(fallback)
-    base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8], [0.05, 0.07, 0.09]))
-    boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.10]))
-    t_ahead = min(base_s + boost_s, 0.20)
+    base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8], [0.08, 0.10, 0.13]))
+    boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.12]))
+    t_ahead = min(base_s + boost_s, 0.25)
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
     if dist_ahead < 0.3:
