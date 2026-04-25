@@ -585,10 +585,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode: hands-on + <20 km/h for 5 s → fade out assist.
-    # Exit: hands released, MADS off, or ≥20 km/h for 3 s.
+    # Parking mode: MADS on + ACC off + <20 km/h for 5 s → fade out assist.
+    # Exit: MADS off, ACC on, or ≥20 km/h for 3 s.
     if ccnc_lka_alt:
-      parking_entry_ok = bool(mads_enabled and CS.out.steeringPressed and
+      parking_entry_ok = bool(mads_enabled and not CS.out.cruiseState.enabled and
                               v_ego_safe < PARKING_SPEED_MS)
       if not self.parking_mode:
         self.parking_enter_cnt = self.parking_enter_cnt + 1 if parking_entry_ok else 0
@@ -596,7 +596,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           self.parking_mode = True
           self.parking_enter_cnt = 0
       else:
-        if not CS.out.steeringPressed or not mads_enabled:
+        if not mads_enabled or CS.out.cruiseState.enabled:
           self.parking_mode = False
           self.parking_exit_speed_cnt = 0
         else:
