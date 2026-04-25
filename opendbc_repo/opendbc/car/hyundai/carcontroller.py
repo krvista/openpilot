@@ -665,6 +665,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     parking_fully_faded = self.parking_mode and self.parking_fade < 0.01
     if parking_fully_faded:
       self.apply_angle_last = steer_angle_safe
+      if lkas_alt_cam_msg is not None:
+        lkas_alt_cam_msg = dict(lkas_alt_cam_msg)
+        lkas_alt_cam_msg["LKA_ASSIST"] = 0
+        lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"] = 1
+        lkas_alt_cam_msg["ADAS_StrAnglReqVal"] = steer_angle_safe
     effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req
                             and not self.was_in_reverse and not parking_fully_faded) if ccnc_lka_alt else apply_steer_req
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
