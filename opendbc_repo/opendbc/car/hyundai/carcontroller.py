@@ -1,5 +1,7 @@
+import math
 import os
 import numpy as np
+from collections import deque
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs, rate_limit
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
@@ -61,6 +63,26 @@ LPF_DT = DT_CTRL                    # 10 ms (100 Hz — matches actual TX rate)
 JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
 JITTER_FRAMES = 20        # ~400ms at 50 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
+
+# P1-2: Angle error feedback — small correction based on (commanded - actual).
+# Pure feedforward angle control relies on EPS tracking accuracy; adding a
+# proportional correction compensates for road camber, tire load, and MDPS
+# tracking lag.  KP is speed-dependent: higher at low speed (EPS has more
+# authority headroom) and tapers at highway to avoid oscillation.
+ANGLE_ERROR_KP_BP = [5., 15., 30.]    # m/s
+ANGLE_ERROR_KP_V  = [0.10, 0.06, 0.03]  # proportional gain (deg correction per deg error)
+ANGLE_ERROR_MAX   = 1.0               # deg — absolute cap on correction
+ANGLE_ERROR_DEADZONE = 0.3            # deg — ignore small errors (sensor noise)
+
+# P1-3: Jerk feedforward — anticipate curvature direction changes.
+# Adapted from latcontrol_torque.py (JERK_LOOKAHEAD=190ms, LP=1.2Hz).
+# In angle domain: jerk → Δcurvature/dt → Δangle, providing ~100-150ms
+# earlier response at curve entry/exit transitions.
+JERK_FF_LOOKAHEAD_S = 0.15            # seconds — lookahead window (shorter than torque's 0.19)
+JERK_FF_LP_HZ       = 1.2             # Hz — low-pass filter cutoff for jerk signal
+JERK_FF_GAIN_BP     = [5., 15., 30.]  # m/s
+JERK_FF_GAIN_V      = [0.08, 0.05, 0.02]  # deg of angle bias per deg/s of angle rate-of-change
+JERK_FF_BUFFER_S    = 1.0             # seconds — ring buffer length
 
 # Parking mode: hands-on + low speed → fade out steering assist.
 PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
@@ -156,6 +178,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.lpf_angle_last = 0.0
     # Phase 6: curvature LPF state (filters model noise before conversion)
     self.curv_lpf = 0.0
+    # P1-3: jerk feedforward state
+    if is_ccnc_angle_platform(CP.flags):
+      jerk_buf_len = int(JERK_FF_BUFFER_S / (DT_CTRL * 2))  # 50Hz rate limiter
+      self.jerk_angle_buf = deque([0.0] * jerk_buf_len, maxlen=jerk_buf_len)
+      self.jerk_ff_filter = 0.0  # first-order LP state
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -509,6 +536,31 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.curv_lpf = op_curv_safe
       desired_angle_deg = self.curv_lpf
 
+      # P1-3: Jerk feedforward — predict curvature rate-of-change and add
+      # a small angle bias to anticipate curve entry/exit. Buffer stores
+      # recent desired angles at 50Hz; jerk is estimated from lookahead
+      # difference and LP-filtered to suppress planner noise.
+      self.jerk_angle_buf.append(desired_angle_deg)
+      jerk_ff_deg = 0.0
+      if CC.latActive and v_ego_safe > 3.0:
+        jerk_dt = DT_CTRL * 2  # 50Hz = 20ms
+        lookahead_frames = int(JERK_FF_LOOKAHEAD_S / jerk_dt)
+        buf_len = len(self.jerk_angle_buf)
+        if buf_len > lookahead_frames + 2:
+          idx_fwd = min(-1, -(buf_len - lookahead_frames))
+          idx_back = max(-(buf_len), idx_fwd - 2 * lookahead_frames)
+          raw_jerk = (self.jerk_angle_buf[idx_fwd] - self.jerk_angle_buf[idx_back]) / \
+                     max((abs(idx_fwd - idx_back)) * jerk_dt, 0.001)
+          # First-order LP filter on jerk signal
+          lp_alpha = jerk_dt / (1.0 / (2.0 * math.pi * JERK_FF_LP_HZ) + jerk_dt)
+          self.jerk_ff_filter = lp_alpha * raw_jerk + (1.0 - lp_alpha) * self.jerk_ff_filter
+          jerk_gain = float(np.interp(v_ego_safe, JERK_FF_GAIN_BP, JERK_FF_GAIN_V))
+          jerk_ff_deg = self.jerk_ff_filter * jerk_gain
+      else:
+        self.jerk_ff_filter = 0.0
+
+      desired_angle_deg += jerk_ff_deg
+
       # Gradient driver override blend (Toyota LTA TORQUE_WIND_DOWN style)
       if override_factor > 0:
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
@@ -520,6 +572,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         alpha_lpf = LPF_DT / (tau_s + LPF_DT)
         desired_angle_deg = alpha_lpf * desired_angle_deg + (1.0 - alpha_lpf) * self.lpf_angle_last
       self.lpf_angle_last = desired_angle_deg
+
+      # P1-2: Angle error feedback — compensate for MDPS tracking error
+      # caused by road camber, tire load, and EPS friction deadband.
+      # Applied after LPF so the correction acts on the smoothed signal.
+      if CC.latActive and v_ego_safe > 3.0 and not self.override_snapped:
+        angle_error = desired_angle_deg - steer_angle_safe
+        angle_error_dz = float(np.sign(angle_error) * max(abs(angle_error) - ANGLE_ERROR_DEADZONE, 0.0))
+        kp = float(np.interp(v_ego_safe, ANGLE_ERROR_KP_BP, ANGLE_ERROR_KP_V))
+        correction = float(np.clip(kp * angle_error_dz, -ANGLE_ERROR_MAX, ANGLE_ERROR_MAX))
+        desired_angle_deg += correction
 
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
