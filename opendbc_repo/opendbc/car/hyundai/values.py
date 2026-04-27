@@ -99,20 +99,19 @@ class CarControllerParams:
   ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
   ANGLE_RATE_V  = [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]  # deg/20ms
 
-  # Phase 6: asymmetric curvature LPF (seconds).
-  # Curve entry: fast tracking (0.10s) to avoid late response / lane departure.
-  # Curve exit / straight: slow decay (0.35s) to suppress oscillation.
-  CURV_LPF_TAU_ENTRY = 0.10
-  CURV_LPF_TAU_EXIT  = 0.50
+  # Variable-tau LPF: unified angle filter. Tau is continuous function of
+  # angle magnitude + speed. Strong at center (straight-line jitter suppression),
+  # weak at large angles (fast curve tracking), with low-speed smoothing.
+  VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
+  VTAU_ANGLE_V  = [1.0, 0.50, 0.10, 0.10]  # tau seconds
+  VTAU_SPEED_BP = [0.0, 5.0, 15.0]  # m/s
+  VTAU_SPEED_V  = [0.35, 0.10, 0.0]  # tau seconds
+  VTAU_ENTRY    = 0.10  # curve entry override (seconds)
 
-  # Longitudinal-aware lateral comfort: modulate ACIGain and curvature LPF
-  # tau based on measured vehicle acceleration (CS.out.aEgo).  During hard
-  # braking/accel the MDPS smooths lateral commands more (lower ACIGain) and
-  # the curvature filter increases (higher tau) to reduce composite jolt.
+  # Longitudinal-aware lateral comfort: modulate ACIGain based on vehicle
+  # acceleration. During hard braking/accel, lower ACIGain to reduce jolt.
   LON_COMFORT_ACCEL_BP = [1.0, 2.5, 4.0]           # |aEgo| m/s²
   LON_COMFORT_GAIN_V   = [1.0, 0.7, 0.5]           # ACIGain multiplier
-  CURV_LPF_TAU_BRAKE_BP = [-4.0, -2.5, -1.0]       # aEgo m/s² (braking only)
-  CURV_LPF_TAU_BRAKE_V  = [0.55, 0.50, CURV_LPF_TAU_EXIT]  # seconds
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
   # increase so driver override yields quickly while re-engagement is smooth.
