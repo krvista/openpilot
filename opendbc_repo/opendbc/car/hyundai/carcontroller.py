@@ -485,8 +485,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # jitter), weak at large angles (fast curve tracking), with low-speed
       # smoothing built in. No step response because tau is continuous.
       entering_curve = abs(op_curv_safe) > abs(self.vtau_lpf) + 0.5
+      returning_to_center = abs(op_curv_safe) < abs(self.vtau_lpf) - 0.3
+
       if entering_curve:
         vtau = CarControllerParams.VTAU_ENTRY
+      elif returning_to_center:
+        self.vtau_lpf = op_curv_safe
+        vtau = 0.0
       else:
         abs_angle = abs(self.vtau_lpf)
         angle_tau = float(np.interp(abs_angle, CarControllerParams.VTAU_ANGLE_BP,
@@ -498,7 +503,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if CC.latActive and vtau > 0.001:
         alpha = LPF_DT / (vtau + LPF_DT)
         self.vtau_lpf = alpha * op_curv_safe + (1.0 - alpha) * self.vtau_lpf
-      else:
+      elif not CC.latActive:
         self.vtau_lpf = op_curv_safe
       desired_angle_deg = self.vtau_lpf
 

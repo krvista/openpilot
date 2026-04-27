@@ -106,7 +106,7 @@ class CarControllerParams:
   VTAU_ANGLE_V  = [1.0, 0.50, 0.10, 0.10]  # tau seconds
   VTAU_SPEED_BP = [0.0, 5.0, 15.0]  # m/s
   VTAU_SPEED_V  = [0.35, 0.10, 0.0]  # tau seconds
-  VTAU_ENTRY    = 0.10  # curve entry override (seconds)
+  VTAU_ENTRY    = 0.20  # curve entry override (seconds)
 
   # Longitudinal-aware lateral comfort: modulate ACIGain based on vehicle
   # acceleration. During hard braking/accel, lower ACIGain to reduce jolt.
