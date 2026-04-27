@@ -176,11 +176,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.lpf_angle_last = 0.0
     # Phase 6: curvature LPF state (filters model noise before conversion)
     self.curv_lpf = 0.0
-    # P1-3: jerk feedforward state
+    # P1-3: jerk feedforward state (default safe for non-CCNC platforms)
+    self.jerk_angle_buf = deque([0.0], maxlen=1)
+    self.jerk_ff_filter = 0.0
     if is_ccnc_angle_platform(CP.flags):
       jerk_buf_len = int(JERK_FF_BUFFER_S / (DT_CTRL * 2))  # 50Hz rate limiter
       self.jerk_angle_buf = deque([0.0] * jerk_buf_len, maxlen=jerk_buf_len)
-      self.jerk_ff_filter = 0.0  # first-order LP state
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -544,11 +545,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         jerk_dt = DT_CTRL * 2  # 50Hz = 20ms
         lookahead_frames = int(JERK_FF_LOOKAHEAD_S / jerk_dt)
         buf_len = len(self.jerk_angle_buf)
-        if buf_len > lookahead_frames + 2:
-          idx_fwd = min(-1, -(buf_len - lookahead_frames))
-          idx_back = max(-(buf_len), idx_fwd - 2 * lookahead_frames)
-          raw_jerk = (self.jerk_angle_buf[idx_fwd] - self.jerk_angle_buf[idx_back]) / \
-                     max((abs(idx_fwd - idx_back)) * jerk_dt, 0.001)
+        if buf_len > 2 * lookahead_frames + 1:
+          idx_recent = -1
+          idx_past = max(-(buf_len), -1 - 2 * lookahead_frames)
+          raw_jerk = (self.jerk_angle_buf[idx_recent] - self.jerk_angle_buf[idx_past]) / \
+                     max(abs(idx_recent - idx_past) * jerk_dt, 0.001)
           # First-order LP filter on jerk signal
           lp_alpha = jerk_dt / (1.0 / (2.0 * math.pi * JERK_FF_LP_HZ) + jerk_dt)
           self.jerk_ff_filter = lp_alpha * raw_jerk + (1.0 - lp_alpha) * self.jerk_ff_filter
@@ -571,16 +572,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle_deg = alpha_lpf * desired_angle_deg + (1.0 - alpha_lpf) * self.lpf_angle_last
       self.lpf_angle_last = desired_angle_deg
 
-      # P1-2: Angle error feedback — compensate for MDPS tracking error
-      # caused by road camber, tire load, and EPS friction deadband.
-      # Applied after LPF so the correction acts on the smoothed signal.
-      if CC.latActive and v_ego_safe > 3.0 and not self.override_snapped:
-        angle_error = desired_angle_deg - steer_angle_safe
-        angle_error_dz = float(np.sign(angle_error) * max(abs(angle_error) - ANGLE_ERROR_DEADZONE, 0.0))
-        kp = float(np.interp(v_ego_safe, ANGLE_ERROR_KP_BP, ANGLE_ERROR_KP_V))
-        correction = float(np.clip(kp * angle_error_dz, -ANGLE_ERROR_MAX, ANGLE_ERROR_MAX))
-        desired_angle_deg += correction
-
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
       # Phase 5: if driver is currently overriding past threshold, snap our
@@ -596,6 +587,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # VM limiter so jerk/accel still have the final say when binding.
       per_step_cap = float(np.interp(v_ego_safe, CarControllerParams.ANGLE_RATE_BP,
                                      CarControllerParams.ANGLE_RATE_V))
+
+      # P1-2: Angle error feedback — compensate for MDPS tracking error
+      # caused by road camber, tire load, and EPS friction deadband.
+      # Gated on not-rate-limited: skip when already pushing the rate cap
+      # to prevent positive feedback under saturation.
+      not_rate_limited = abs(desired_angle_deg - self.apply_angle_last) < per_step_cap * 0.9
+      if CC.latActive and v_ego_safe > 3.0 and not self.override_snapped and not_rate_limited:
+        angle_error = desired_angle_deg - steer_angle_safe
+        angle_error_dz = float(np.sign(angle_error) * max(abs(angle_error) - ANGLE_ERROR_DEADZONE, 0.0))
+        kp = float(np.interp(v_ego_safe, ANGLE_ERROR_KP_BP, ANGLE_ERROR_KP_V))
+        correction = float(np.clip(kp * angle_error_dz, -ANGLE_ERROR_MAX, ANGLE_ERROR_MAX))
+        desired_angle_deg += correction
+
       desired_angle_deg = float(np.clip(desired_angle_deg,
                                         self.apply_angle_last - per_step_cap,
                                         self.apply_angle_last + per_step_cap))
