@@ -53,8 +53,8 @@ LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 # Suppresses planner noise that the MDPS 4°/s quantized sensor amplifies
 # into perceivable jerk. Ford-inspired exponential smoothing with
 # speed-dependent tau: max at standstill, fades to 0 at 15 km/h.
-LOWSPEED_LPF_TAU_BP = [0.0, 5.56]   # m/s: 0, 20 km/h (was 15 km/h)
-LOWSPEED_LPF_TAU_V  = [0.35, 0.0]   # seconds: 350ms at 0 (was 160ms), 0 at 20 km/h
+LOWSPEED_LPF_TAU_BP = [0.0, 5.56, 15.0, 30.0]  # m/s: 0, 20, 54, 108 km/h
+LOWSPEED_LPF_TAU_V  = [0.35, 0.0,  0.0,  0.0]  # seconds: 350ms at 0, 0 above 20 km/h
 LPF_DT = DT_CTRL                    # 10 ms (100 Hz — matches actual TX rate)
 
 # Phase 4-B addendum: VW-inspired stuck-angle jitter break.
@@ -70,9 +70,9 @@ JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 # tracking lag.  KP is speed-dependent: higher at low speed (EPS has more
 # authority headroom) and tapers at highway to avoid oscillation.
 ANGLE_ERROR_KP_BP = [5., 15., 30.]    # m/s
-ANGLE_ERROR_KP_V  = [0.10, 0.06, 0.03]  # proportional gain (deg correction per deg error)
-ANGLE_ERROR_MAX   = 1.0               # deg — absolute cap on correction
-ANGLE_ERROR_DEADZONE = 0.3            # deg — ignore small errors (sensor noise)
+ANGLE_ERROR_KP_V  = [0.08, 0.04, 0.02]  # proportional gain — reduced to suppress straight-line jitter
+ANGLE_ERROR_MAX   = 0.5               # deg — tighter cap (was 1.0)
+ANGLE_ERROR_DEADZONE = 0.8            # deg — widened to ignore tracking noise in straights (was 0.3)
 
 # P1-3: Jerk feedforward — anticipate curvature direction changes.
 # Adapted from latcontrol_torque.py (JERK_LOOKAHEAD=190ms, LP=1.2Hz).
@@ -80,8 +80,8 @@ ANGLE_ERROR_DEADZONE = 0.3            # deg — ignore small errors (sensor nois
 # earlier response at curve entry/exit transitions.
 JERK_FF_LOOKAHEAD_S = 0.15            # seconds — lookahead window (shorter than torque's 0.19)
 JERK_FF_LP_HZ       = 1.2             # Hz — low-pass filter cutoff for jerk signal
-JERK_FF_GAIN_BP     = [5., 15., 30.]  # m/s
-JERK_FF_GAIN_V      = [0.08, 0.05, 0.02]  # deg of angle bias per deg/s of angle rate-of-change
+JERK_FF_GAIN_BP     = [5., 15., 25., 30.]  # m/s
+JERK_FF_GAIN_V      = [0.06, 0.03, 0.01, 0.0]  # reduced + fades to 0 at highway to prevent straight-line noise
 JERK_FF_BUFFER_S    = 1.0             # seconds — ring buffer length
 PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
 PARKING_ENTER_FRAMES = 500            # 5 s at 100 Hz
