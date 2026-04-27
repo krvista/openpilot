@@ -1,7 +1,5 @@
-import math
 import os
 import numpy as np
-from collections import deque
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs, rate_limit
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
@@ -49,40 +47,13 @@ ACI_GAIN_OP_FLOOR = 0.15
 LOW_SPEED_PASSTHROUGH_ENTER_MS = 2.0 / 3.6   # ≈ 0.556 m/s
 LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
 
-# Phase 4-B: low-speed LPF on desired angle before rate limiter.
-# Suppresses planner noise that the MDPS 4°/s quantized sensor amplifies
-# into perceivable jerk. Ford-inspired exponential smoothing with
-# speed-dependent tau: max at standstill, fades to 0 at 15 km/h.
-LOWSPEED_LPF_TAU_BP = [0.0, 5.56, 15.0, 30.0]  # m/s: 0, 20, 54, 108 km/h
-LOWSPEED_LPF_TAU_V  = [0.35, 0.0,  0.0,  0.0]  # seconds: 350ms at 0, 0 above 20 km/h
-LPF_DT = DT_CTRL                    # 10 ms (100 Hz — matches actual TX rate)
+LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
-# Phase 4-B addendum: VW-inspired stuck-angle jitter break.
-# If apply_angle hasn't changed by > JITTER_DEADBAND for JITTER_FRAMES,
-# inject a ±0.05° micro-step to keep MDPS responsive.
+# Stuck-angle jitter break: inject ±0.05° micro-steps when angle is frozen
+# for 400ms to prevent MDPS from entering low-power mode.
 JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
 JITTER_FRAMES = 20        # ~400ms at 50 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
-
-# P1-2: Angle error feedback — small correction based on (commanded - actual).
-# Pure feedforward angle control relies on EPS tracking accuracy; adding a
-# proportional correction compensates for road camber, tire load, and MDPS
-# tracking lag.  KP is speed-dependent: higher at low speed (EPS has more
-# authority headroom) and tapers at highway to avoid oscillation.
-ANGLE_ERROR_KP_BP = [5., 15., 30.]    # m/s
-ANGLE_ERROR_KP_V  = [0.08, 0.04, 0.02]  # proportional gain — reduced to suppress straight-line jitter
-ANGLE_ERROR_MAX   = 0.5               # deg — tighter cap (was 1.0)
-ANGLE_ERROR_DEADZONE = 0.8            # deg — widened to ignore tracking noise in straights (was 0.3)
-
-# P1-3: Jerk feedforward — anticipate curvature direction changes.
-# Adapted from latcontrol_torque.py (JERK_LOOKAHEAD=190ms, LP=1.2Hz).
-# In angle domain: jerk → Δcurvature/dt → Δangle, providing ~100-150ms
-# earlier response at curve entry/exit transitions.
-JERK_FF_LOOKAHEAD_S = 0.15            # seconds — lookahead window (shorter than torque's 0.19)
-JERK_FF_LP_HZ       = 1.2             # Hz — low-pass filter cutoff for jerk signal
-JERK_FF_GAIN_BP     = [5., 15., 25., 30.]  # m/s
-JERK_FF_GAIN_V      = [0.06, 0.03, 0.01, 0.0]  # reduced + fades to 0 at highway to prevent straight-line noise
-JERK_FF_BUFFER_S    = 1.0             # seconds — ring buffer length
 
 # Parking mode: hands-on + low speed → fade out steering assist.
 PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
@@ -174,16 +145,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       from opendbc.car.hyundai.interface import CarInterface
       baseline_cp = CarInterface.get_non_essential_params("KIA_SPORTAGE_5TH_GEN")
       self.BASELINE_VM = VehicleModel(baseline_cp)
-    # Phase 4-B: low-speed LPF state
-    self.lpf_angle_last = 0.0
-    # Phase 6: curvature LPF state (filters model noise before conversion)
-    self.curv_lpf = 0.0
-    # P1-3: jerk feedforward state (default safe for non-CCNC platforms)
-    self.jerk_angle_buf = deque([0.0], maxlen=1)
-    self.jerk_ff_filter = 0.0
-    if is_ccnc_angle_platform(CP.flags):
-      jerk_buf_len = int(JERK_FF_BUFFER_S / (DT_CTRL * 2))  # 50Hz rate limiter
-      self.jerk_angle_buf = deque([0.0] * jerk_buf_len, maxlen=jerk_buf_len)
+    # Variable-tau LPF state
+    self.vtau_lpf = 0.0
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -516,118 +479,58 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # at 50 Hz. Camera blend removed — 12-route analysis showed op beats
     # stock LFA in rate and oscillation at all speeds.
     if ccnc_lka_alt and self.frame % 2 == 0:
-      # Phase 6: curvature LPF — filter model noise before downstream processing.
-      # Applied on the LatControlAngle-converted angle (op_curv_safe) which
-      # already includes roll compensation and speed-dependent VM factors.
-      # LPF on angle ≡ LPF on curvature for near-linear conversions.
-      entering_curve = abs(op_curv_safe) > abs(self.curv_lpf) + 0.5
+      # Variable-tau LPF: unified filter replacing curvature LPF + low-speed
+      # LPF + jerk FF + error FB. Tau is a continuous function of angle
+      # magnitude and speed — strong at center (suppresses straight-line
+      # jitter), weak at large angles (fast curve tracking), with low-speed
+      # smoothing built in. No step response because tau is continuous.
+      entering_curve = abs(op_curv_safe) > abs(self.vtau_lpf) + 0.5
       if entering_curve:
-        curv_tau = CarControllerParams.CURV_LPF_TAU_ENTRY
+        vtau = CarControllerParams.VTAU_ENTRY
       else:
-        curv_tau = CarControllerParams.CURV_LPF_TAU_EXIT
-        curv_delta = abs(op_curv_safe - self.curv_lpf)
-        curv_tau += min(curv_delta / 10.0, 1.0) * 0.30
-        if lon_accel < -1.0:
-          curv_tau = max(curv_tau, float(np.interp(lon_accel, CarControllerParams.CURV_LPF_TAU_BRAKE_BP,
-                                                   CarControllerParams.CURV_LPF_TAU_BRAKE_V)))
-      if CC.latActive and curv_tau > 0.001:
-        alpha_curv = LPF_DT / (curv_tau + LPF_DT)
-        self.curv_lpf = alpha_curv * op_curv_safe + (1.0 - alpha_curv) * self.curv_lpf
+        abs_angle = abs(self.vtau_lpf)
+        angle_tau = float(np.interp(abs_angle, CarControllerParams.VTAU_ANGLE_BP,
+                                    CarControllerParams.VTAU_ANGLE_V))
+        speed_tau = float(np.interp(v_ego_safe, CarControllerParams.VTAU_SPEED_BP,
+                                    CarControllerParams.VTAU_SPEED_V))
+        vtau = max(angle_tau, speed_tau)
+
+      if CC.latActive and vtau > 0.001:
+        alpha = LPF_DT / (vtau + LPF_DT)
+        self.vtau_lpf = alpha * op_curv_safe + (1.0 - alpha) * self.vtau_lpf
       else:
-        self.curv_lpf = op_curv_safe
-      desired_angle_deg = self.curv_lpf
+        self.vtau_lpf = op_curv_safe
+      desired_angle_deg = self.vtau_lpf
 
-      # P1-3: Jerk feedforward — predict curvature rate-of-change and add
-      # a small angle bias to anticipate curve entry/exit. Buffer stores
-      # recent desired angles at 50Hz; jerk is estimated from lookahead
-      # difference and LP-filtered to suppress planner noise.
-      self.jerk_angle_buf.append(desired_angle_deg)
-      jerk_ff_deg = 0.0
-      if CC.latActive and v_ego_safe > 3.0:
-        jerk_dt = DT_CTRL * 2  # 50Hz = 20ms
-        lookahead_frames = int(JERK_FF_LOOKAHEAD_S / jerk_dt)
-        buf_len = len(self.jerk_angle_buf)
-        if buf_len > 2 * lookahead_frames + 1:
-          idx_recent = -1
-          idx_past = max(-(buf_len), -1 - 2 * lookahead_frames)
-          raw_jerk = (self.jerk_angle_buf[idx_recent] - self.jerk_angle_buf[idx_past]) / \
-                     max(abs(idx_recent - idx_past) * jerk_dt, 0.001)
-          # First-order LP filter on jerk signal
-          lp_alpha = jerk_dt / (1.0 / (2.0 * math.pi * JERK_FF_LP_HZ) + jerk_dt)
-          self.jerk_ff_filter = lp_alpha * raw_jerk + (1.0 - lp_alpha) * self.jerk_ff_filter
-          jerk_gain = float(np.interp(v_ego_safe, JERK_FF_GAIN_BP, JERK_FF_GAIN_V))
-          jerk_ff_deg = self.jerk_ff_filter * jerk_gain
-      else:
-        self.jerk_ff_filter = 0.0
-
-      desired_angle_deg += jerk_ff_deg
-
-      # Gradient driver override blend (Toyota LTA TORQUE_WIND_DOWN style)
+      # Driver override blend
       if override_factor > 0:
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
                             override_factor * steer_angle_safe
 
-      # Phase 4-B: low-speed LPF — suppress planner noise below 15 km/h
-      tau_s = float(np.interp(v_ego_safe, LOWSPEED_LPF_TAU_BP, LOWSPEED_LPF_TAU_V))
-      if tau_s > 0.001:
-        alpha_lpf = LPF_DT / (tau_s + LPF_DT)
-        desired_angle_deg = alpha_lpf * desired_angle_deg + (1.0 - alpha_lpf) * self.lpf_angle_last
-      self.lpf_angle_last = desired_angle_deg
-
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched
 
-      # Phase 5: if driver is currently overriding past threshold, snap our
-      # reference angle to the actual wheel so MADS doesn't build up a
-      # counter-torque. This is held through the grace window on release;
-      # once released, the rate limiter smoothly ramps from here.
       if self.override_snapped:
         self.apply_angle_last = steer_angle_safe
 
-      # Phase 4-C: speed-dependent per-step cap (loosens low-speed ceiling so
-      # op planner peak demand at parking/city-low isn't clipped; tightens
-      # at highway where jerk limit already dominates).  Applied BEFORE the
-      # VM limiter so jerk/accel still have the final say when binding.
-      per_step_cap = float(np.interp(v_ego_safe, CarControllerParams.ANGLE_RATE_BP,
-                                     CarControllerParams.ANGLE_RATE_V))
-
-      # P1-2: Angle error feedback — compensate for MDPS tracking error
-      # caused by road camber, tire load, and EPS friction deadband.
-      # Gated on not-rate-limited: skip when already pushing the rate cap
-      # to prevent positive feedback under saturation.
-      not_rate_limited = abs(desired_angle_deg - self.apply_angle_last) < per_step_cap * 0.9
-      if CC.latActive and v_ego_safe > 3.0 and not self.override_snapped and not_rate_limited:
-        angle_error = desired_angle_deg - steer_angle_safe
-        angle_error_dz = float(np.sign(angle_error) * max(abs(angle_error) - ANGLE_ERROR_DEADZONE, 0.0))
-        kp = float(np.interp(v_ego_safe, ANGLE_ERROR_KP_BP, ANGLE_ERROR_KP_V))
-        correction = float(np.clip(kp * angle_error_dz, -ANGLE_ERROR_MAX, ANGLE_ERROR_MAX))
-        desired_angle_deg += correction
-
-      desired_angle_deg = float(np.clip(desired_angle_deg,
-                                        self.apply_angle_last - per_step_cap,
-                                        self.apply_angle_last + per_step_cap))
-
-      # Phase 4-A: VM-based jerk/accel limiter (replaces v1 rate table)
+      # VM-based jerk/accel limiter
       apply_angle = apply_steer_angle_limits_vm(
         desired_angle_deg, self.apply_angle_last, v_ego_safe,
         steer_angle_safe, rate_lat_active, self.params, self.VM,
       )
-      # Dual VM: clamp to baseline model limits (panda angle safety prep)
       if apply_angle is not None:
         apply_angle = apply_steer_angle_limits_vm(
           apply_angle, self.apply_angle_last, v_ego_safe,
           steer_angle_safe, rate_lat_active, self.params, self.BASELINE_VM,
         )
-      # Failsafe: VM detected unavoidable safety violation — fall back to
-      # current wheel angle with zero gain to prevent panda TX block.
       if apply_angle is None:
         self.apply_angle_last = steer_angle_safe
         apply_steer_req = False
       else:
         self.apply_angle_last = apply_angle
 
-      # Phase 4-B addendum: stuck-angle jitter break (VW HCA pattern)
+      # Stuck-angle jitter break
       if rate_lat_active:
-        if abs(self.apply_angle_last - self.lpf_angle_last) < JITTER_DEADBAND:
+        if abs(self.apply_angle_last - self.vtau_lpf) < JITTER_DEADBAND:
           self.jitter_counter += 1
         else:
           self.jitter_counter = 0
@@ -637,7 +540,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           self.jitter_counter = 0
       else:
         self.jitter_counter = 0
-        self.lpf_angle_last = steer_angle_safe
 
     # Steering message TX: 100 Hz for all CAN FD platforms.
     # CCNC angle-control was originally 50 Hz (frame%2), but rlog analysis
