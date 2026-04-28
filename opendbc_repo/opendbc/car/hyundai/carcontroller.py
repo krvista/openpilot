@@ -63,25 +63,24 @@ PARKING_FADE_RATE = 1.0 / 150         # 1.5 s full fade (100 Hz)
 PARKING_ANGLE_THRESHOLD = 200         # deg — instant parking entry at large angle
 
 
-def compute_driver_torque_factor(steering_torque, v_ego, lat_active):
-  """Drivelog-calibrated 4-breakpoint speed-dependent torque→factor.
-  Returns [0.0, 1.0]: 1.0 = no driver override, 0.0 = full override.
-  For angle-control MDPS where reported column torque includes EPS reaction.
-  Route 0x01 (a46e2136): previous bp1=200 caused 47% steeringPressed at seg10
-  → 44% PASSIVE time. Raised thresholds so light grip (p90=184 Nm) stays
-  at full authority; active steering (p25=250, p50=381) starts ramp."""
-  if not lat_active:
-    return 0.0
-  bp1 = float(np.interp(v_ego, [3., 8., 15., 22.], [300., 320., 280., 200.]))
-  bp2 = float(np.interp(v_ego, [3., 8., 15., 22.], [420., 400., 380., 320.]))
-  bp3 = float(np.interp(v_ego, [3., 8., 15., 22.], [500., 480., 420., 400.]))
-  bp4 = float(np.interp(v_ego, [3., 8., 15., 22.], [620., 600., 560., 520.]))
-  ceiling = 1.0
-  shelf = float(np.interp(v_ego, [3., 22.], [0.60, 0.75]))
-  floor = float(np.interp(v_ego, [3., 22.], [0.10, 0.30]))
-  return float(np.interp(abs(steering_torque),
-                          [bp1, bp2, bp3, bp4],
-                          [ceiling, shelf, shelf, floor]))
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain):
+  """Sunnypilot-style ACIGain: torque + speed → gain with rate limit + quantization."""
+  if lat_active:
+    ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
+    shelf = float(np.interp(v_ego, [2., 11.], [0.45, 0.6]))
+    floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
+    bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
+    bp2 = float(np.interp(v_ego, [2., 11.], [125., 150.]))
+    bp3 = float(np.interp(v_ego, [2., 11.], [175., 275.]))
+    bp4 = float(np.interp(v_ego, [2., 22.], [400., 700.]))
+    target = float(np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4],
+                              [ceiling, shelf, shelf, floor]))
+  else:
+    target = 0.0
+  gain = rate_limit(target, last_gain,
+                    CarControllerParams.ACI_GAIN_RATE_DOWN,
+                    CarControllerParams.ACI_GAIN_RATE_UP)
+  return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -591,35 +590,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         self.parking_fade = min(1.0, self.parking_fade + PARKING_FADE_RATE)
 
-    # ACIGain: compute in carcontroller for rate limiting / quantization.
-    # Use 4-breakpoint driver torque factor for CCNC angle (richer than linear blend).
-    driver_torque_factor = compute_driver_torque_factor(steer_torque_safe, v_ego_safe, CC.latActive) \
-                           if ccnc_lka_alt else driver_torque_blend
+    # ACIGain: sunnypilot-style torque reduction gain (torque + speed → gain).
     effective_aci_gain = None
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
-      cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
       steering_active = bool(CC.latActive) and not self.override_snapped and apply_steer_req
-      lon_comfort_factor = float(np.interp(abs(lon_accel),
-                                           CarControllerParams.LON_COMFORT_ACCEL_BP,
-                                           CarControllerParams.LON_COMFORT_GAIN_V))
-      if steering_active:
-        raw_gain = max(speed_blend, 0.20) * self.aci_gain_ramp * driver_torque_factor * lon_comfort_factor
-        raw_gain *= self.parking_fade
-        gain_floor = 0.10 * self.parking_fade
-        target_aci_gain = float(np.clip(raw_gain, gain_floor, CarControllerParams.ACI_GAIN_CEILING)) \
-                          if raw_gain > 0.005 else 0.0
-      else:
-        target_aci_gain = 0.0  # panda safety: ACTIVE=1 requires gain=0
-      # Asymmetric rate limit (active→active only; active→passive is instant 0)
-      if steering_active:
-        effective_aci_gain = rate_limit(target_aci_gain, self.aci_gain_last,
-                                        CarControllerParams.ACI_GAIN_RATE_DOWN,
-                                        CarControllerParams.ACI_GAIN_RATE_UP)
-      else:
-        effective_aci_gain = 0.0
-      # Quantize to DBC signal resolution
-      q = CarControllerParams.ACI_GAIN_QUANT
-      effective_aci_gain = round(effective_aci_gain / q) * q
+      effective_aci_gain = compute_torque_reduction_gain(
+        steer_torque_safe, v_ego_safe, steering_active, self.aci_gain_last)
       self.aci_gain_last = effective_aci_gain
 
     if ccnc_lka_alt:

@@ -76,12 +76,12 @@ class CarControllerParams:
   # operating range.  ANGLE_RATE_V table is loosened accordingly to avoid
   # being the new bottleneck.
   ANGLE_LIMITS_VM: AngleSteeringLimits = AngleSteeringLimits(
-    176.7,
-    ([], []),  # v1 tables unused — VM computes per-step limits
+    360,
     ([], []),
-    MAX_LATERAL_ACCEL=3.3,   # m/s² — ISO 3.0 + moderate road roll
-    MAX_LATERAL_JERK=5.0,    # m/s³ — matches release-mici (was 3.5, +43%)
-    MAX_ANGLE_RATE=1.5,      # deg/10ms — hard safety ceiling (was 3.0 deg/20ms at 50Hz)
+    ([], []),
+    MAX_LATERAL_ACCEL=3.0 + (9.81 * 0.06),  # ~3.59 m/s² (matches panda safety)
+    MAX_LATERAL_JERK=3.0 + (9.81 * 0.06),   # ~3.59 m/s³ (matches panda safety)
+    MAX_ANGLE_RATE=5.0,                       # deg/frame — sunnypilot default
   )
 
   # Phase 5: Speed-dependent per-step cap (deg/20ms @ 50Hz).
@@ -108,18 +108,13 @@ class CarControllerParams:
   VTAU_SPEED_V  = [0.70, 0.20, 0.0]  # tau seconds (doubled for 100Hz)
   VTAU_ENTRY    = 0.20  # curve entry: truly 0.20s at 100Hz (was ~0.40s effective at 50Hz)
 
-  # Longitudinal-aware lateral comfort: modulate ACIGain based on vehicle
-  # acceleration. During hard braking/accel, lower ACIGain to reduce jolt.
-  LON_COMFORT_ACCEL_BP = [1.0, 2.5, 4.0]           # |aEgo| m/s²
-  LON_COMFORT_GAIN_V   = [1.0, 0.7, 0.5]           # ACIGain multiplier
-
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
   # increase so driver override yields quickly while re-engagement is smooth.
   # HDA1 reference: -0.014/+0.004 @ 100Hz. We use ~2.5x down / 1x up.
-  ACI_GAIN_RATE_DOWN = -0.035   # per frame @ 100Hz (= -3.5/s, 0.8→0 in 0.23s)
-  ACI_GAIN_RATE_UP   =  0.004   # per frame @ 100Hz (= +0.4/s, 0→0.8 in 2.0s)
-  ACI_GAIN_QUANT           =  0.004   # DBC signal resolution for ADAS_ACIAnglTqRedcGainVal
-  ACI_GAIN_CEILING         =  1.0    # steady-state max (raised for stronger EPS tracking)
+  ACI_GAIN_RATE_DOWN = -0.014   # per frame @ 100Hz (sunnypilot: -1.4/s)
+  ACI_GAIN_RATE_UP   =  0.004   # per frame @ 100Hz (sunnypilot: +0.4/s)
+  ACI_GAIN_QUANT     =  0.004   # DBC signal resolution
+  ACI_GAIN_CEILING   =  1.0     # steady-state max
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
