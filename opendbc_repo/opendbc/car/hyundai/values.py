@@ -103,7 +103,7 @@ class CarControllerParams:
   # angle magnitude + speed. Strong at center (straight-line jitter suppression),
   # weak at large angles (fast curve tracking), with low-speed smoothing.
   VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
-  VTAU_ANGLE_V  = [2.0, 1.0, 0.20, 0.20]  # tau seconds (doubled for 100Hz)
+  VTAU_ANGLE_V  = [2.5, 1.0, 0.20, 0.20]  # tau seconds (center raised for straight noise)
   VTAU_SPEED_BP = [0.0, 5.0, 15.0]  # m/s
   VTAU_SPEED_V  = [0.70, 0.20, 0.0]  # tau seconds (doubled for 100Hz)
   VTAU_ENTRY    = 0.20  # curve entry: truly 0.20s at 100Hz (was ~0.40s effective at 50Hz)
@@ -119,7 +119,7 @@ class CarControllerParams:
   ACI_GAIN_RATE_DOWN = -0.035   # per frame @ 100Hz (= -3.5/s, 0.8→0 in 0.23s)
   ACI_GAIN_RATE_UP   =  0.004   # per frame @ 100Hz (= +0.4/s, 0→0.8 in 2.0s)
   ACI_GAIN_QUANT           =  0.004   # DBC signal resolution for ADAS_ACIAnglTqRedcGainVal
-  ACI_GAIN_CEILING         =  0.8    # steady-state max; stock cam always sends 0.000
+  ACI_GAIN_CEILING         =  1.0    # steady-state max (raised for stronger EPS tracking)
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°

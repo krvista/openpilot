@@ -167,9 +167,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # detected. Tracking COUNTER fixes that.
     self.cam_msg_last_frame = 0
     self.cam_msg_last_counter = -1
-    # HOD (hands-on detection) bypass state. Opt-in via HOD_BYPASS=1 env
-    # var; otherwise dormant. See Appendix H of the masterplan.
-    self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
+    # HOD (hands-on detection) bypass — always ON for CCNC angle platform.
+    # Sends GRIP_STRONG on 0x208 at 10Hz to suppress factory hands-off warning.
+    self.hod_bypass_enabled = is_ccnc_angle_platform(CP.flags)
     self.hod_bypass_counter = 0
 
     # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
