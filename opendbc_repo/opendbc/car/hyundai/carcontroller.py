@@ -52,7 +52,7 @@ LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 # Stuck-angle jitter break: inject ±0.05° micro-steps when angle is frozen
 # for 400ms to prevent MDPS from entering low-power mode.
 JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
-JITTER_FRAMES = 20        # ~400ms at 50 Hz
+JITTER_FRAMES = 20        # ~200ms at 100 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
 # Parking mode: hands-on + low speed → fade out steering assist.
@@ -547,13 +547,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         self.jitter_counter = 0
 
-    # Steering message TX: 100 Hz for all CAN FD platforms.
-    # CCNC angle-control was originally 50 Hz (frame%2), but rlog analysis
-    # (route 0x4e) proved the camera sends at 100 Hz and ADAS DRV expects
-    # that rate — the 50 Hz stream caused intermittent FAULT_LFA (3 episodes
-    # per 30-min drive). Rate limiter/LPF still runs at 50 Hz (line 475);
-    # the 100 Hz TX simply repeats the last computed angle on odd frames.
-    # Issue 3: MADS-driven LKA_ICON for LKAS_ALT message.
+    # Steering message TX + angle computation: 100 Hz for CCNC angle platform.
+    # Both vtau LPF and VM rate limiter run at 100Hz (STEER_STEP=1) to match
+    # panda safety frequency and fully utilize the jerk budget.
+    # MADS-driven LKA_ICON for LKAS_ALT message:
     # When cruiseState.available (ACC main on): reflect MADS state (green/off).
     # When ACC main off: None → camera passthrough (stock LFA icon).
     mads_enabled = getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled
@@ -590,20 +587,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         self.parking_fade = min(1.0, self.parking_fade + PARKING_FADE_RATE)
 
-    # ACIGain: sunnypilot-style torque reduction gain (torque + speed → gain).
-    effective_aci_gain = None
-    if ccnc_lka_alt and lkas_alt_cam_msg is not None:
-      steering_active = bool(CC.latActive) and not self.override_snapped and apply_steer_req
-      effective_aci_gain = compute_torque_reduction_gain(
-        steer_torque_safe, v_ego_safe, steering_active, self.aci_gain_last)
-      self.aci_gain_last = effective_aci_gain
-
     if ccnc_lka_alt:
       fault_lfa = getattr(CS, 'fault_lfa', 0)
       if fault_lfa and not self.prev_fault_lfa:
         cloudlog.warning(
           f"FAULT_LFA onset: cam_stale={cam_stale} aci_active={self.aci_active_latched} "
-          f"gain={effective_aci_gain:.3f} speed_blend={speed_blend:.2f} "
+          f"gain={self.aci_gain_last:.3f} speed_blend={speed_blend:.2f} "
           f"steer_angle={steer_angle_safe:.1f} op_angle={op_curv_safe:.1f} "
           f"lat_active={CC.latActive} override={self.override_snapped} "
           f"cam_counter={self.cam_msg_last_counter} fault_das={getattr(CS, 'fault_das', 0)}"
@@ -628,6 +617,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         lkas_alt_cam_msg["ADAS_StrAnglReqVal"] = steer_angle_safe
     effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req
                             and not self.was_in_reverse and not parking_fully_faded) if ccnc_lka_alt else apply_steer_req
+
+    # ACIGain: sunnypilot-style torque reduction gain (torque + speed → gain).
+    # Must use effective_lat_active (not CC.latActive) to ensure gain=0
+    # when LKAS_ANGLE_ACTIVE=1 (passive). Panda rejects gain>0 with ACTIVE=1.
+    effective_aci_gain = None
+    if ccnc_lka_alt and lkas_alt_cam_msg is not None:
+      effective_aci_gain = compute_torque_reduction_gain(
+        steer_torque_safe, v_ego_safe, effective_lat_active, self.aci_gain_last)
+      self.aci_gain_last = effective_aci_gain
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                          driver_torque_blend=driver_torque_blend,
