@@ -485,12 +485,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # magnitude and speed — strong at center (suppresses straight-line
       # jitter), weak at large angles (fast curve tracking), with low-speed
       # smoothing built in. No step response because tau is continuous.
-      entering_curve = abs(op_curv_safe) > abs(self.vtau_lpf) + 0.5
-      returning_to_center = abs(op_curv_safe) < abs(self.vtau_lpf) - 0.3
+      entering_curve = abs(op_curv_safe) > abs(self.vtau_lpf) + CarControllerParams.VTAU_ENTRY_TH
+      returning_to_center = abs(op_curv_safe) < abs(self.vtau_lpf) - CarControllerParams.VTAU_EXIT_TH
 
-      if entering_curve:
-        vtau = CarControllerParams.VTAU_ENTRY
-      elif returning_to_center:
+      if entering_curve or returning_to_center:
         self.vtau_lpf = op_curv_safe
         vtau = 0.0
       else:

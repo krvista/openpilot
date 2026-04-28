@@ -106,7 +106,8 @@ class CarControllerParams:
   VTAU_ANGLE_V  = [2.5, 1.0, 0.20, 0.20]  # tau seconds (center raised for straight noise)
   VTAU_SPEED_BP = [0.0, 5.0, 15.0]  # m/s
   VTAU_SPEED_V  = [0.70, 0.20, 0.0]  # tau seconds (doubled for 100Hz)
-  VTAU_ENTRY    = 0.20  # curve entry: truly 0.20s at 100Hz (was ~0.40s effective at 50Hz)
+  VTAU_ENTRY_TH = 1.5   # deg: bypass LPF when entering curve (abs(raw) > abs(lpf) + TH)
+  VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
   # increase so driver override yields quickly while re-engagement is smooth.
