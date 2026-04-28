@@ -81,7 +81,7 @@ class CarControllerParams:
     ([], []),
     MAX_LATERAL_ACCEL=3.3,   # m/s² — ISO 3.0 + moderate road roll
     MAX_LATERAL_JERK=5.0,    # m/s³ — matches release-mici (was 3.5, +43%)
-    MAX_ANGLE_RATE=3.0,      # deg/20ms — hard safety ceiling; speed table clamps below
+    MAX_ANGLE_RATE=1.5,      # deg/10ms — hard safety ceiling (was 3.0 deg/20ms at 50Hz)
   )
 
   # Phase 5: Speed-dependent per-step cap (deg/20ms @ 50Hz).
@@ -103,10 +103,10 @@ class CarControllerParams:
   # angle magnitude + speed. Strong at center (straight-line jitter suppression),
   # weak at large angles (fast curve tracking), with low-speed smoothing.
   VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
-  VTAU_ANGLE_V  = [1.0, 0.50, 0.10, 0.10]  # tau seconds
+  VTAU_ANGLE_V  = [2.0, 1.0, 0.20, 0.20]  # tau seconds (doubled for 100Hz)
   VTAU_SPEED_BP = [0.0, 5.0, 15.0]  # m/s
-  VTAU_SPEED_V  = [0.35, 0.10, 0.0]  # tau seconds
-  VTAU_ENTRY    = 0.20  # curve entry override (seconds)
+  VTAU_SPEED_V  = [0.70, 0.20, 0.0]  # tau seconds (doubled for 100Hz)
+  VTAU_ENTRY    = 0.20  # curve entry: truly 0.20s at 100Hz (was ~0.40s effective at 50Hz)
 
   # Longitudinal-aware lateral comfort: modulate ACIGain based on vehicle
   # acceleration. During hard braking/accel, lower ACIGain to reduce jolt.
@@ -178,7 +178,7 @@ class CarControllerParams:
       self.STEER_DELTA_UP = 2
       self.STEER_DELTA_DOWN = 3
       if CP.flags & HyundaiFlags.CCNC:
-        self.STEER_STEP = 2  # 50 Hz TX on CCNC angle platform
+        self.STEER_STEP = 1  # 100 Hz — matches panda safety frequency
         self.ANGLE_LIMITS = CarControllerParams.ANGLE_LIMITS_VM
         self.STEER_THRESHOLD = 350  # angle-control: EPS reaction inflates torque
 

@@ -476,9 +476,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.aci_gain_ramp = 0.0
 
     # HDA2-ALT + CCNC angle control: op-only, VM-based jerk/accel limiter
-    # at 50 Hz. Camera blend removed — 12-route analysis showed op beats
-    # stock LFA in rate and oscillation at all speeds.
-    if ccnc_lka_alt and self.frame % 2 == 0:
+    # at 100 Hz. Panda safety checks at 100Hz frequency — running the
+    # rate limiter at 50Hz (frame%2) wasted half the allowed jerk budget
+    # because panda only permits 10ms of delta per TX.
+    if ccnc_lka_alt:
       # Variable-tau LPF: unified filter replacing curvature LPF + low-speed
       # LPF + jerk FF + error FB. Tau is a continuous function of angle
       # magnitude and speed — strong at center (suppresses straight-line
