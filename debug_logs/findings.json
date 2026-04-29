@@ -1,0 +1,5789 @@
+{
+  "route_summaries": [
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segments": 34,
+      "duration_min": 561.6,
+      "fingerprint": "JEEP_GRAND_CHEROKEE_2019",
+      "version": "2025.002.000",
+      "branch": "release-tizi",
+      "by_kind": {
+        "error_log": 55,
+        "process_crash": 1,
+        "disengage": 11
+      },
+      "by_severity": {
+        "error": 50,
+        "info": 2,
+        "warning": 14,
+        "critical": 1
+      },
+      "top_daemons": {
+        "qcomgpsd": 12,
+        "micd": 10,
+        "soundd": 10,
+        "card": 10,
+        "selfdrived": 8,
+        "controlsd": 5,
+        "selfdrive.modeld.modeld_tinygrad": 4,
+        "locationd_llk": 3,
+        "athenad": 2,
+        "backup_manager": 1
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segments": 37,
+      "duration_min": 703.3,
+      "fingerprint": "JEEP_GRAND_CHEROKEE_2019",
+      "version": "2025.002.000",
+      "branch": "release-tizi",
+      "by_kind": {
+        "error_log": 64,
+        "process_crash": 2,
+        "disengage": 58
+      },
+      "by_severity": {
+        "error": 60,
+        "info": 2,
+        "warning": 61,
+        "critical": 1
+      },
+      "top_daemons": {
+        "controlsd": 58,
+        "micd": 19,
+        "soundd": 12,
+        "qcomgpsd": 12,
+        "card": 10,
+        "selfdrive.modeld.modeld_tinygrad": 6,
+        "selfdrived": 4,
+        "locationd_llk": 2,
+        "backup_manager": 1
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segments": 19,
+      "duration_min": 171.3,
+      "fingerprint": "JEEP_GRAND_CHEROKEE_2019",
+      "version": "2025.002.000",
+      "branch": "release-tizi",
+      "by_kind": {
+        "error_log": 57,
+        "process_crash": 1,
+        "disengage": 11
+      },
+      "by_severity": {
+        "error": 54,
+        "info": 2,
+        "warning": 12,
+        "critical": 1
+      },
+      "top_daemons": {
+        "micd": 12,
+        "soundd": 12,
+        "qcomgpsd": 12,
+        "card": 10,
+        "controlsd": 9,
+        "selfdrive.modeld.modeld_tinygrad": 6,
+        "selfdrived": 4,
+        "athenad": 2,
+        "backup_manager": 1,
+        "locationd_llk": 1
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segments": 49,
+      "duration_min": 1176.8,
+      "fingerprint": "JEEP_GRAND_CHEROKEE_2019",
+      "version": "2025.002.000",
+      "branch": "release-tizi",
+      "by_kind": {
+        "error_log": 56,
+        "process_crash": 1,
+        "disengage": 17
+      },
+      "by_severity": {
+        "error": 52,
+        "info": 2,
+        "warning": 19,
+        "critical": 1
+      },
+      "top_daemons": {
+        "controlsd": 15,
+        "micd": 12,
+        "soundd": 12,
+        "qcomgpsd": 12,
+        "card": 10,
+        "selfdrive.modeld.modeld_tinygrad": 4,
+        "selfdrived": 4,
+        "sunnylinkd": 2,
+        "locationd_llk": 2,
+        "backup_manager": 1
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segments": 39,
+      "duration_min": 780.9,
+      "fingerprint": "JEEP_GRAND_CHEROKEE_2019",
+      "version": "2025.002.000",
+      "branch": "release-tizi",
+      "by_kind": {
+        "error_log": 65,
+        "process_crash": 1,
+        "disengage": 31
+      },
+      "by_severity": {
+        "error": 47,
+        "info": 2,
+        "warning": 47,
+        "critical": 1
+      },
+      "top_daemons": {
+        "controlsd": 26,
+        "locationd_llk": 16,
+        "qcomgpsd": 12,
+        "card": 10,
+        "selfdrive.modeld.modeld_tinygrad": 8,
+        "selfdrived": 7,
+        "micd": 4,
+        "soundd": 4,
+        "athenad": 4,
+        "sunnylinkd": 4
+      }
+    }
+  ],
+  "findings": [
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 31515065611,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 31603009621,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32090726757,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32680975871,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32764641965,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32878468006,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 31514894257,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 31602874621,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32090592329,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "vin.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32680889413,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32764555766,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 32878375610,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 33930435922,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{\"event\": \"fingerprinted\", \"car_fingerprint\": \"JEEP_GRAND_CHEROKEE_2019\", \"source\": 1, \"fuzzy\": false, \"cached\": false, \"fw_count\": 7, \"ecu_responses\": [[1242, null, 0], [1223, null, 0], [1220, null, 0], [2024, null, 0], [1218, null, 0], [2025, null, 0], [1235, null, 0]], \"vin_rx_addr\": 2024, \"vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 33930269412,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{'event': 'fingerprinted', 'car_fingerprint': 'JEEP_GRAND_CHEROKEE_2019', 'source': 1, 'fuzzy': False, 'cached': False, 'fw_count': 7, 'ecu_responses': [[1242, None, 0], [1223, None, 0], [1220, None, 0], [2024, None, 0], [1218, None, 0], [2025, None, 0], [1235, None, 0]], 'vin_rx_addr': 2024, 'vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "car_helpers.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 34577168631,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 34577038110,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 34670720089,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 34670643735,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 36846691026,
+      "kind": "process_crash",
+      "daemon": "backup_manager",
+      "detail": "exitCode=0 shouldBeRunning=False",
+      "severity": "warning",
+      "extra": {
+        "exitCode": 0,
+        "shouldBeRunning": false,
+        "pid": 0
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37001888942,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 95 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37001757848,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 95 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37273191546,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37273036755,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37631163994,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37631271546,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37727679150,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 37727852015,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 38354955713,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 38359474410,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{\"event\": \"selfdrived.initialized\", \"dt\": 4.21, \"timeout\": false, \"canValid\": true, \"invalid\": [\"alertDebug\", \"modelDataV2SP\", \"gpsLocation\"], \"not_alive\": [\"alertDebug\", \"gpsLocation\"], \"not_freq_ok\": [\"alertDebug\", \"gpsLocation\"], \"error\": true}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 38359312067,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{'event': 'selfdrived.initialized', 'dt': 4.21, 'timeout': False, 'canValid': True, 'invalid': ['alertDebug', 'modelDataV2SP', 'gpsLocation'], 'not_alive': ['alertDebug', 'gpsLocation'], 'not_freq_ok': ['alertDebug', 'gpsLocation'], 'error': True}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "selfdrived.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 38787486546,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "controlsMismatch (immediateDisable)",
+      "severity": "critical",
+      "extra": {
+        "event": "controlsMismatch",
+        "flags": [
+          "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 40701663316,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 40701523941,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 40822541909,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 40822435816,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 43720300919,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 43720163992,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 43898509565,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 43897724512,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 57504619455,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "athenad.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 57504824559,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 77597457625,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 77598051062,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 77855737937,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 77855537833,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78124764812,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78124689395,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78387102156,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78387315176,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78640301947,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78640180958,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78840785280,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 78840674135,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "qcomgpsd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 1,
+      "log_mono_time_ns": 149437462596,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 2,
+      "log_mono_time_ns": 153147561698,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 2,
+      "log_mono_time_ns": 155430325770,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 3,
+      "log_mono_time_ns": 221526975399,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 6,
+      "log_mono_time_ns": 420208138769,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 8,
+      "log_mono_time_ns": 554817286492,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 8,
+      "log_mono_time_ns": 565118567785,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 12,
+      "log_mono_time_ns": 756007847302,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 19,
+      "log_mono_time_ns": 1177525606266,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 19,
+      "log_mono_time_ns": 1215449660525,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 19,
+      "log_mono_time_ns": 1227978159742,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 31,
+      "log_mono_time_ns": 1895537563571,
+      "kind": "error_log",
+      "daemon": "",
+      "detail": "athenad.ws_recv.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 31,
+      "log_mono_time_ns": 1895537478520,
+      "kind": "error_log",
+      "daemon": "",
+      "detail": "athenad.ws_recv.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "athenad.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 31,
+      "log_mono_time_ns": 1912846833488,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 29408015404,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 29648964622,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 29866877435,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 30444848684,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 30554693632,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 30665596757,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 29407942070,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 29648856601,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 29866567122,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "vin.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 30444762018,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 30554577591,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 30665436966,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 31718378423,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{\"event\": \"fingerprinted\", \"car_fingerprint\": \"JEEP_GRAND_CHEROKEE_2019\", \"source\": 1, \"fuzzy\": false, \"cached\": false, \"fw_count\": 7, \"ecu_responses\": [[1242, null, 0], [1223, null, 0], [1220, null, 0], [2024, null, 0], [1218, null, 0], [2025, null, 0], [1235, null, 0]], \"vin_rx_addr\": 2024, \"vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 31718167330,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{'event': 'fingerprinted', 'car_fingerprint': 'JEEP_GRAND_CHEROKEE_2019', 'source': 1, 'fuzzy': False, 'cached': False, 'fw_count': 7, 'ecu_responses': [[1242, None, 0], [1223, None, 0], [1220, None, 0], [2024, None, 0], [1218, None, 0], [2025, None, 0], [1235, None, 0]], 'vin_rx_addr': 2024, 'vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "car_helpers.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 32410518892,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 32410348423,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 32720395298,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 32720286600,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 34652297849,
+      "kind": "process_crash",
+      "daemon": "backup_manager",
+      "detail": "exitCode=0 shouldBeRunning=False",
+      "severity": "warning",
+      "extra": {
+        "exitCode": 0,
+        "shouldBeRunning": false,
+        "pid": 0
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 34780905818,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 89 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 34780873943,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 89 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 35059244568,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 35059117485,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 35468025089,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 35467968422,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 35747767224,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 35747663162,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 36342473422,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "wrongGear (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "wrongGear",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 36342473422,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 36345913943,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{\"event\": \"selfdrived.initialized\", \"dt\": 4.43, \"timeout\": false, \"canValid\": true, \"invalid\": [\"alertDebug\", \"modelDataV2SP\", \"gpsLocation\"], \"not_alive\": [\"alertDebug\", \"gpsLocation\"], \"not_freq_ok\": [\"alertDebug\", \"gpsLocation\"], \"error\": true}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 36345776130,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{'event': 'selfdrived.initialized', 'dt': 4.43, 'timeout': False, 'canValid': True, 'invalid': ['alertDebug', 'modelDataV2SP', 'gpsLocation'], 'not_alive': ['alertDebug', 'gpsLocation'], 'not_freq_ok': ['alertDebug', 'gpsLocation'], 'error': True}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "selfdrived.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 36772809619,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "reverseGear (userDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "reverseGear",
+        "flags": [
+          "userDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 38516453577,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 38516332744,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 38794064983,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 38793975973,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 41580794670,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 41580655555,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 41834715451,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 41834506701,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 44658763106,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 44658876700,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 44866634304,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 44866762273,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 47706012636,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 47705948626,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 50182621125,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 50182543156,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 50709877843,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "crash",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 50709798468,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "crash",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "process.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 50728121697,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "logged crash to ['/data/community/crashes/2025-07-02--14-05-19.log', '/data/community/crashes/error.log']",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "sentry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 50728210968,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "logged crash to ['/data/community/crashes/2025-07-02--14-05-19.log', '/data/community/crashes/error.log']",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 51426243156,
+      "kind": "process_crash",
+      "daemon": "micd",
+      "detail": "exitCode=1 shouldBeRunning=True",
+      "severity": "critical",
+      "extra": {
+        "exitCode": 1,
+        "shouldBeRunning": true,
+        "pid": 27352
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 51442450187,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{\"event\": \"process_not_running\", \"not_running\": \"{'micd'}\", \"error\": true}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 51442357218,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{'event': 'process_not_running', 'not_running': \"{'micd'}\", 'error': True}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "selfdrived.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 51439302218,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 74470276532,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 74470132313,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 74720360074,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 74720237157,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 74995014240,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 74994921636,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 75260510230,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 75260648876,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 75517887365,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 75517783823,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 75719338667,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 75719264761,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "qcomgpsd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 1,
+      "log_mono_time_ns": 90916413453,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 1,
+      "log_mono_time_ns": 126906808006,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 1,
+      "log_mono_time_ns": 132917618389,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 2,
+      "log_mono_time_ns": 150916672291,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 2,
+      "log_mono_time_ns": 184588132920,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 3,
+      "log_mono_time_ns": 210916557400,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 3,
+      "log_mono_time_ns": 210916557400,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 4,
+      "log_mono_time_ns": 270916901966,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 4,
+      "log_mono_time_ns": 270916901966,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 5,
+      "log_mono_time_ns": 330446029962,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 5,
+      "log_mono_time_ns": 368386444774,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 6,
+      "log_mono_time_ns": 390916240510,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 6,
+      "log_mono_time_ns": 390916240510,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 7,
+      "log_mono_time_ns": 450916948332,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 8,
+      "log_mono_time_ns": 510917553846,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 8,
+      "log_mono_time_ns": 555537526943,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 9,
+      "log_mono_time_ns": 570917029067,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 9,
+      "log_mono_time_ns": 570917029067,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 10,
+      "log_mono_time_ns": 630917164103,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 10,
+      "log_mono_time_ns": 684496950218,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 11,
+      "log_mono_time_ns": 690918857263,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 11,
+      "log_mono_time_ns": 690918857263,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 12,
+      "log_mono_time_ns": 750917557927,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 13,
+      "log_mono_time_ns": 810498224122,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 13,
+      "log_mono_time_ns": 825827179068,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 14,
+      "log_mono_time_ns": 870917381902,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 14,
+      "log_mono_time_ns": 870917381902,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 15,
+      "log_mono_time_ns": 930916618240,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 15,
+      "log_mono_time_ns": 985187641641,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 16,
+      "log_mono_time_ns": 990917555996,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 16,
+      "log_mono_time_ns": 990917555996,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 17,
+      "log_mono_time_ns": 1050387272902,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 17,
+      "log_mono_time_ns": 1084058032527,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 18,
+      "log_mono_time_ns": 1110918106112,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 18,
+      "log_mono_time_ns": 1138287486205,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 19,
+      "log_mono_time_ns": 1170917285978,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 19,
+      "log_mono_time_ns": 1170917285978,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 20,
+      "log_mono_time_ns": 1230917245493,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 21,
+      "log_mono_time_ns": 1290918102095,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 22,
+      "log_mono_time_ns": 1350921175858,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 23,
+      "log_mono_time_ns": 1410426114556,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 23,
+      "log_mono_time_ns": 1415354662615,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 24,
+      "log_mono_time_ns": 1470664477282,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 25,
+      "log_mono_time_ns": 1530924478582,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 26,
+      "log_mono_time_ns": 1590594147696,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 27,
+      "log_mono_time_ns": 1650926594400,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 28,
+      "log_mono_time_ns": 1710926922152,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 28,
+      "log_mono_time_ns": 1747825192574,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 29,
+      "log_mono_time_ns": 1770427990584,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 30,
+      "log_mono_time_ns": 1830797409108,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 31,
+      "log_mono_time_ns": 1890830382209,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 32,
+      "log_mono_time_ns": 1950690764895,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 33,
+      "log_mono_time_ns": 2010931215367,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 34,
+      "log_mono_time_ns": 2070502271830,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 35,
+      "log_mono_time_ns": 2130932307573,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 36,
+      "log_mono_time_ns": 2190931697148,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "processNotRunning (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "processNotRunning",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 30212449935,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 30490308112,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 30737458164,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 31344089101,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 31433724361,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 30212363112,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 30490172435,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 30737338476,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "vin.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 31344034361,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 31433638893,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 31554645195,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 31554523997,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 32603697226,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{'event': 'fingerprinted', 'car_fingerprint': 'JEEP_GRAND_CHEROKEE_2019', 'source': 1, 'fuzzy': False, 'cached': False, 'fw_count': 7, 'ecu_responses': [[1242, None, 0], [1223, None, 0], [1220, None, 0], [2024, None, 0], [1218, None, 0], [2025, None, 0], [1235, None, 0]], 'vin_rx_addr': 2024, 'vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "car_helpers.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 32603866288,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{\"event\": \"fingerprinted\", \"car_fingerprint\": \"JEEP_GRAND_CHEROKEE_2019\", \"source\": 1, \"fuzzy\": false, \"cached\": false, \"fw_count\": 7, \"ecu_responses\": [[1242, null, 0], [1223, null, 0], [1220, null, 0], [2024, null, 0], [1218, null, 0], [2025, null, 0], [1235, null, 0]], \"vin_rx_addr\": 2024, \"vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 33247470350,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 33247313839,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 33526969725,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 33526846809,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 35228668839,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 83 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 35228446495,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 83 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 35403545818,
+      "kind": "process_crash",
+      "daemon": "backup_manager",
+      "detail": "exitCode=0 shouldBeRunning=False",
+      "severity": "warning",
+      "extra": {
+        "exitCode": 0,
+        "shouldBeRunning": false,
+        "pid": 0
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 35505347016,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 35505269099,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 36287139776,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 36287038110,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 36566198787,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 36566135401,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 36704775766,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{\"event\": \"selfdrived.initialized\", \"dt\": 3.9, \"timeout\": false, \"canValid\": true, \"invalid\": [\"alertDebug\", \"modelDataV2SP\", \"gpsLocation\"], \"not_alive\": [\"alertDebug\", \"gpsLocation\"], \"not_freq_ok\": [\"alertDebug\", \"gpsLocation\"], \"error\": true}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 36704615922,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{'event': 'selfdrived.initialized', 'dt': 3.9, 'timeout': False, 'canValid': True, 'invalid': ['alertDebug', 'modelDataV2SP', 'gpsLocation'], 'not_alive': ['alertDebug', 'gpsLocation'], 'not_freq_ok': ['alertDebug', 'gpsLocation'], 'error': True}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "selfdrived.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 37031243578,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "controlsMismatch (immediateDisable)",
+      "severity": "critical",
+      "extra": {
+        "event": "controlsMismatch",
+        "flags": [
+          "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 39332882067,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 39332760869,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 39598129671,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 39598049150,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 42385850659,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 42385751441,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 42648384201,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 42648251597,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 45437012481,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 45436951023,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 45686470554,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 45686411335,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 56597136800,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 56597030237,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 57972402424,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 57970833362,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "athenad.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74225369397,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74225271897,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74465912470,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74466000230,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74713994189,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74714141376,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74975426220,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 74975527470,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 75230881011,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 75230788407,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 75434577678,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 75434449761,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "qcomgpsd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 82923222206,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation orientation difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 4,
+      "log_mono_time_ns": 272252927516,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 4,
+      "log_mono_time_ns": 309482756391,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 9,
+      "log_mono_time_ns": 589312459495,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 10,
+      "log_mono_time_ns": 654012635072,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 11,
+      "log_mono_time_ns": 707863223736,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 12,
+      "log_mono_time_ns": 751803046366,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 13,
+      "log_mono_time_ns": 811803483695,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 14,
+      "log_mono_time_ns": 871804124165,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 15,
+      "log_mono_time_ns": 931802080637,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 16,
+      "log_mono_time_ns": 1042636162765,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 29743353946,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 29957457383,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 30458018946,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 29743222592,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 29957355769,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 30457958060,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "vin.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 31024058633,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 31023923373,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 31126465873,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 31126364206,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 31233815873,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 31233701706,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 32305192122,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{\"event\": \"fingerprinted\", \"car_fingerprint\": \"JEEP_GRAND_CHEROKEE_2019\", \"source\": 1, \"fuzzy\": false, \"cached\": false, \"fw_count\": 7, \"ecu_responses\": [[1242, null, 0], [1223, null, 0], [1220, null, 0], [2024, null, 0], [1218, null, 0], [2025, null, 0], [1235, null, 0]], \"vin_rx_addr\": 2024, \"vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 32305026185,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{'event': 'fingerprinted', 'car_fingerprint': 'JEEP_GRAND_CHEROKEE_2019', 'source': 1, 'fuzzy': False, 'cached': False, 'fw_count': 7, 'ecu_responses': [[1242, None, 0], [1223, None, 0], [1220, None, 0], [2024, None, 0], [1218, None, 0], [2025, None, 0], [1235, None, 0]], 'vin_rx_addr': 2024, 'vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "car_helpers.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 32786460247,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 32786334517,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 32999686079,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 32999606653,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35339951652,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 96 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35339818788,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 96 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35410817902,
+      "kind": "process_crash",
+      "daemon": "backup_manager",
+      "detail": "exitCode=0 shouldBeRunning=False",
+      "severity": "warning",
+      "extra": {
+        "exitCode": 0,
+        "shouldBeRunning": false,
+        "pid": 0
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35616773735,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35616687954,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35869621860,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 35869465402,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 36031742017,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 36031568996,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 36920999933,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{\"event\": \"selfdrived.initialized\", \"dt\": 4.39, \"timeout\": false, \"canValid\": true, \"invalid\": [\"alertDebug\", \"modelDataV2SP\", \"gpsLocation\"], \"not_alive\": [\"alertDebug\", \"gpsLocation\"], \"not_freq_ok\": [\"alertDebug\", \"gpsLocation\"], \"error\": true}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 36920897068,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{'event': 'selfdrived.initialized', 'dt': 4.39, 'timeout': False, 'canValid': True, 'invalid': ['alertDebug', 'modelDataV2SP', 'gpsLocation'], 'not_alive': ['alertDebug', 'gpsLocation'], 'not_freq_ok': ['alertDebug', 'gpsLocation'], 'error': True}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "selfdrived.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 37654013943,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "controlsMismatch (immediateDisable)",
+      "severity": "critical",
+      "extra": {
+        "event": "controlsMismatch",
+        "flags": [
+          "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 38984784932,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 38984655505,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 39096526182,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 39096447172,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 42044141181,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 42043817223,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 42149303160,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 42148800973,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 45077441492,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 45077284253,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 45199412690,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 45199316805,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 63217176121,
+      "kind": "error_log",
+      "daemon": "sunnylinkd",
+      "detail": "sunnylinkd.main.OSError.EPERM (1)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 63216966277,
+      "kind": "error_log",
+      "daemon": "sunnylinkd",
+      "detail": "sunnylinkd.main.OSError.EPERM (1)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "sunnylinkd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75102507991,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75102718825,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75359710387,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75359593512,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75613951897,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75614048043,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75888067001,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 75887969553,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 76157542887,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 76157429710,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 76358707678,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 76358519657,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "qcomgpsd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 1,
+      "log_mono_time_ns": 101059660690,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 2,
+      "log_mono_time_ns": 172411522573,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 10,
+      "log_mono_time_ns": 675331691040,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 10,
+      "log_mono_time_ns": 686792191052,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation orientation difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 13,
+      "log_mono_time_ns": 855313333757,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 21,
+      "log_mono_time_ns": 1299893941480,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 24,
+      "log_mono_time_ns": 1491505579164,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 37,
+      "log_mono_time_ns": 2275945539116,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 39,
+      "log_mono_time_ns": 2391065150974,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 41,
+      "log_mono_time_ns": 2509345050846,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 42,
+      "log_mono_time_ns": 2551515931218,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 43,
+      "log_mono_time_ns": 2610515574300,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 45,
+      "log_mono_time_ns": 2746056288330,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 47,
+      "log_mono_time_ns": 2857376744474,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "wrongGear (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "wrongGear",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 47,
+      "log_mono_time_ns": 2857516878024,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "reverseGear (userDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "reverseGear",
+        "flags": [
+          "userDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 47,
+      "log_mono_time_ns": 2868097216968,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 47,
+      "log_mono_time_ns": 2888407741177,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "seatbeltNotLatched (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "seatbeltNotLatched",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 47,
+      "log_mono_time_ns": 2890485824414,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "doorOpen (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "doorOpen",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 33017574099,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 33067658579,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 33624593579,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 33017527538,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 33067557069,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 33624464621,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "got vin with request=b'\\t\\x02'",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "vin.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 34203816234,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "info",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 34203738266,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query response pending: (1860, None)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 34305443787,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 34305578005,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2016, None) - 0x7f2212",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 34423008891,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 34422881547,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "iso-tp query bad response: (2017, None) - 0x7f2231",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "isotp_parallel_query.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 35464068110,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{\"event\": \"fingerprinted\", \"car_fingerprint\": \"JEEP_GRAND_CHEROKEE_2019\", \"source\": 1, \"fuzzy\": false, \"cached\": false, \"fw_count\": 7, \"ecu_responses\": [[1242, null, 0], [1223, null, 0], [1220, null, 0], [2024, null, 0], [1218, null, 0], [2025, null, 0], [1235, null, 0]], \"vin_rx_addr\": 2024, \"vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 35463945662,
+      "kind": "error_log",
+      "daemon": "card",
+      "detail": "{'event': 'fingerprinted', 'car_fingerprint': 'JEEP_GRAND_CHEROKEE_2019', 'source': 1, 'fuzzy': False, 'cached': False, 'fw_count': 7, 'ecu_responses': [[1242, None, 0], [1223, None, 0], [1220, None, 0], [2024, None, 0], [1218, None, 0], [2025, None, 0], [1235, None, 0]], 'vin_rx_addr': 2024, 'vin_r",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "car_helpers.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 36117633213,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 36117494255,
+      "kind": "error_log",
+      "daemon": "micd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 36132024411,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 36131916911,
+      "kind": "error_log",
+      "daemon": "soundd",
+      "detail": "get_stream failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 38670262535,
+      "kind": "process_crash",
+      "daemon": "backup_manager",
+      "detail": "exitCode=0 shouldBeRunning=False",
+      "severity": "warning",
+      "extra": {
+        "exitCode": 0,
+        "shouldBeRunning": false,
+        "pid": 0
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 39697561337,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 117 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 39697473473,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 117 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 39965121077,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 39965038316,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 3 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 40958604149,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "wrongGear (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "wrongGear",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 40958604149,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "doorOpen (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "doorOpen",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 40958604149,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "seatbeltNotLatched (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "seatbeltNotLatched",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 40963068889,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{\"event\": \"selfdrived.initialized\", \"dt\": 5.29, \"timeout\": false, \"canValid\": true, \"invalid\": [\"alertDebug\", \"modelDataV2SP\", \"gpsLocation\"], \"not_alive\": [\"alertDebug\", \"gpsLocation\"], \"not_freq_ok\": [\"alertDebug\", \"gpsLocation\"], \"error\": true}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 40962887274,
+      "kind": "error_log",
+      "daemon": "selfdrived",
+      "detail": "{'event': 'selfdrived.initialized', 'dt': 5.29, 'timeout': False, 'canValid': True, 'invalid': ['alertDebug', 'modelDataV2SP', 'gpsLocation'], 'not_alive': ['alertDebug', 'gpsLocation'], 'not_freq_ok': ['alertDebug', 'gpsLocation'], 'error': True}",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "selfdrived.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 41722075138,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "controlsMismatch (immediateDisable)",
+      "severity": "critical",
+      "extra": {
+        "event": "controlsMismatch",
+        "flags": [
+          "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 47173507636,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 47173433522,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 48131322323,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 48131195917,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "athenad.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 52322145968,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 54129740394,
+      "kind": "error_log",
+      "daemon": "sunnylinkd",
+      "detail": "sunnylinkd.main.OSError.EPERM (1)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 54129602894,
+      "kind": "error_log",
+      "daemon": "sunnylinkd",
+      "detail": "sunnylinkd.main.OSError.EPERM (1)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "sunnylinkd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 54685393467,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 54685279769,
+      "kind": "error_log",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "skipping model eval. Dropped 1 frames",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "modeld.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 56531625029,
+      "kind": "error_log",
+      "daemon": "sunnylinkd",
+      "detail": "sunnylinkd.main.OSError.EPERM (1)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 56531503310,
+      "kind": "error_log",
+      "daemon": "sunnylinkd",
+      "detail": "sunnylinkd.main.OSError.EPERM (1)",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "sunnylinkd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 60590931590,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 60588887475,
+      "kind": "error_log",
+      "daemon": "athenad",
+      "detail": "athenad.main.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "athenad.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 78402351374,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 78402134708,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 78653227208,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 78653356583,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 78921945645,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 78922093666,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 79206737885,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 79206862780,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 79456581843,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 79456503822,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed, trying again",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "retry.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 79657767676,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 79657648457,
+      "kind": "error_log",
+      "daemon": "qcomgpsd",
+      "detail": "inject_assistance failed after retry",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR",
+        "filename": "qcomgpsd.py"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 81072568821,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "reverseGear (userDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "reverseGear",
+        "flags": [
+          "userDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 3,
+      "log_mono_time_ns": 235532083901,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 3,
+      "log_mono_time_ns": 241767073605,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 5,
+      "log_mono_time_ns": 334372760225,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 6,
+      "log_mono_time_ns": 397262414274,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 11,
+      "log_mono_time_ns": 743302636081,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 12,
+      "log_mono_time_ns": 783113988601,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 14,
+      "log_mono_time_ns": 895633881857,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1212851946663,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1213850154087,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1215854590526,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1217851680884,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1219758822807,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1221846736282,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1223746546638,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1224853022327,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1225854455800,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation orientation difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1227759523617,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation orientation difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1228865327436,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1230848967852,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 19,
+      "log_mono_time_ns": 1232857325238,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 20,
+      "log_mono_time_ns": 1234853767357,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 21,
+      "log_mono_time_ns": 1329994084062,
+      "kind": "disengage",
+      "daemon": "selfdrived",
+      "detail": "selfdriveState.enabled True->False",
+      "severity": "warning",
+      "extra": {}
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 21,
+      "log_mono_time_ns": 1339882949278,
+      "kind": "error_log",
+      "daemon": "locationd_llk",
+      "detail": "Locationd vs ubloxLocation position difference too large, kalman reset",
+      "severity": "warning",
+      "extra": {
+        "level": ""
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 25,
+      "log_mono_time_ns": 1552954062576,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 26,
+      "log_mono_time_ns": 1594673309187,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 27,
+      "log_mono_time_ns": 1654673260998,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 28,
+      "log_mono_time_ns": 1714673433554,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 29,
+      "log_mono_time_ns": 1774673578875,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 30,
+      "log_mono_time_ns": 1834674807926,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 31,
+      "log_mono_time_ns": 1904802745447,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 36,
+      "log_mono_time_ns": 2195974310589,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 37,
+      "log_mono_time_ns": 2272394685455,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 37,
+      "log_mono_time_ns": 2272552960914,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "wrongGear (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "wrongGear",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 37,
+      "log_mono_time_ns": 2272552960914,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "reverseGear (userDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "reverseGear",
+        "flags": [
+          "userDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 37,
+      "log_mono_time_ns": 2274553437074,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "seatbeltNotLatched (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "seatbeltNotLatched",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 37,
+      "log_mono_time_ns": 2279423255473,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "doorOpen (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "doorOpen",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 38,
+      "log_mono_time_ns": 2314673870224,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "wrongGear (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "wrongGear",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 38,
+      "log_mono_time_ns": 2314673870224,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "seatbeltNotLatched (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "seatbeltNotLatched",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 38,
+      "log_mono_time_ns": 2338773629293,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "doorOpen (softDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "doorOpen",
+        "flags": [
+          "softDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 38,
+      "log_mono_time_ns": 2342860653001,
+      "kind": "error_log",
+      "daemon": "",
+      "detail": "athenad.ws_recv.exception",
+      "severity": "error",
+      "extra": {
+        "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 38,
+      "log_mono_time_ns": 2343923737590,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "preEnableStandstill (preEnable)",
+      "severity": "warning",
+      "extra": {
+        "event": "preEnableStandstill",
+        "flags": [
+          "preEnable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 38,
+      "log_mono_time_ns": 2353802987284,
+      "kind": "disengage",
+      "daemon": "controlsd",
+      "detail": "reverseGear (userDisable)",
+      "severity": "warning",
+      "extra": {
+        "event": "reverseGear",
+        "flags": [
+          "userDisable"
+        ]
+      }
+    }
+  ]
+}
