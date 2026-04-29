@@ -142,7 +142,19 @@ class SelfdriveD(CruiseHelper):
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
-    self.ignored_processes = {'mapd', }
+    # Processes whose exit must NOT raise EventName.processNotRunning (which is a
+    # SOFT_DISABLE — see selfdrive/selfdrived/events.py). These are non-safety-
+    # critical daemons; a transient death should not drop cruise control.
+    #
+    # Drivelog evidence (2020 Jeep GC, 5 routes, 431 events) showed
+    # `processNotRunning` accounted for 37 of 128 disengages, with the trigger
+    # being micd hitting `RetryError` on PortAudio `get_stream` (system/micd.py)
+    # and exiting with code 1. micd is purely informational (ambient noise level
+    # → automatic alert volume). soundd already falls back to a fixed volume
+    # when SoundPressure is missing, so the only user impact of an absent micd
+    # is a fixed alert volume — there is no safety case for disengaging cruise
+    # because a microphone became unavailable.
+    self.ignored_processes = {'mapd', 'micd'}
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote

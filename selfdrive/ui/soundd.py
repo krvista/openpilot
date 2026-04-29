@@ -150,24 +150,45 @@ class Soundd(QuietMode):
 
     sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
 
-    with self.get_stream(sd) as stream:
-      rk = Ratekeeper(20)
+    # Outer recovery loop — same rationale as system/micd.py.
+    #
+    # The previous structure opened the OutputStream once and ran the inner
+    # poll loop forever. A transient PortAudio failure (drivelog showed 50
+    # `get_stream failed, trying again` warnings on the affected device) that
+    # outlasted `get_stream`'s 7-attempt budget, or an `assert stream.active`
+    # firing because the device was yanked, killed soundd outright. Without
+    # soundd, audible alerts (warning chimes, takeover prompts) stop playing
+    # even if the rest of the stack keeps running — a serious UX regression
+    # that can mask other safety alerts.
+    #
+    # Wrapping the body in a self-restarting loop keeps the daemon alive across
+    # device hiccups. Audio output is best-effort by nature: if the device is
+    # genuinely gone there is nothing useful we can do, and dying just makes it
+    # worse (manager respawn re-runs all of init; we'd rather hold state and
+    # retry the stream on the same process).
+    while True:
+      try:
+        with self.get_stream(sd) as stream:
+          rk = Ratekeeper(20)
 
-      cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
-      while True:
-        sm.update(0)
+          cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
+          while True:
+            sm.update(0)
 
-        self.load_param()
+            self.load_param()
 
-        if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
-          self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
-          self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
+            if sm.updated['soundPressure'] and self.current_alert == AudibleAlert.none: # only update volume filter when not playing alert
+              self.spl_filter_weighted.update(sm["soundPressure"].soundPressureWeightedDb)
+              self.current_volume = self.calculate_volume(float(self.spl_filter_weighted.x))
 
-        self.get_audible_alert(sm)
+            self.get_audible_alert(sm)
 
-        rk.keep_time()
+            rk.keep_time()
 
-        assert stream.active
+            assert stream.active
+      except Exception:
+        cloudlog.exception("soundd stream failed; restarting after backoff")
+        time.sleep(5)
 
 
 def main():
