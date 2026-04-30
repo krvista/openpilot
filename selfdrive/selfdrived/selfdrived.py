@@ -332,8 +332,43 @@ class SelfdriveD(CruiseHelper):
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
-      # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
-      if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
+      # All three triggers below cause an immediateDisable EventName.controlsMismatch.
+      # Each needs the same boot-grace window — without it any of them can fire
+      # during normal startup and drop cruise the moment the user engages.
+      #
+      # Drivelog evidence (5 routes, 2020 Jeep Grand Cherokee, dongle
+      # 0fb02cc3a5abcc2f, captured F1.1 probe in tools/scripts/analyze_drivelog.py):
+      #
+      #   route 0fb02cc3a5abcc2f_00000006 seg 0  -> mismatch_counter >= 200
+      #   route 0fb02cc3a5abcc2f_00000008 seg 0  -> safetyRxChecksInvalid=True
+      #   route 0fb02cc3a5abcc2f_0000000a seg 0  -> safetyRxChecksInvalid=True
+      #   route 0fb02cc3a5abcc2f_0000000b seg 0  -> mismatch_counter >= 200
+      #
+      # In every case CP and panda agreed on safetyModel/safetyParam/
+      # alternativeExperience (chrysler / 0 / 1024 = ENABLE_MADS |
+      # MADS_DISENGAGE_LATERAL_ON_BRAKE), so safety_mismatch was False and the
+      # existing `self.sm.frame*DT_CTRL > 10.` boot grace did its job. The two
+      # remaining triggers slipped through:
+      #
+      #   1. `pandaState.safetyRxChecksInvalid` pulses True for a beat right
+      #      after panda boot while RX checks are still stabilizing.
+      #   2. `self.mismatch_counter >= 200` — counts frames where
+      #      `self.enabled` is True but some panda still has
+      #      `controlsAllowed=False`. With sunnypilot's MADS auto-engaging
+      #      lateral as soon as conditions are met, `self.enabled` flips True
+      #      within the first second or two of selfdrived's lifetime, but
+      #      panda's controlsAllowed message can lag, so the counter races to
+      #      200 (= 2 s at 100 Hz) before the first frame lines up. This is
+      #      exactly the same kind of cross-socket race the original comment
+      #      below describes — except the 10 s grace was never extended to
+      #      cover it.
+      #
+      # The fix gates all three on `boot_grace`. Any real mid-drive
+      # mismatch still fires immediately after the first 10 s, because
+      # `self.sm.frame*DT_CTRL` only counts time since selfdrived started, so
+      # the gate is True for the entire rest of the drive.
+      boot_grace = self.sm.frame * DT_CTRL > 10.
+      if boot_grace and (safety_mismatch or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200):
         self.events.add(EventName.controlsMismatch)
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
