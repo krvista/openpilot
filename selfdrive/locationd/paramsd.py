@@ -140,7 +140,8 @@ class VehicleParamsLearner:
 
     self.avg_angle_offset = np.clip(np.degrees(x[States.ANGLE_OFFSET].item()),
                                 self.avg_angle_offset - MAX_ANGLE_OFFSET_DELTA, self.avg_angle_offset + MAX_ANGLE_OFFSET_DELTA)
-    self.angle_offset = np.clip(np.degrees(x[States.ANGLE_OFFSET].item() + x[States.ANGLE_OFFSET_FAST].item()),
+    ao_fast_deg = np.clip(np.degrees(x[States.ANGLE_OFFSET_FAST].item()), -1.5, 1.5)
+    self.angle_offset = np.clip(np.degrees(x[States.ANGLE_OFFSET].item()) + ao_fast_deg,
                         self.angle_offset - MAX_ANGLE_OFFSET_DELTA, self.angle_offset + MAX_ANGLE_OFFSET_DELTA)
     self.roll = np.clip(float(x[States.ROAD_ROLL].item()), self.roll - ROLL_MAX_DELTA, self.roll + ROLL_MAX_DELTA)
     roll_std = float(P[States.ROAD_ROLL].item())
