@@ -1,11 +1,11 @@
 import math
+import numpy as np
 
 from cereal import log
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 
 # TODO This is speed dependent
 STEER_ANGLE_SATURATION_THRESHOLD = 2.5  # Degrees
-ROLL_GAIN = 0.5  # attenuate roll compensation to reduce straight-line noise
 
 
 class LatControlAngle(LatControl):
@@ -22,7 +22,8 @@ class LatControlAngle(LatControl):
       angle_steers_des = float(CS.steeringAngleDeg)
     else:
       angle_log.active = True
-      roll_damped = params.roll * ROLL_GAIN
+      roll_gain = float(np.interp(CS.vEgo, [0.0, 5.0, 10.0], [0.0, 0.2, 0.5]))
+      roll_damped = params.roll * roll_gain
       angle_steers_des = math.degrees(VM.get_steer_from_curvature(-desired_curvature, CS.vEgo, roll_damped))
       angle_steers_des += params.angleOffsetDeg
 

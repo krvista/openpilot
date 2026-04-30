@@ -104,8 +104,8 @@ class CarControllerParams:
   # weak at large angles (fast curve tracking), with low-speed smoothing.
   VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
   VTAU_ANGLE_V  = [2.5, 1.0, 0.20, 0.20]  # tau seconds (center raised for straight noise)
-  VTAU_SPEED_BP = [0.0, 5.0, 15.0]  # m/s
-  VTAU_SPEED_V  = [0.70, 0.20, 0.0]  # tau seconds (doubled for 100Hz)
+  VTAU_SPEED_BP = [0.0, 3.0, 5.0, 15.0]  # m/s
+  VTAU_SPEED_V  = [5.0, 1.5, 0.20, 0.0]  # tau seconds — very heavy at crawl speed
   VTAU_ENTRY_TH = 1.5   # deg: bypass LPF when entering curve (abs(raw) > abs(lpf) + TH)
   VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
 
