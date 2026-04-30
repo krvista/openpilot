@@ -1,17 +1,17 @@
 # sunny-release-tizi drivelog 분석 결과
 
-총 라우트 5개, 사건 431건
+총 라우트 5개, 사건 440건
 
 
 ## 라우트별 요약
 
 | route | 세그 | 시간(분) | fingerprint | 사건 종류 | 심각도 |
 |---|---|---|---|---|---|
-| `0fb02cc3a5abcc2f_00000006` | 34 | 561.6 | JEEP_GRAND_CHEROKEE_2019 | error_log=55, process_crash=1, disengage=11 | error=50, info=2, warning=14, critical=1 |
-| `0fb02cc3a5abcc2f_00000007` | 37 | 703.3 | JEEP_GRAND_CHEROKEE_2019 | error_log=64, process_crash=2, disengage=58 | error=60, info=2, warning=61, critical=1 |
-| `0fb02cc3a5abcc2f_00000008` | 19 | 171.3 | JEEP_GRAND_CHEROKEE_2019 | error_log=57, process_crash=1, disengage=11 | error=54, info=2, warning=12, critical=1 |
-| `0fb02cc3a5abcc2f_0000000a` | 49 | 1176.8 | JEEP_GRAND_CHEROKEE_2019 | error_log=56, process_crash=1, disengage=17 | error=52, info=2, warning=19, critical=1 |
-| `0fb02cc3a5abcc2f_0000000b` | 39 | 780.9 | JEEP_GRAND_CHEROKEE_2019 | error_log=65, process_crash=1, disengage=31 | error=47, info=2, warning=47, critical=1 |
+| `0fb02cc3a5abcc2f_00000006` | 34 | 561.6 | JEEP_GRAND_CHEROKEE_2019 | error_log=55, process_crash=1, modeld_burst_context=1, disengage=11, controlsMismatch_context=1 | error=51, info=2, warning=14, critical=2 |
+| `0fb02cc3a5abcc2f_00000007` | 37 | 703.3 | JEEP_GRAND_CHEROKEE_2019 | error_log=64, process_crash=2, modeld_burst_context=1, disengage=58 | error=61, info=2, warning=61, critical=1 |
+| `0fb02cc3a5abcc2f_00000008` | 19 | 171.3 | JEEP_GRAND_CHEROKEE_2019 | error_log=57, modeld_burst_context=1, process_crash=1, disengage=11, controlsMismatch_context=1 | error=55, info=2, warning=12, critical=2 |
+| `0fb02cc3a5abcc2f_0000000a` | 49 | 1176.8 | JEEP_GRAND_CHEROKEE_2019 | error_log=56, modeld_burst_context=1, process_crash=1, disengage=17, controlsMismatch_context=1 | error=53, info=2, warning=19, critical=2 |
+| `0fb02cc3a5abcc2f_0000000b` | 39 | 780.9 | JEEP_GRAND_CHEROKEE_2019 | error_log=65, process_crash=1, modeld_burst_context=1, disengage=31, controlsMismatch_context=1 | error=48, info=2, warning=47, critical=2 |
 
 ## 전체 패턴 (5개 라우트 합산)
 
@@ -20,6 +20,8 @@
 - **error_log**: 297건
 - **disengage**: 128건
 - **process_crash**: 6건
+- **modeld_burst_context**: 5건
+- **controlsMismatch_context**: 4건
 
 ### 데몬별 (Top 15)
 
@@ -28,19 +30,20 @@
 - `micd`: 57건
 - `soundd`: 50건
 - `card`: 50건
-- `selfdrive.modeld.modeld_tinygrad`: 28건
-- `selfdrived`: 27건
+- `selfdrive.modeld.modeld_tinygrad`: 33건
+- `selfdrived`: 31건
 - `locationd_llk`: 24건
 - `athenad`: 8건
 - `sunnylinkd`: 6건
 - `backup_manager`: 5건
 
-## Critical 사건 (5건)
+## Critical 사건 (9건)
 
 
 ### 0fb02cc3a5abcc2f_00000006
 
 - seg 0 (~0.1 min) **disengage** `controlsd` — controlsMismatch (immediateDisable)
+- seg 0 (~0.1 min) **controlsMismatch_context** `selfdrived` — no field mismatch found at trigger time (likely mismatch_counter>=200)
 
 ### 0fb02cc3a5abcc2f_00000007
 
@@ -49,14 +52,17 @@
 ### 0fb02cc3a5abcc2f_00000008
 
 - seg 0 (~0.1 min) **disengage** `controlsd` — controlsMismatch (immediateDisable)
+- seg 0 (~0.1 min) **controlsMismatch_context** `selfdrived` — safetyRxChecksInvalid=panda0
 
 ### 0fb02cc3a5abcc2f_0000000a
 
 - seg 0 (~0.1 min) **disengage** `controlsd` — controlsMismatch (immediateDisable)
+- seg 0 (~0.1 min) **controlsMismatch_context** `selfdrived` — safetyRxChecksInvalid=panda0
 
 ### 0fb02cc3a5abcc2f_0000000b
 
 - seg 0 (~0.1 min) **disengage** `controlsd` — controlsMismatch (immediateDisable)
+- seg 0 (~0.1 min) **controlsMismatch_context** `selfdrived` — no field mismatch found at trigger time (likely mismatch_counter>=200)
 
 ## 반복되는 에러 메시지 Top 30
 
@@ -107,3 +113,47 @@
 
 - `backup_manager`: 5건  (exitCode 분포: [(0, 5)])
 - `micd`: 1건  (exitCode 분포: [(1, 1)])
+
+## controlsMismatch 컨텍스트 (F1.1, 4건)
+
+
+### 0fb02cc3a5abcc2f_00000006 seg 0
+
+- 트리거 시점 mismatch: no field mismatch found at trigger time (likely mismatch_counter>=200)
+- CP: alternativeExperience=1024, safetyConfigs=[chrysler/0], fingerprint=JEEP_GRAND_CHEROKEE_2019
+- panda0: safetyModel=chrysler safetyParam=0 alternativeExperience=1024 safetyRxChecksInvalid=False controlsAllowed=False
+
+### 0fb02cc3a5abcc2f_00000008 seg 0
+
+- 트리거 시점 mismatch: safetyRxChecksInvalid=panda0
+- CP: alternativeExperience=1024, safetyConfigs=[chrysler/0], fingerprint=JEEP_GRAND_CHEROKEE_2019
+- panda0: safetyModel=chrysler safetyParam=0 alternativeExperience=1024 safetyRxChecksInvalid=True controlsAllowed=False
+
+### 0fb02cc3a5abcc2f_0000000a seg 0
+
+- 트리거 시점 mismatch: safetyRxChecksInvalid=panda0
+- CP: alternativeExperience=1024, safetyConfigs=[chrysler/0], fingerprint=JEEP_GRAND_CHEROKEE_2019
+- panda0: safetyModel=chrysler safetyParam=0 alternativeExperience=1024 safetyRxChecksInvalid=True controlsAllowed=False
+
+### 0fb02cc3a5abcc2f_0000000b seg 0
+
+- 트리거 시점 mismatch: no field mismatch found at trigger time (likely mismatch_counter>=200)
+- CP: alternativeExperience=1024, safetyConfigs=[chrysler/0], fingerprint=JEEP_GRAND_CHEROKEE_2019
+- panda0: safetyModel=chrysler safetyParam=0 alternativeExperience=1024 safetyRxChecksInvalid=False controlsAllowed=False
+
+## modeld 프레임 burst 컨텍스트 (F1.2, 5건)
+
+| route | seg | 드랍 | 추정 freeze | tag |
+|---|---|---|---|---|
+| `0fb02cc3a5abcc2f_00000006` | 0 | 95 | 4.75 s | cpu_max=100% |
+| `0fb02cc3a5abcc2f_00000007` | 0 | 89 | 4.45 s | cpu_max=100% |
+| `0fb02cc3a5abcc2f_00000008` | 0 | 83 | 4.15 s | cpu_max=100% |
+| `0fb02cc3a5abcc2f_0000000a` | 0 | 96 | 4.8 s | cpu_max=100% |
+| `0fb02cc3a5abcc2f_0000000b` | 0 | 117 | 5.85 s | cpu_max=100% |
+
+버스트 분류 합계:
+- cpu_max=100%: 5건
+
+## 추가 disengage 경로 이벤트 카운트 (F1.3)
+
+(0건 — Phase E 의 audio 픽스 외 추가 ACC-drop 경로는 본 데이터셋에 없음)

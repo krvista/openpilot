@@ -10,22 +10,24 @@
       "by_kind": {
         "error_log": 55,
         "process_crash": 1,
-        "disengage": 11
+        "modeld_burst_context": 1,
+        "disengage": 11,
+        "controlsMismatch_context": 1
       },
       "by_severity": {
-        "error": 50,
+        "error": 51,
         "info": 2,
         "warning": 14,
-        "critical": 1
+        "critical": 2
       },
       "top_daemons": {
         "qcomgpsd": 12,
         "micd": 10,
         "soundd": 10,
         "card": 10,
-        "selfdrived": 8,
+        "selfdrived": 9,
+        "selfdrive.modeld.modeld_tinygrad": 5,
         "controlsd": 5,
-        "selfdrive.modeld.modeld_tinygrad": 4,
         "locationd_llk": 3,
         "athenad": 2,
         "backup_manager": 1
@@ -41,10 +43,11 @@
       "by_kind": {
         "error_log": 64,
         "process_crash": 2,
+        "modeld_burst_context": 1,
         "disengage": 58
       },
       "by_severity": {
-        "error": 60,
+        "error": 61,
         "info": 2,
         "warning": 61,
         "critical": 1
@@ -55,7 +58,7 @@
         "soundd": 12,
         "qcomgpsd": 12,
         "card": 10,
-        "selfdrive.modeld.modeld_tinygrad": 6,
+        "selfdrive.modeld.modeld_tinygrad": 7,
         "selfdrived": 4,
         "locationd_llk": 2,
         "backup_manager": 1
@@ -70,14 +73,16 @@
       "branch": "release-tizi",
       "by_kind": {
         "error_log": 57,
+        "modeld_burst_context": 1,
         "process_crash": 1,
-        "disengage": 11
+        "disengage": 11,
+        "controlsMismatch_context": 1
       },
       "by_severity": {
-        "error": 54,
+        "error": 55,
         "info": 2,
         "warning": 12,
-        "critical": 1
+        "critical": 2
       },
       "top_daemons": {
         "micd": 12,
@@ -85,8 +90,8 @@
         "qcomgpsd": 12,
         "card": 10,
         "controlsd": 9,
-        "selfdrive.modeld.modeld_tinygrad": 6,
-        "selfdrived": 4,
+        "selfdrive.modeld.modeld_tinygrad": 7,
+        "selfdrived": 5,
         "athenad": 2,
         "backup_manager": 1,
         "locationd_llk": 1
@@ -101,14 +106,16 @@
       "branch": "release-tizi",
       "by_kind": {
         "error_log": 56,
+        "modeld_burst_context": 1,
         "process_crash": 1,
-        "disengage": 17
+        "disengage": 17,
+        "controlsMismatch_context": 1
       },
       "by_severity": {
-        "error": 52,
+        "error": 53,
         "info": 2,
         "warning": 19,
-        "critical": 1
+        "critical": 2
       },
       "top_daemons": {
         "controlsd": 15,
@@ -116,8 +123,8 @@
         "soundd": 12,
         "qcomgpsd": 12,
         "card": 10,
-        "selfdrive.modeld.modeld_tinygrad": 4,
-        "selfdrived": 4,
+        "selfdrive.modeld.modeld_tinygrad": 5,
+        "selfdrived": 5,
         "sunnylinkd": 2,
         "locationd_llk": 2,
         "backup_manager": 1
@@ -133,21 +140,23 @@
       "by_kind": {
         "error_log": 65,
         "process_crash": 1,
-        "disengage": 31
+        "modeld_burst_context": 1,
+        "disengage": 31,
+        "controlsMismatch_context": 1
       },
       "by_severity": {
-        "error": 47,
+        "error": 48,
         "info": 2,
         "warning": 47,
-        "critical": 1
+        "critical": 2
       },
       "top_daemons": {
         "controlsd": 26,
         "locationd_llk": 16,
         "qcomgpsd": 12,
         "card": 10,
-        "selfdrive.modeld.modeld_tinygrad": 8,
-        "selfdrived": 7,
+        "selfdrive.modeld.modeld_tinygrad": 9,
+        "selfdrived": 8,
         "micd": 4,
         "soundd": 4,
         "athenad": 4,
@@ -410,6 +419,35 @@
     {
       "route": "0fb02cc3a5abcc2f_00000006",
       "segment": 0,
+      "log_mono_time_ns": 37001888942,
+      "kind": "modeld_burst_context",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "dropped=95 frames (4.75s freeze) ; cpu_max=100%",
+      "severity": "error",
+      "extra": {
+        "dropped_frames": 95,
+        "freeze_seconds": 4.75,
+        "deviceState": {
+          "thermalStatus": "green",
+          "memoryUsagePercent": 55,
+          "cpuUsagePercent": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            21,
+            100
+          ],
+          "gpuUsagePercent": 0,
+          "logMonoTime": 36869954984
+        }
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
       "log_mono_time_ns": 37001757848,
       "kind": "error_log",
       "daemon": "selfdrive.modeld.modeld_tinygrad",
@@ -547,6 +585,37 @@
         "event": "controlsMismatch",
         "flags": [
           "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000006",
+      "segment": 0,
+      "log_mono_time_ns": 38787486546,
+      "kind": "controlsMismatch_context",
+      "daemon": "selfdrived",
+      "detail": "no field mismatch found at trigger time (likely mismatch_counter>=200)",
+      "severity": "critical",
+      "extra": {
+        "cp": {
+          "safetyConfigs": [
+            {
+              "safetyModel": "chrysler",
+              "safetyParam": 0
+            }
+          ],
+          "alternativeExperience": 1024,
+          "carFingerprint": "JEEP_GRAND_CHEROKEE_2019"
+        },
+        "panda": [
+          {
+            "safetyModel": "chrysler",
+            "safetyParam": 0,
+            "alternativeExperience": 1024,
+            "safetyRxChecksInvalid": false,
+            "controlsAllowed": false,
+            "faultStatus": "none"
+          }
         ]
       }
     },
@@ -1240,6 +1309,35 @@
       "severity": "error",
       "extra": {
         "level": "ERROR"
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000007",
+      "segment": 0,
+      "log_mono_time_ns": 34780905818,
+      "kind": "modeld_burst_context",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "dropped=89 frames (4.45s freeze) ; cpu_max=100%",
+      "severity": "error",
+      "extra": {
+        "dropped_frames": 89,
+        "freeze_seconds": 4.45,
+        "deviceState": {
+          "thermalStatus": "green",
+          "memoryUsagePercent": 55,
+          "cpuUsagePercent": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            0,
+            96
+          ],
+          "gpuUsagePercent": 0,
+          "logMonoTime": 34336203734
+        }
       }
     },
     {
@@ -2928,6 +3026,35 @@
     {
       "route": "0fb02cc3a5abcc2f_00000008",
       "segment": 0,
+      "log_mono_time_ns": 35228668839,
+      "kind": "modeld_burst_context",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "dropped=83 frames (4.15s freeze) ; cpu_max=100%",
+      "severity": "error",
+      "extra": {
+        "dropped_frames": 83,
+        "freeze_seconds": 4.15,
+        "deviceState": {
+          "thermalStatus": "green",
+          "memoryUsagePercent": 55,
+          "cpuUsagePercent": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            20,
+            98
+          ],
+          "gpuUsagePercent": 0,
+          "logMonoTime": 35113282954
+        }
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
       "log_mono_time_ns": 35228446495,
       "kind": "error_log",
       "daemon": "selfdrive.modeld.modeld_tinygrad",
@@ -3064,6 +3191,37 @@
         "event": "controlsMismatch",
         "flags": [
           "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_00000008",
+      "segment": 0,
+      "log_mono_time_ns": 37031243578,
+      "kind": "controlsMismatch_context",
+      "daemon": "selfdrived",
+      "detail": "safetyRxChecksInvalid=panda0",
+      "severity": "critical",
+      "extra": {
+        "cp": {
+          "safetyConfigs": [
+            {
+              "safetyModel": "chrysler",
+              "safetyParam": 0
+            }
+          ],
+          "alternativeExperience": 1024,
+          "carFingerprint": "JEEP_GRAND_CHEROKEE_2019"
+        },
+        "panda": [
+          {
+            "safetyModel": "chrysler",
+            "safetyParam": 0,
+            "alternativeExperience": 1024,
+            "safetyRxChecksInvalid": true,
+            "controlsAllowed": false,
+            "faultStatus": "none"
+          }
         ]
       }
     },
@@ -3809,6 +3967,35 @@
     {
       "route": "0fb02cc3a5abcc2f_0000000a",
       "segment": 0,
+      "log_mono_time_ns": 35339951652,
+      "kind": "modeld_burst_context",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "dropped=96 frames (4.80s freeze) ; cpu_max=100%",
+      "severity": "error",
+      "extra": {
+        "dropped_frames": 96,
+        "freeze_seconds": 4.8,
+        "deviceState": {
+          "thermalStatus": "green",
+          "memoryUsagePercent": 55,
+          "cpuUsagePercent": [
+            100,
+            100,
+            100,
+            98,
+            100,
+            100,
+            4,
+            96
+          ],
+          "gpuUsagePercent": 0,
+          "logMonoTime": 35234365038
+        }
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
       "log_mono_time_ns": 35339818788,
       "kind": "error_log",
       "daemon": "selfdrive.modeld.modeld_tinygrad",
@@ -3945,6 +4132,37 @@
         "event": "controlsMismatch",
         "flags": [
           "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000a",
+      "segment": 0,
+      "log_mono_time_ns": 37654013943,
+      "kind": "controlsMismatch_context",
+      "daemon": "selfdrived",
+      "detail": "safetyRxChecksInvalid=panda0",
+      "severity": "critical",
+      "extra": {
+        "cp": {
+          "safetyConfigs": [
+            {
+              "safetyModel": "chrysler",
+              "safetyParam": 0
+            }
+          ],
+          "alternativeExperience": 1024,
+          "carFingerprint": "JEEP_GRAND_CHEROKEE_2019"
+        },
+        "panda": [
+          {
+            "safetyModel": "chrysler",
+            "safetyParam": 0,
+            "alternativeExperience": 1024,
+            "safetyRxChecksInvalid": true,
+            "controlsAllowed": false,
+            "faultStatus": "none"
+          }
         ]
       }
     },
@@ -4781,6 +4999,35 @@
     {
       "route": "0fb02cc3a5abcc2f_0000000b",
       "segment": 0,
+      "log_mono_time_ns": 39697561337,
+      "kind": "modeld_burst_context",
+      "daemon": "selfdrive.modeld.modeld_tinygrad",
+      "detail": "dropped=117 frames (5.85s freeze) ; cpu_max=100%",
+      "severity": "error",
+      "extra": {
+        "dropped_frames": 117,
+        "freeze_seconds": 5.85,
+        "deviceState": {
+          "thermalStatus": "green",
+          "memoryUsagePercent": 56,
+          "cpuUsagePercent": [
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            0,
+            100
+          ],
+          "gpuUsagePercent": 0,
+          "logMonoTime": 39304874671
+        }
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
       "log_mono_time_ns": 39697473473,
       "kind": "error_log",
       "daemon": "selfdrive.modeld.modeld_tinygrad",
@@ -4898,6 +5145,37 @@
         "event": "controlsMismatch",
         "flags": [
           "immediateDisable"
+        ]
+      }
+    },
+    {
+      "route": "0fb02cc3a5abcc2f_0000000b",
+      "segment": 0,
+      "log_mono_time_ns": 41722075138,
+      "kind": "controlsMismatch_context",
+      "daemon": "selfdrived",
+      "detail": "no field mismatch found at trigger time (likely mismatch_counter>=200)",
+      "severity": "critical",
+      "extra": {
+        "cp": {
+          "safetyConfigs": [
+            {
+              "safetyModel": "chrysler",
+              "safetyParam": 0
+            }
+          ],
+          "alternativeExperience": 1024,
+          "carFingerprint": "JEEP_GRAND_CHEROKEE_2019"
+        },
+        "panda": [
+          {
+            "safetyModel": "chrysler",
+            "safetyParam": 0,
+            "alternativeExperience": 1024,
+            "safetyRxChecksInvalid": false,
+            "controlsAllowed": false,
+            "faultStatus": "none"
+          }
         ]
       }
     },

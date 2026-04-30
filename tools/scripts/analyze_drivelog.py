@@ -45,6 +45,23 @@ BENIGN_PATTERNS = [
   re.compile(r"got vin with request"),
 ]
 
+# F1.3 — extra ACC-stop pathways. selfdrived can disengage on these even if they
+# are not in our existing DISENGAGE_FLAGS bucket (some are observed indirectly
+# via SOFT_DISABLE / IMMEDIATE_DISABLE flags), but we want a per-event count to
+# rule out causes other than the audio chain we already fixed.
+EXTRA_DISENGAGE_EVENTS = {
+  "accFaulted", "canError", "canBusMissing", "cruiseDisabled", "espActive",
+  "commIssue", "commIssueAvgFreq", "radarFault", "cameraMalfunction",
+  "cameraFrameRate", "modeldLagging",
+}
+
+# F1.2 — modeld burst threshold. modeld emits "skipping model eval. Dropped X
+# frames" warnings; small numbers (1-3) are filtered/normal. Anything ≥10 is a
+# significant freeze (10 frames @ 20 Hz = 0.5 s; 117 frames = ~5.85 s) and we
+# want surrounding deviceState/procLog context to classify the cause.
+MODELD_BURST_THRESHOLD = 10
+MODELD_DROP_RE = re.compile(r"Dropped (\d+) frames")
+
 
 @dataclass
 class Finding:
@@ -87,10 +104,15 @@ def discover(drivelog_dir: Path):
   return routes
 
 
-def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Finding], dict]:
+def scan_segment(route: str, seg: int, path: Path, source: str,
+                 route_state: dict | None = None) -> tuple[list[Finding], dict, dict]:
   """Walk one log file and emit findings + summary stats.
 
   source: 'rlog' or 'qlog'
+  route_state: dict carried across segments of the same route. Holds the
+    last-known carParams snapshot (since carParams typically appears only
+    once at recording start, in seg 0). Returned (possibly mutated) for the
+    next segment to consume.
   """
   findings: list[Finding] = []
   stats = {
@@ -104,12 +126,15 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
     "errorLogMessage_count": 0,
     "logMessage_error_count": 0,
     "logMessage_warning_count": 0,
+    "extra_disengage_events": Counter(),
   }
+  if route_state is None:
+    route_state = {}
 
   data = decompress(path)
   events = list(log.Event.read_multiple_bytes(data))
   if not events:
-    return findings, stats
+    return findings, stats, route_state
 
   stats["events_total"] = len(events)
   t_start = events[0].logMonoTime
@@ -123,6 +148,19 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
   fired_event_seen: set[str] = set()
   last_thermal = None
   last_mem_pct = None
+  # F1.1 — last seen pandaState snapshot (per panda index) and recent timeseries.
+  # Captured at the moment a controlsMismatch event fires so we can compare each
+  # field against the carParams snapshot in route_state and pinpoint which one
+  # diverged.
+  last_panda_states: list[dict] = []
+  # F1.2 — last seen deviceState. Attached to a finding when modeld reports a
+  # large dropped-frame burst, so we can tell thermal-throttle from mem
+  # pressure from CPU starvation without having to re-walk the rlog.
+  last_device_state: dict = {}
+  # F1.1 — controlsMismatch dedup. The event can fire many times per frame
+  # window; we only keep the first one per segment to avoid drowning the
+  # report.
+  controls_mismatch_logged = False
 
   for evt in events:
     typ = evt.which()
@@ -132,6 +170,25 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
     if typ == "carParams":
       try:
         stats["fingerprint"] = evt.carParams.carFingerprint
+      except Exception:
+        pass
+      # F1.1 — snapshot carParams.safetyConfigs and alternativeExperience for
+      # later comparison against pandaStates when a controlsMismatch fires.
+      # carParams is published once at start; persist it in route_state so
+      # later segments (which may not contain another carParams) still have
+      # the reference values.
+      try:
+        sc_snap = []
+        for sc in evt.carParams.safetyConfigs:
+          sc_snap.append({
+            "safetyModel": str(sc.safetyModel),
+            "safetyParam": int(sc.safetyParam),
+          })
+        route_state["cp_snapshot"] = {
+          "safetyConfigs": sc_snap,
+          "alternativeExperience": int(evt.carParams.alternativeExperience),
+          "carFingerprint": str(evt.carParams.carFingerprint),
+        }
       except Exception:
         pass
     elif typ == "initData":
@@ -194,6 +251,39 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
         extra={"level": level},
       ))
 
+      # F1.2 — modeld burst context probe. modeld emits "skipping model eval.
+      # Dropped X frames" when vipc has gaps. For X >= MODELD_BURST_THRESHOLD
+      # we emit a separate finding annotated with the latest deviceState so we
+      # can see at a glance whether the freeze coincided with thermal=red or
+      # high CPU/mem (which would point at camerad starvation rather than
+      # modeld itself).
+      bm = MODELD_DROP_RE.search(msg)
+      if bm and "modeld" in (daemon or ""):
+        n_drop = int(bm.group(1))
+        if n_drop >= MODELD_BURST_THRESHOLD:
+          ds = last_device_state
+          # Classify the burst based on attached telemetry.
+          tags: list[str] = []
+          if ds.get("thermalStatus") == "red":
+            tags.append("thermal=red")
+          if (ds.get("memoryUsagePercent") or 0) > 85:
+            tags.append(f"mem={ds['memoryUsagePercent']}%")
+          cpu = ds.get("cpuUsagePercent") or []
+          if cpu and max(cpu) >= 90:
+            tags.append(f"cpu_max={max(cpu)}%")
+          tag_str = ", ".join(tags) if tags else "no-thermal/cpu/mem-flag"
+          findings.append(Finding(
+            route=route, segment=seg, log_mono_time_ns=t,
+            kind="modeld_burst_context", daemon=daemon or "modeld",
+            detail=f"dropped={n_drop} frames ({n_drop/20.0:.2f}s freeze) ; {tag_str}",
+            severity="error" if n_drop >= 50 else "warning",
+            extra={
+              "dropped_frames": n_drop,
+              "freeze_seconds": round(n_drop / 20.0, 2),
+              "deviceState": ds,
+            },
+          ))
+
     elif typ == "logMessage":
       parsed = parse_log_message(evt.logMessage)
       if parsed:
@@ -216,6 +306,15 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
           name = str(ev.name)
         except Exception:
           name = "?"
+
+        # F1.3 — count every occurrence of an extra-disengage-pathway event,
+        # regardless of whether a disengage flag is set on this particular
+        # frame. selfdrived may pulse e.g. canError repeatedly before the
+        # state machine actually disengages, so the per-segment count is a
+        # better signal than the single flagged emission we capture below.
+        if name in EXTRA_DISENGAGE_EVENTS:
+          stats["extra_disengage_events"][name] += 1
+
         # Only report a given disengage event once per segment (de-noise)
         flagged = [f for f in DISENGAGE_FLAGS if getattr(ev, f, False)]
         if flagged and name not in fired_event_seen:
@@ -227,6 +326,53 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
             detail=f"{name} ({','.join(flagged)})", severity=sev,
             extra={"event": name, "flags": flagged},
           ))
+
+          # F1.1 — when a controlsMismatch immediateDisable lands, dump a
+          # comparison between the latest pandaStates snapshot and the
+          # carParams snapshot to identify which exact field
+          # (safetyModel / safetyParam / alternativeExperience) diverged.
+          # This is the diagnostic our previous pass was missing — we knew
+          # WHICH event fired but not WHY.
+          if name == "controlsMismatch" and not controls_mismatch_logged:
+            controls_mismatch_logged = True
+            cp_snap = route_state.get("cp_snapshot")
+            mismatch_fields: list[str] = []
+            rx_invalid = []
+            if cp_snap and last_panda_states:
+              for i, ps in enumerate(last_panda_states):
+                if i < len(cp_snap["safetyConfigs"]):
+                  cp_sc = cp_snap["safetyConfigs"][i]
+                  if ps["safetyModel"] != cp_sc["safetyModel"]:
+                    mismatch_fields.append(
+                      f"panda{i}.safetyModel: panda={ps['safetyModel']} cp={cp_sc['safetyModel']}"
+                    )
+                  if ps["safetyParam"] != cp_sc["safetyParam"]:
+                    mismatch_fields.append(
+                      f"panda{i}.safetyParam: panda={ps['safetyParam']} cp={cp_sc['safetyParam']}"
+                    )
+                if ps["alternativeExperience"] != cp_snap["alternativeExperience"]:
+                  mismatch_fields.append(
+                    f"panda{i}.alternativeExperience: panda={ps['alternativeExperience']} cp={cp_snap['alternativeExperience']}"
+                  )
+                if ps.get("safetyRxChecksInvalid"):
+                  rx_invalid.append(f"panda{i}")
+            detail_bits = []
+            if mismatch_fields:
+              detail_bits.append("FIELD_MISMATCH=" + " | ".join(mismatch_fields))
+            if rx_invalid:
+              detail_bits.append("safetyRxChecksInvalid=" + ",".join(rx_invalid))
+            if not detail_bits:
+              detail_bits.append("no field mismatch found at trigger time (likely mismatch_counter>=200)")
+            findings.append(Finding(
+              route=route, segment=seg, log_mono_time_ns=t,
+              kind="controlsMismatch_context", daemon="selfdrived",
+              detail=" ; ".join(detail_bits),
+              severity="critical",
+              extra={
+                "cp": cp_snap,
+                "panda": last_panda_states,
+              },
+            ))
 
     elif typ == "selfdriveState":
       try:
@@ -243,11 +389,22 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
       prev_self_enabled = enabled
 
     elif typ == "pandaStates":
+      # F1.1 — refresh the last-seen snapshot per panda. Used by the
+      # controlsMismatch probe in the onroadEvents branch above.
+      new_snapshot: list[dict] = []
       for i, ps in enumerate(evt.pandaStates):
         try:
           fault = str(ps.faultStatus)
         except Exception:
           fault = "?"
+        new_snapshot.append({
+          "safetyModel": str(ps.safetyModel),
+          "safetyParam": int(ps.safetyParam),
+          "alternativeExperience": int(ps.alternativeExperience),
+          "safetyRxChecksInvalid": bool(getattr(ps, "safetyRxChecksInvalid", False)),
+          "controlsAllowed": bool(getattr(ps, "controlsAllowed", False)),
+          "faultStatus": fault,
+        })
         prev = prev_panda_fault.get(i)
         if fault != "none" and prev != fault:
           findings.append(Finding(
@@ -264,6 +421,7 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
             severity="error",
           ))
         prev_panda_fault[i] = fault
+      last_panda_states = new_snapshot
 
     elif typ == "deviceState":
       try:
@@ -274,6 +432,28 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
         mem_pct = int(evt.deviceState.memoryUsagePercent)
       except Exception:
         mem_pct = None
+      # F1.2 — capture cpu / gpu / mem / freeSpace / freeMem so we can attach
+      # them to a modeld burst finding (cause classifier: thermal vs mem vs
+      # cpu starvation).
+      try:
+        cpu_pct = list(evt.deviceState.cpuUsagePercent)
+      except Exception:
+        cpu_pct = []
+      try:
+        gpu_pct = int(evt.deviceState.gpuUsagePercent)
+      except Exception:
+        gpu_pct = None
+      try:
+        free_mb = int(evt.deviceState.memoryUsagePercent)  # placeholder; capnp doesn't expose freeMb directly
+      except Exception:
+        free_mb = None
+      last_device_state = {
+        "thermalStatus": thermal,
+        "memoryUsagePercent": mem_pct,
+        "cpuUsagePercent": cpu_pct,
+        "gpuUsagePercent": gpu_pct,
+        "logMonoTime": t,
+      }
       if thermal == "red" and last_thermal != "red":
         findings.append(Finding(
           route=route, segment=seg, log_mono_time_ns=t,
@@ -291,7 +471,8 @@ def scan_segment(route: str, seg: int, path: Path, source: str) -> tuple[list[Fi
 
   # Convert msg_types Counter for JSON
   stats["msg_types"] = dict(stats["msg_types"])
-  return findings, stats
+  stats["extra_disengage_events"] = dict(stats["extra_disengage_events"])
+  return findings, stats, route_state
 
 
 def per_route_summary(route: str, segments: list[int], all_findings: list[Finding], stats_by_seg: dict[int, dict]) -> dict:
@@ -393,6 +574,65 @@ def write_report(findings: list[Finding], route_summaries: list[dict], stats_by_
       ec_samples = [f.extra.get("exitCode") for f in crashes if f.daemon == d]
       lines.append(f"- `{d}`: {n}건  (exitCode 분포: {Counter(ec_samples).most_common(5)})")
 
+  # F1.1 — controlsMismatch root-cause probe. One row per controlsMismatch
+  # event with the diff between panda's actual safety state and CP's expected
+  # safety state at trigger time.
+  cm_ctx = [f for f in findings if f.kind == "controlsMismatch_context"]
+  if cm_ctx:
+    lines.append(f"\n## controlsMismatch 컨텍스트 (F1.1, {len(cm_ctx)}건)\n")
+    for f in cm_ctx:
+      lines.append(f"\n### {f.route} seg {f.segment}\n")
+      lines.append(f"- 트리거 시점 mismatch: {f.detail}")
+      cp = f.extra.get("cp") or {}
+      panda = f.extra.get("panda") or []
+      if cp:
+        sc = cp.get("safetyConfigs") or []
+        sc_str = ", ".join(f"{s.get('safetyModel')}/{s.get('safetyParam')}" for s in sc)
+        lines.append(f"- CP: alternativeExperience={cp.get('alternativeExperience')}, "
+                     f"safetyConfigs=[{sc_str}], fingerprint={cp.get('carFingerprint')}")
+      for i, ps in enumerate(panda):
+        lines.append(f"- panda{i}: safetyModel={ps.get('safetyModel')} "
+                     f"safetyParam={ps.get('safetyParam')} "
+                     f"alternativeExperience={ps.get('alternativeExperience')} "
+                     f"safetyRxChecksInvalid={ps.get('safetyRxChecksInvalid')} "
+                     f"controlsAllowed={ps.get('controlsAllowed')}")
+
+  # F1.2 — modeld burst contexts. One row per ≥10-frame drop with the latest
+  # deviceState attached so the cause classifier (thermal / mem / cpu) is
+  # immediately readable.
+  burst_ctx = [f for f in findings if f.kind == "modeld_burst_context"]
+  if burst_ctx:
+    lines.append(f"\n## modeld 프레임 burst 컨텍스트 (F1.2, {len(burst_ctx)}건)\n")
+    lines.append("| route | seg | 드랍 | 추정 freeze | tag |")
+    lines.append("|---|---|---|---|---|")
+    for f in burst_ctx:
+      ex = f.extra
+      lines.append(f"| `{f.route}` | {f.segment} | {ex.get('dropped_frames')} | "
+                   f"{ex.get('freeze_seconds')} s | {f.detail.split(' ; ')[-1]} |")
+    burst_tag_counter = Counter(f.detail.split(" ; ")[-1] for f in burst_ctx)
+    lines.append("\n버스트 분류 합계:")
+    for tag, n in burst_tag_counter.most_common():
+      lines.append(f"- {tag}: {n}건")
+
+  # F1.3 — extra disengage event totals (across all segments and routes).
+  # These events can chain into SOFT_DISABLE / IMMEDIATE_DISABLE in
+  # selfdrived; counting them rules out (or surfaces) ACC drop causes
+  # beyond the audio chain.
+  extra_total: Counter = Counter()
+  for route, info in stats_by_route.items():
+    for seg_stats in info.get("segments", {}).values():
+      for evname, n in (seg_stats.get("extra_disengage_events") or {}).items():
+        extra_total[evname] += n
+  if extra_total:
+    lines.append(f"\n## 추가 disengage 경로 이벤트 카운트 (F1.3)\n")
+    lines.append("| 이벤트 | 횟수 |")
+    lines.append("|---|---|")
+    for ev, n in extra_total.most_common():
+      lines.append(f"| `{ev}` | {n} |")
+  else:
+    lines.append("\n## 추가 disengage 경로 이벤트 카운트 (F1.3)\n")
+    lines.append("(0건 — Phase E 의 audio 픽스 외 추가 ACC-drop 경로는 본 데이터셋에 없음)")
+
   (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
 
 
@@ -435,6 +675,12 @@ def main():
     stats_by_seg: dict[int, dict] = {}
     route_findings: list[Finding] = []
     t0 = None
+    # Carries the carParams snapshot (and any other route-scoped state) from
+    # one segment to the next so that probes which need carParams (e.g. F1.1
+    # controlsMismatch comparison) still work in segments where carParams is
+    # absent — which is most of them, since carParams is published once at
+    # recording start.
+    route_state: dict = {}
 
     for seg in seg_indices:
       files = segmap[seg]
@@ -443,7 +689,7 @@ def main():
       if not path:
         continue
       try:
-        f_list, stats = scan_segment(route, seg, path, source)
+        f_list, stats, route_state = scan_segment(route, seg, path, source, route_state)
       except Exception as e:
         print(f"  seg {seg:3d}: FAILED ({source}): {e}")
         continue
