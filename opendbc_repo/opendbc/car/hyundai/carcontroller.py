@@ -499,6 +499,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                     CarControllerParams.VTAU_SPEED_V))
         vtau = max(angle_tau, speed_tau)
 
+      # Heading hold on low-speed deceleration: when slowing to a stop,
+      # boost tau to suppress jittery lane-centering from occluded lanes.
+      if v_ego_safe < 8.0 and CS.out.aEgo < -0.3:
+        decel_tau = float(np.interp(v_ego_safe, [0.0, 8.0], [5.0, 0.0]))
+        vtau = max(vtau, decel_tau)
+
       if CC.latActive and vtau > 0.001:
         alpha = LPF_DT / (vtau + LPF_DT)
         self.vtau_lpf = alpha * op_curv_safe + (1.0 - alpha) * self.vtau_lpf
