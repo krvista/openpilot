@@ -173,6 +173,18 @@ class Controls(ControlsExt):
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo) if CC.latActive else self.curvature
+
+    # Model uncertainty damping: when the model is unsure about lane position
+    # (e.g. lead car occluding lane lines), blend toward previous curvature
+    # to suppress jittery steering commands.
+    if CC.latActive and self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+      y_std_list = model_v2.position.yStd
+      if len(y_std_list) > 5:
+        y_std = y_std_list[5]
+        if y_std > 0.3:
+          confidence = float(np.interp(y_std, [0.3, 1.0], [1.0, 0.05]))
+          new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
+
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
