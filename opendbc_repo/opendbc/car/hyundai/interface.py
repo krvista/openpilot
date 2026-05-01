@@ -150,6 +150,7 @@ class CarInterface(CarInterfaceBase):
     # angle commands.
     if ret.flags & HyundaiFlags.CCNC and ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
       ret.steerControlType = structs.CarParams.SteerControlType.angle
+      ret.minSteerSpeed = 10.0 / 3.6
     else:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 

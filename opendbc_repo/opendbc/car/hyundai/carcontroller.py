@@ -43,9 +43,11 @@ def is_ccnc_angle_platform(flags):
 # ACIGain floor when op is actively steering.
 ACI_GAIN_OP_FLOOR = 0.15
 
-# Low-speed camera passthrough latch (hysteresis 2/3 km/h).
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 2.0 / 3.6   # ≈ 0.556 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 3.0 / 3.6   # ≈ 0.833 m/s
+# Low-speed camera passthrough latch (hysteresis 10/12 km/h).
+# Below 10 km/h, hand lateral control to stock LFA which is smoother
+# at low speed (no roll compensation divergence or model noise).
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 10.0 / 3.6   # ≈ 2.78 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 12.0 / 3.6   # ≈ 3.33 m/s
 
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
