@@ -564,20 +564,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode: MADS on + ACC off + <20 km/h for 5 s → fade out assist.
-    # Instant entry: above conditions + |steeringAngle| > 200°.
-    # Exit: MADS off, ACC on, or ≥20 km/h for 3 s.
+    # Parking mode: large steering angle at low speed (manual manoeuvring).
+    # Below LOW_SPEED_PASSTHROUGH stock LFA handles lateral, so parking
+    # only matters in the 10-20 km/h band where op is active but
+    # the driver is clearly manoeuvring (|angle| > 200°).
+    # Below 10 km/h: stock LFA passthrough — no parking fade needed.
     if ccnc_lka_alt:
+      in_lfa_zone = v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS
       parking_entry_ok = bool(mads_enabled and not CS.out.cruiseState.enabled and
-                              v_ego_safe < PARKING_SPEED_MS)
+                              not in_lfa_zone and v_ego_safe < PARKING_SPEED_MS)
       big_angle = abs(CS.out.steeringAngleDeg) > PARKING_ANGLE_THRESHOLD
       if not self.parking_mode:
-        self.parking_enter_cnt = self.parking_enter_cnt + 1 if parking_entry_ok else 0
-        if self.parking_enter_cnt >= PARKING_ENTER_FRAMES or (parking_entry_ok and big_angle):
+        self.parking_enter_cnt = self.parking_enter_cnt + 1 if (parking_entry_ok and big_angle) else 0
+        if self.parking_enter_cnt >= 100:
           self.parking_mode = True
           self.parking_enter_cnt = 0
       else:
-        if not mads_enabled or CS.out.cruiseState.enabled:
+        if not mads_enabled or CS.out.cruiseState.enabled or in_lfa_zone:
           self.parking_mode = False
           self.parking_exit_speed_cnt = 0
         else:
