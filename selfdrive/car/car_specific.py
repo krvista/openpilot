@@ -20,6 +20,7 @@ class CarSpecificEvents:
     self.low_speed_alert = False
     self.no_steer_warning = False
     self.silent_steer_warning = True
+    self.wrong_gear_counter = 0
 
   def update(self, CS: car.CarState, CS_prev: car.CarState, CC: car.CarControl):
     if self.CP.brand in ('body', 'mock'):
@@ -107,7 +108,11 @@ class CarSpecificEvents:
     if CS.seatbeltUnlatched:
       events.add(EventName.seatbeltNotLatched)
     if CS.gearShifter != GearShifter.drive and CS.gearShifter not in CI.DRIVABLE_GEARS:
-      events.add(EventName.wrongGear)
+      self.wrong_gear_counter += 1
+      if self.wrong_gear_counter > int(2. / DT_CTRL):
+        events.add(EventName.wrongGear)
+    else:
+      self.wrong_gear_counter = 0
     if CS.gearShifter == GearShifter.reverse:
       events.add(EventName.reverseGear)
     if not CS.cruiseState.available:
