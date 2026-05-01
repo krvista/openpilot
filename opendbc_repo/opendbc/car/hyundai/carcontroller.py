@@ -43,11 +43,13 @@ def is_ccnc_angle_platform(flags):
 # ACIGain floor when op is actively steering.
 ACI_GAIN_OP_FLOOR = 0.15
 
-# Low-speed camera passthrough latch (hysteresis 10/12 km/h).
-# Below 10 km/h, hand lateral control to stock LFA which is smoother
+# Low-speed camera passthrough latch (hysteresis 20/22 km/h).
+# Below 20 km/h, hand lateral control to stock LFA which is smoother
 # at low speed (no roll compensation divergence or model noise).
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 10.0 / 3.6   # ≈ 2.78 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 12.0 / 3.6   # ≈ 3.33 m/s
+# This also eliminates the need for parking mode — stock LFA handles
+# all low-speed manoeuvring including parking.
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 20.0 / 3.6   # ≈ 5.56 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ≈ 6.11 m/s
 
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
@@ -57,12 +59,6 @@ JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
 JITTER_FRAMES = 20        # ~200ms at 100 Hz
 JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
-# Parking mode: hands-on + low speed → fade out steering assist.
-PARKING_SPEED_MS = 20.0 / 3.6         # 5.56 m/s ≈ 20 km/h
-PARKING_ENTER_FRAMES = 500            # 5 s at 100 Hz
-PARKING_EXIT_SPEED_FRAMES = 300       # 3 s at 100 Hz
-PARKING_FADE_RATE = 1.0 / 150         # 1.5 s full fade (100 Hz)
-PARKING_ANGLE_THRESHOLD = 200         # deg — instant parking entry at large angle
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain):
@@ -564,36 +560,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode: large steering angle at low speed (manual manoeuvring).
-    # Below LOW_SPEED_PASSTHROUGH stock LFA handles lateral, so parking
-    # only matters in the 10-20 km/h band where op is active but
-    # the driver is clearly manoeuvring (|angle| > 200°).
-    # Below 10 km/h: stock LFA passthrough — no parking fade needed.
+    # Parking mode removed: stock LFA handles all lateral control below
+    # 20 km/h via camera passthrough, including parking manoeuvres.
     if ccnc_lka_alt:
-      in_lfa_zone = v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS
-      parking_entry_ok = bool(mads_enabled and not CS.out.cruiseState.enabled and
-                              not in_lfa_zone and v_ego_safe < PARKING_SPEED_MS)
-      big_angle = abs(CS.out.steeringAngleDeg) > PARKING_ANGLE_THRESHOLD
-      if not self.parking_mode:
-        self.parking_enter_cnt = self.parking_enter_cnt + 1 if (parking_entry_ok and big_angle) else 0
-        if self.parking_enter_cnt >= 100:
-          self.parking_mode = True
-          self.parking_enter_cnt = 0
-      else:
-        if not mads_enabled or CS.out.cruiseState.enabled or in_lfa_zone:
-          self.parking_mode = False
-          self.parking_exit_speed_cnt = 0
-        else:
-          self.parking_exit_speed_cnt = self.parking_exit_speed_cnt + 1 \
-            if v_ego_safe >= PARKING_SPEED_MS else 0
-          if self.parking_exit_speed_cnt >= PARKING_EXIT_SPEED_FRAMES:
-            self.parking_mode = False
-            self.parking_exit_speed_cnt = 0
-
-      if self.parking_mode:
-        self.parking_fade = max(0.0, self.parking_fade - PARKING_FADE_RATE)
-      else:
-        self.parking_fade = min(1.0, self.parking_fade + PARKING_FADE_RATE)
+      self.parking_mode = False
+      self.parking_fade = 1.0
 
     if ccnc_lka_alt:
       fault_lfa = getattr(CS, 'fault_lfa', 0)
