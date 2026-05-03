@@ -34,18 +34,18 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt, Inte
     lkas_active = CC.latActive and self.lkas_control_bit_prev
 
     # cruise buttons
-    if (self.frame - self.last_button_frame) * DT_CTRL > 0.05:
-      das_bus = 2 if self.CP.carFingerprint in RAM_CARS else 0
+    das_bus = 2 if self.CP.carFingerprint in RAM_CARS else 0
 
-      # ACC cancellation
-      if CC.cruiseControl.cancel:
-        self.last_button_frame = self.frame
-        can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, cancel=True))
+    # ACC cancellation - rate-limit aggressively. Sending CANCEL faster than ~2 Hz can put the
+    # Chrysler/Jeep ACC ECU into a permanent fault state that only clears with an ignition cycle.
+    if CC.cruiseControl.cancel and (self.frame - self.last_button_frame) * DT_CTRL > 0.5:
+      self.last_button_frame = self.frame
+      can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, cancel=True))
 
-      # ACC resume from standstill
-      elif CC.cruiseControl.resume:
-        self.last_button_frame = self.frame
-        can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, resume=True))
+    # ACC resume from standstill
+    elif CC.cruiseControl.resume and (self.frame - self.last_button_frame) * DT_CTRL > 0.05:
+      self.last_button_frame = self.frame
+      can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, resume=True))
 
     # HUD alerts
     if self.frame % 25 == 0:

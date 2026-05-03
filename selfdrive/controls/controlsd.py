@@ -169,7 +169,11 @@ class Controls(ControlsExt, ModelStateBase):
       CC.angularVelocity = self.calibrated_pose.angular_velocity.xyz.tolist()
 
     CC.cruiseControl.override = CC.enabled and not CC.longActive and (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
-    CC.cruiseControl.cancel = CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
+    # Suppress cancel until selfdrived is engageable so we don't fight the car's cruise during the boot
+    # window. If the user enables ACC before openpilot finishes initializing, an immediate cancel spam
+    # can put some ACC ECUs (e.g. Chrysler/Jeep) into a hard fault that survives until ignition cycle.
+    CC.cruiseControl.cancel = (CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
+                               and self.sm['selfdriveState'].engageable)
     CC.cruiseControl.resume = CC.enabled and CS.cruiseState.standstill and not self.sm['longitudinalPlan'].shouldStop
 
     hudControl = CC.hudControl
