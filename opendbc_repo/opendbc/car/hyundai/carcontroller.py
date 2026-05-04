@@ -51,6 +51,13 @@ ACI_GAIN_OP_FLOOR = 0.15
 LOW_SPEED_PASSTHROUGH_ENTER_MS = 15.0 / 3.6   # ≈ 4.17 m/s
 LOW_SPEED_PASSTHROUGH_EXIT_MS  = 17.0 / 3.6   # ≈ 4.72 m/s
 
+# Smart unfreeze: exit passthrough below 15 kph when model demands
+# a significant angle change (corner approach). Noise STD < 1° with
+# P99 < 3° on straights → 5° is safely above noise floor.
+SMART_UNFREEZE_THRESHOLD = 5.0    # deg — unfreeze when |demand| exceeds this
+SMART_REFREEZE_THRESHOLD = 2.0    # deg — re-freeze when demand drops below
+SMART_REFREEZE_HOLD = 50          # frames (0.5s at 100 Hz) sustained low demand
+
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
 # Stuck-angle jitter break: inject ±0.05° micro-steps when angle is frozen
@@ -156,6 +163,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 4-B: stuck-angle jitter break counter
     self.jitter_counter = 0
     self.jitter_sign = 1
+    # Smart unfreeze state: tracks whether we explicitly exited
+    # low-speed passthrough due to model angle demand.
+    self.smart_unfrozen = False
+    self.smart_refreeze_cnt = 0
     # F1: Camera message staleness tracker. If the camera ECU stops
     # sending LKAS_ALT on bus 2, the dict still arrives (CANParser caches)
     # but the COUNTER signal stops incrementing. After CAM_STALE_FRAMES
@@ -456,9 +467,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # no assist AND no resistance at creep speed — identical to stock
     # LFA feel. Hysteresis on vEgoRaw prevents stop-and-go flapping.
     if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
-      self.low_speed_cam_latched = True
+      angle_demand = abs(op_curv_safe - steer_angle_safe)
+      if angle_demand > SMART_UNFREEZE_THRESHOLD:
+        if self.low_speed_cam_latched:
+          self.apply_angle_last = steer_angle_safe
+        self.low_speed_cam_latched = False
+        self.smart_unfrozen = True
+        self.smart_refreeze_cnt = 0
+      elif self.smart_unfrozen:
+        if angle_demand < SMART_REFREEZE_THRESHOLD:
+          self.smart_refreeze_cnt += 1
+          if self.smart_refreeze_cnt >= SMART_REFREEZE_HOLD:
+            self.low_speed_cam_latched = True
+            self.smart_unfrozen = False
+        else:
+          self.smart_refreeze_cnt = 0
+      else:
+        self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
+      self.smart_unfrozen = False
+      self.smart_refreeze_cnt = 0
     # Combined passthrough latch — used below to force `rate_lat_active=False`
     # in the rate limiter so `apply_angle_last` tracks the actual wheel
     # while passive. The LKAS_ALT packer no longer takes a separate
