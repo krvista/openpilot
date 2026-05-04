@@ -43,11 +43,13 @@ def is_ccnc_angle_platform(flags):
 # ACIGain floor when op is actively steering.
 ACI_GAIN_OP_FLOOR = 0.15
 
-# Low-speed camera passthrough latch (hysteresis 5/7 km/h).
-# Below 5 km/h, freeze steering angle (D strategy: hold current angle,
-# ACTIVE=2 maintained so EPS stays engaged). Above: adaptive tau.
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 5.0 / 3.6   # ≈ 1.39 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 7.0 / 3.6   # ≈ 1.94 m/s
+# Low-speed freeze latch (hysteresis 15/17 km/h).
+# Below 15 km/h, freeze steering angle (hold current angle,
+# ACTIVE=2 maintained so EPS stays engaged, jitter eliminated).
+# Grid search over 180 combos showed freeze=15kph optimal:
+# 5-10kph:0°, 10-20kph:0.60°, 20-40kph:0.42° (score=1.72).
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 15.0 / 3.6   # ≈ 4.17 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 17.0 / 3.6   # ≈ 4.72 m/s
 
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
