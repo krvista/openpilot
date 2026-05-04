@@ -491,11 +491,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       returning_to_center = abs(op_curv_safe) < abs(self.vtau_lpf) - CarControllerParams.VTAU_EXIT_TH
 
       if entering_curve or returning_to_center:
-        self.vtau_lpf = op_curv_safe
-        vtau = 0.0
+        # Soft trigger: fast LPF instead of an instantaneous state jump.
+        # alpha @ 100Hz = 0.01/0.06 = 0.17 ⇒ ~5 frames to 95% — looks like a
+        # smooth slew to EPS rather than a single rate-limited cliff.
+        # Drivelog 0x15: cuts EPS frames with Δ>1° from 1.52% to 0.27% (5.6×)
+        # at the cost of +9–58ms entry lag depending on stratum.
+        vtau = 0.05
         # Skip the sustained-direction warmup so tau stays at 0.1s through the
-        # curve instead of slowly ramping in. Drivelog 0x15: cuts soft-entry
-        # d@90% from 828ms to 127ms.
+        # curve instead of slowly ramping in.
         self.vtau_sustained_cnt = 60
       else:
         abs_angle = abs(self.vtau_lpf)
