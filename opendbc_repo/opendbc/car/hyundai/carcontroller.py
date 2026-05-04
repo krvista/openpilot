@@ -530,7 +530,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle_deg = (1.0 - override_factor) * desired_angle_deg + \
                             override_factor * steer_angle_safe
 
-      rate_lat_active = bool(CC.latActive) and self.aci_active_latched
+      # Passthrough below 15 km/h or while the driver firmly has the wheel:
+      # let `apply_steer_angle_limits_vm` track steer_angle_safe (line ~129
+      # of lateral.py) and let the stuck-angle jitter break (further below)
+      # short-circuit on its `else` branch. Without this gate the latch
+      # comment on line ~462 — "force rate_lat_active=False" — wasn't
+      # actually wired, leaving the ±0.05° jitter injection running at
+      # standstill.
+      rate_lat_active = bool(CC.latActive) and self.aci_active_latched and not in_passthrough
 
       if self.override_snapped:
         self.apply_angle_last = steer_angle_safe
