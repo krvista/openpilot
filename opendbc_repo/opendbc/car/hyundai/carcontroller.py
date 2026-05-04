@@ -43,13 +43,11 @@ def is_ccnc_angle_platform(flags):
 # ACIGain floor when op is actively steering.
 ACI_GAIN_OP_FLOOR = 0.15
 
-# Low-speed camera passthrough latch (hysteresis 20/22 km/h).
-# Below 20 km/h, hand lateral control to stock LFA which is smoother
-# at low speed (no roll compensation divergence or model noise).
-# This also eliminates the need for parking mode — stock LFA handles
-# all low-speed manoeuvring including parking.
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 20.0 / 3.6   # ≈ 5.56 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ≈ 6.11 m/s
+# Low-speed camera passthrough latch (hysteresis 5/7 km/h).
+# Below 5 km/h, freeze steering angle (D strategy: hold current angle,
+# ACTIVE=2 maintained so EPS stays engaged). Above: adaptive tau.
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 5.0 / 3.6   # ≈ 1.39 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 7.0 / 3.6   # ≈ 1.94 m/s
 
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
@@ -144,6 +142,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.BASELINE_VM = VehicleModel(baseline_cp)
     # Variable-tau LPF state
     self.vtau_lpf = 0.0
+    self.vtau_sustained_cnt = 0
+    self.vtau_prev_sign = 0
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -489,6 +489,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if entering_curve or returning_to_center:
         self.vtau_lpf = op_curv_safe
         vtau = 0.0
+        self.vtau_sustained_cnt = 0
       else:
         abs_angle = abs(self.vtau_lpf)
         angle_tau = float(np.interp(abs_angle, CarControllerParams.VTAU_ANGLE_BP,
@@ -497,10 +498,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                     CarControllerParams.VTAU_SPEED_V))
         vtau = max(angle_tau, speed_tau)
 
-      # Heading hold: low speed crawl already handled by VTAU_SPEED (5.0s at 0 m/s).
-      # Additional boost when actively decelerating to a stop.
-      if v_ego_safe < 5.0 and CS.out.aEgo < -0.5:
-        vtau = max(vtau, 8.0)
+        # Adaptive tau: sustained same-direction change = real correction (not noise).
+        # Noise oscillates direction every few frames; real corrections persist.
+        cur_sign = 1 if op_curv_safe > self.vtau_lpf + 0.01 else (-1 if op_curv_safe < self.vtau_lpf - 0.01 else 0)
+        if cur_sign != 0 and cur_sign == self.vtau_prev_sign:
+          self.vtau_sustained_cnt = min(self.vtau_sustained_cnt + 1, 100)
+        else:
+          self.vtau_sustained_cnt = max(self.vtau_sustained_cnt - 2, 0)
+        self.vtau_prev_sign = cur_sign
+        vtau = float(np.interp(self.vtau_sustained_cnt, [0, 30, 60], [vtau, 0.5, 0.1]))
 
       if CC.latActive and vtau > 0.001:
         alpha = LPF_DT / (vtau + LPF_DT)
@@ -560,8 +566,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode removed: stock LFA handles all lateral control below
-    # 20 km/h via camera passthrough, including parking manoeuvres.
+    # Parking mode disabled — D+A strategy handles all speeds.
     if ccnc_lka_alt:
       self.parking_mode = False
       self.parking_fade = 1.0
