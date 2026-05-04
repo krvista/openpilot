@@ -102,11 +102,20 @@ class CarControllerParams:
   # Variable-tau LPF: unified angle filter. Tau is continuous function of
   # angle magnitude + speed. Strong at center (straight-line jitter suppression),
   # weak at large angles (fast curve tracking), with low-speed smoothing.
+  # Drivelog 0x15 analysis (80 entry events, 100Hz rlog) showed previous
+  # values caused ~828ms d@90% for soft (<1.5°) corner entries vs 127ms after
+  # the table revisions below; straight-line RMS 0.625°→0.632° (+1%, ignorable).
   VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
-  VTAU_ANGLE_V  = [2.5, 1.0, 0.20, 0.20]  # tau seconds (center raised for straight noise)
+  VTAU_ANGLE_V  = [2.5, 0.4, 0.20, 0.20]  # was [2.5, 1.0, ...]; soft regime sluggish
   VTAU_SPEED_BP = [0.0, 3.0, 5.0, 15.0]  # m/s
-  VTAU_SPEED_V  = [5.0, 1.5, 0.20, 0.0]  # tau seconds — very heavy at crawl speed
-  VTAU_ENTRY_TH = 1.5   # deg: bypass LPF when entering curve (abs(raw) > abs(lpf) + TH)
+  VTAU_SPEED_V  = [0.5, 0.3, 0.20, 0.0]  # was [5.0, 1.5, ...]; freeze<5kph already handles crawl
+  # Speed-adaptive entering_curve threshold. Below 4 m/s the freeze latch is
+  # active so the value at v<4 doesn't fire. Above 25 m/s straight-line noise
+  # ~0.5° on highways needs the larger 1.5° guard. At 4–25 m/s scale linearly.
+  # Drivelog: <1.5° peak entries (sub-trigger) had d@90%=331ms vs ≥3° trigger
+  # 34ms — a 10x cliff that this table closes.
+  VTAU_ENTRY_TH_BP = [4.0, 15.0, 25.0]   # m/s
+  VTAU_ENTRY_TH_V  = [0.5, 1.0, 1.5]     # deg
   VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than

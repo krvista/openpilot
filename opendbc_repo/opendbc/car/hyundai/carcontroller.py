@@ -485,13 +485,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # magnitude and speed — strong at center (suppresses straight-line
       # jitter), weak at large angles (fast curve tracking), with low-speed
       # smoothing built in. No step response because tau is continuous.
-      entering_curve = abs(op_curv_safe) > abs(self.vtau_lpf) + CarControllerParams.VTAU_ENTRY_TH
+      entry_th = float(np.interp(v_ego_safe, CarControllerParams.VTAU_ENTRY_TH_BP,
+                                              CarControllerParams.VTAU_ENTRY_TH_V))
+      entering_curve = abs(op_curv_safe) > abs(self.vtau_lpf) + entry_th
       returning_to_center = abs(op_curv_safe) < abs(self.vtau_lpf) - CarControllerParams.VTAU_EXIT_TH
 
       if entering_curve or returning_to_center:
         self.vtau_lpf = op_curv_safe
         vtau = 0.0
-        self.vtau_sustained_cnt = 0
+        # Skip the sustained-direction warmup so tau stays at 0.1s through the
+        # curve instead of slowly ramping in. Drivelog 0x15: cuts soft-entry
+        # d@90% from 828ms to 127ms.
+        self.vtau_sustained_cnt = 60
       else:
         abs_angle = abs(self.vtau_lpf)
         angle_tau = float(np.interp(abs_angle, CarControllerParams.VTAU_ANGLE_BP,
