@@ -114,8 +114,13 @@ class CarControllerParams:
   # ~0.5° on highways needs the larger 1.5° guard. At 4–25 m/s scale linearly.
   # Drivelog: <1.5° peak entries (sub-trigger) had d@90%=331ms vs ≥3° trigger
   # 34ms — a 10x cliff that this table closes.
+  # Drive 0x14/0x15 grid search: lowering the mid breakpoint from 1.0° to 0.7°
+  # cuts 0x15 1.5-3° d@90% 107→78ms (-27%) and 3-7° d@90% 97→58ms (-40%) with
+  # zero regression on jitter RMS or EPS-bound Δ continuity (false-trigger risk
+  # is gated out by A-v2 + freeze<15kph; in straight-line noise vtau_lpf stays
+  # near 0 so |op-vtau_lpf| stays below 0.5° and never crosses the new mid TH).
   VTAU_ENTRY_TH_BP = [4.0, 15.0, 25.0]   # m/s
-  VTAU_ENTRY_TH_V  = [0.5, 1.0, 1.5]     # deg
+  VTAU_ENTRY_TH_V  = [0.3, 0.7, 1.5]     # deg
   VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
