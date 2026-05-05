@@ -146,6 +146,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.vtau_lpf = 0.0
     self.vtau_sustained_cnt = 0
     self.vtau_prev_sign = 0
+    self.vtau_prev_op = 0.0
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -517,6 +518,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           self.vtau_sustained_cnt = max(self.vtau_sustained_cnt - 2, 0)
         self.vtau_prev_sign = cur_sign
         vtau = float(np.interp(self.vtau_sustained_cnt, [0, 30, 60], [vtau, 0.5, 0.1]))
+
+      # Rate-feedforward: scale tau down when op_curv_safe is changing fast so
+      # the LPF tracks aggressive corner entries closer to the model's command.
+      # Drive 0x15 aggressive entries (≥5°) d@90% 39→10ms (-74%, near-PURE);
+      # trade-off is +0.2° on Δ p99 in ~1% transient frames (still below PURE's
+      # 0.95°). Steady-state op_rate≈0 so this branch is inert during normal
+      # driving — only activates on rapid command changes.
+      op_rate = (op_curv_safe - self.vtau_prev_op) / LPF_DT
+      if abs(op_rate) > 1.0:
+        vtau = vtau / (1.0 + 0.05 * abs(op_rate))
+        vtau = max(vtau, 0.01)
+      self.vtau_prev_op = op_curv_safe
 
       if CC.latActive and vtau > 0.001:
         alpha = LPF_DT / (vtau + LPF_DT)
