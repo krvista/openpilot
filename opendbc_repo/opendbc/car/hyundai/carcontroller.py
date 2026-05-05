@@ -531,11 +531,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         vtau = max(vtau, 0.01)
       self.vtau_prev_op = op_curv_safe
 
-      if CC.latActive and vtau > 0.001:
+      # During passthrough or while op is inactive, the rate limiter forces
+      # apply_angle_last == steer_angle_safe (lateral.py:129). Mirror that on
+      # vtau_lpf so re-engagement starts from the actual wheel angle and the
+      # next LPF convergence is short. Without this gate vtau_lpf accumulated
+      # up to 9.8° away from the wheel during passthrough on drive 0x15,
+      # producing an 80ms rate-saturated slew at the 17 km/h release boundary.
+      if CC.latActive and not in_passthrough and vtau > 0.001:
         alpha = LPF_DT / (vtau + LPF_DT)
         self.vtau_lpf = alpha * op_curv_safe + (1.0 - alpha) * self.vtau_lpf
-      elif not CC.latActive:
-        self.vtau_lpf = op_curv_safe
+      else:
+        self.vtau_lpf = steer_angle_safe
       desired_angle_deg = self.vtau_lpf
 
       # Driver override blend
