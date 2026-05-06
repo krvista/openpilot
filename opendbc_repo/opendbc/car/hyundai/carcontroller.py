@@ -635,8 +635,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         lkas_alt_cam_msg["LKA_ASSIST"] = 0
         lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"] = 1
         lkas_alt_cam_msg["ADAS_StrAnglReqVal"] = steer_angle_safe
+    # in_passthrough also gates effective_lat_active so the LKAS_ALT packer
+    # emits LKAS_ANGLE_ACTIVE=1 (= camera passive value) and ACIGain=0 below
+    # 15 km/h. Without this gate the angle bit stayed at 2 even while
+    # apply_angle_last was being forced to follow the wheel — MDPS read that
+    # as "hold this exact angle" and refused to let caster torque return the
+    # wheel toward center, making parking-lot maneuvers feel sticky.
     effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req
-                            and not self.was_in_reverse and not parking_fully_faded) if ccnc_lka_alt else apply_steer_req
+                            and not self.was_in_reverse and not parking_fully_faded
+                            and not in_passthrough) if ccnc_lka_alt else apply_steer_req
 
     # ACIGain: sunnypilot-style torque reduction gain (torque + speed → gain).
     # Must use effective_lat_active (not CC.latActive) to ensure gain=0
