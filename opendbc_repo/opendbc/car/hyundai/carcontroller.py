@@ -43,13 +43,23 @@ def is_ccnc_angle_platform(flags):
 # ACIGain floor when op is actively steering.
 ACI_GAIN_OP_FLOOR = 0.15
 
-# Low-speed freeze latch (hysteresis 15/17 km/h).
-# Below 15 km/h, freeze steering angle (hold current angle,
-# ACTIVE=2 maintained so EPS stays engaged, jitter eliminated).
-# Grid search over 180 combos showed freeze=15kph optimal:
-# 5-10kph:0°, 10-20kph:0.60°, 20-40kph:0.42° (score=1.72).
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 15.0 / 3.6   # ≈ 4.17 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 17.0 / 3.6   # ≈ 4.72 m/s
+# Low-speed freeze latch (hysteresis 20/22 km/h).
+# Below 20 km/h, hand the wheel back to the driver / EPS so caster torque
+# can self-center the wheel — needed for parking-lot maneuvers, where the
+# user routinely reaches ~20 km/h. Grid search (commit d6236ed) showed
+# freeze=20kph score=0.55 (vs 15kph=1.7); the original "no lateral assist
+# 0-20kph" downside is actually the desired behaviour here. The
+# traffic_following override below keeps op engaged when a close lead
+# (<3m) is present, so stop-and-go traffic still gets lateral support.
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 20.0 / 3.6   # ≈ 5.56 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ≈ 6.11 m/s
+
+# Traffic-following lead distance hysteresis. When a lead is closer than
+# this, op stays engaged below the freeze threshold so the wheel is held
+# (stop-and-go traffic). Far hysteresis avoids chatter when the lead
+# distance hovers around the boundary.
+TRAFFIC_FOLLOW_NEAR_M = 3.0
+TRAFFIC_FOLLOW_FAR_M  = 5.0
 
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
@@ -136,6 +146,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.aci_gain_ramp = 0.0
     self.aci_gain_last = 0.0
     self.low_speed_cam_latched = False
+    self.traffic_following = False
     # Phase 4-A: vehicle model for VM-based jerk/accel limiting
     if is_ccnc_angle_platform(CP.flags):
       self.VM = VehicleModel(CP)
@@ -460,13 +471,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
+    # Traffic-following override: a close lead (<3m, with 5m exit) means
+    # we're in stop-and-go traffic, NOT a parking lot — keep op engaged
+    # so the wheel is held. lead_visible already has 0.5s on/off
+    # hysteresis (lead_data_ext.py:_update_lead_visible_hysteresis), and
+    # the 3/5m distance band keeps the latch stable when the lead drifts
+    # near the boundary. lead_distance/lead_visible exposed by
+    # LeadDataCarController.update (lead_data_ext.py:103, called every
+    # frame from carcontroller.update at line ~189).
+    if self.lead_visible and self.lead_distance < TRAFFIC_FOLLOW_NEAR_M:
+      self.traffic_following = True
+    elif (not self.lead_visible) or self.lead_distance > TRAFFIC_FOLLOW_FAR_M:
+      self.traffic_following = False
     # Combined passthrough latch — used below to force `rate_lat_active=False`
     # in the rate limiter so `apply_angle_last` tracks the actual wheel
     # while passive. The LKAS_ALT packer no longer takes a separate
     # passthrough code path (was a source of frame-format-switch faults
     # on routes 3a/32/34); instead it uses the unified `steering_active`
     # gate which resolves to passive for the same conditions.
-    in_passthrough = self.passthrough_latched or self.low_speed_cam_latched
+    in_passthrough = (self.passthrough_latched or self.low_speed_cam_latched) and not self.traffic_following
 
     # First-order ramp of ACI gain on re-engagement (smooths the
     # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
