@@ -71,12 +71,35 @@ JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain):
-  """Sunnypilot-style ACIGain: torque + speed → gain with rate limit + quantization."""
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain, steering_error=0.0):
+  """Sunnypilot-style ACIGain: torque + speed → gain with rate limit + quantization.
+
+  Adds two adaptive mechanisms on top of the base 4-breakpoint torque/speed map:
+
+  1. Error-based ceiling boost: when |apply_angle - measured_angle| exceeds the
+     speed-dependent threshold, the ceiling is multiplied up to ×2 (capped at
+     1.0). Boost gives MDPS more authority to catch up when op's command and
+     the actual wheel diverge — typically corner-entry transients.
+  2. Dynamic rate_dn: heavier driver torque → faster gain decay. Light grip
+     keeps gain sticky (anti-flicker), heavy override yields ~3× faster than
+     the previous fixed -0.014. Breakpoints shifted from sunnypilot's
+     [0,300,700] to [200,500,800] because CCNC trim's column torque includes
+     EPS reaction and reads ~150–250 Nm even with hands-off light grip.
+  """
   if lat_active:
     ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
     shelf = float(np.interp(v_ego, [2., 11.], [0.45, 0.6]))
     floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
+
+    # Error-based ceiling boost. Speed-dependent error_start: at standstill
+    # ignore <1.25° (column wind-up dominates), at highway sensitive to 0.2°.
+    # (sunnypilot kph table [0,20,40,120] → m/s [0,5.56,11.1,33.3])
+    error_start = float(np.interp(v_ego, [0., 5.56, 11.1, 33.3],
+                                          [1.25, 0.5, 0.3, 0.2]))
+    error_mult = float(np.interp(abs(steering_error),
+                                  [error_start, error_start * 2], [1.0, 2.0]))
+    ceiling = min(1.0, ceiling * error_mult)
+
     bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
     bp2 = float(np.interp(v_ego, [2., 11.], [125., 150.]))
     bp3 = float(np.interp(v_ego, [2., 11.], [175., 275.]))
@@ -85,8 +108,12 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
                               [ceiling, shelf, shelf, floor]))
   else:
     target = 0.0
-  gain = rate_limit(target, last_gain,
-                    CarControllerParams.ACI_GAIN_RATE_DOWN,
+
+  # Dynamic rate_dn: 200 Nm light grip → 0.004 (sticky), 500 Nm moderate → 0.014
+  # (= legacy fixed value), 800 Nm heavy override → 0.04 (~3× faster yield).
+  rate_dn_mag = float(np.interp(abs(steering_torque), [200., 500., 800.],
+                                                       [0.004, 0.014, 0.04]))
+  gain = rate_limit(target, last_gain, -rate_dn_mag,
                     CarControllerParams.ACI_GAIN_RATE_UP)
   return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
 
@@ -673,8 +700,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # when LKAS_ANGLE_ACTIVE=1 (passive). Panda rejects gain>0 with ACTIVE=1.
     effective_aci_gain = None
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
+      # Tracking error feeds the ceiling-boost: when op's commanded angle
+      # diverges from the actual wheel (corner-entry transient before MDPS
+      # catches up), grant temporary extra authority. NaN-safe via steer_angle_safe.
+      steering_error = self.apply_angle_last - steer_angle_safe
       effective_aci_gain = compute_torque_reduction_gain(
-        steer_torque_safe, v_ego_safe, effective_lat_active, self.aci_gain_last)
+        steer_torque_safe, v_ego_safe, effective_lat_active, self.aci_gain_last,
+        steering_error=steering_error)
       self.aci_gain_last = effective_aci_gain
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
