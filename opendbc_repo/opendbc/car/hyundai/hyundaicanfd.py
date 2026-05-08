@@ -49,7 +49,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
 
   driver_torque_blend: 1.0 = no driver input, 0.0 = driver fully overriding.
     Used for gradient ACI authority reduction (Toyota LTA TORQUE_WIND_DOWN style).
-  blinker_on: reduce ACI authority during turn signals to avoid fighting lane changes.
+  blinker_on: forwarded informationally only. The actual ACI authority cap
+    during turn signals is applied upstream in `compute_torque_reduction_gain`
+    (carcontroller.py) which ceilings the gain at 0.5 and forces a fast
+    rate_dn so the cap reaches the wheel within ~100 ms.
   speed_blend: 0.0 below ~1 km/h, 1.0 above ~3 km/h, linear in between. Smooth
     replacement for the old binary `aci_speed_ok` 3 km/h gate.
   aci_active: latched ACI engagement state with hysteresis (enter at authority>=0.3,
