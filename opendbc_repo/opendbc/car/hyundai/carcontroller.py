@@ -71,20 +71,23 @@ JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
 
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain, steering_error=0.0):
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
+                                  steering_error=0.0, blinker_on=False):
   """Sunnypilot-style ACIGain: torque + speed → gain with rate limit + quantization.
 
-  Adds two adaptive mechanisms on top of the base 4-breakpoint torque/speed map:
+  Adds three adaptive mechanisms on top of the base 4-breakpoint torque/speed map:
 
   1. Error-based ceiling boost: when |apply_angle - measured_angle| exceeds the
      speed-dependent threshold, the ceiling is multiplied up to ×2 (capped at
      1.0). Boost gives MDPS more authority to catch up when op's command and
      the actual wheel diverge — typically corner-entry transients.
-  2. Dynamic rate_dn: heavier driver torque → faster gain decay. Light grip
-     keeps gain sticky (anti-flicker), heavy override yields ~3× faster than
-     the previous fixed -0.014. Breakpoints shifted from sunnypilot's
-     [0,300,700] to [200,500,800] because CCNC trim's column torque includes
-     EPS reaction and reads ~150–250 Nm even with hands-off light grip.
+  2. Blinker-aware ceiling cap: during a lane change the driver expects op to
+     yield. Cap ceiling at 0.5 so MDPS smoothing returns and op authority is
+     roughly halved, letting the driver lead the maneuver.
+  3. Dynamic rate_dn: heavier driver torque → faster gain decay. Breakpoints
+     [150, 350, 600] Nm calibrated against CCNC route-0x49 active-steering
+     torque distribution (p25=250, p50=381, p90=619 Nm). At 350 Nm op yields
+     at the legacy -0.014 rate; light grip <150 Nm stays sticky.
   """
   if lat_active:
     ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
@@ -93,12 +96,14 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
 
     # Error-based ceiling boost. Speed-dependent error_start: at standstill
     # ignore <1.25° (column wind-up dominates), at highway sensitive to 0.2°.
-    # (sunnypilot kph table [0,20,40,120] → m/s [0,5.56,11.1,33.3])
     error_start = float(np.interp(v_ego, [0., 5.56, 11.1, 33.3],
                                           [1.25, 0.5, 0.3, 0.2]))
     error_mult = float(np.interp(abs(steering_error),
                                   [error_start, error_start * 2], [1.0, 2.0]))
     ceiling = min(1.0, ceiling * error_mult)
+
+    if blinker_on:
+      ceiling = min(ceiling, 0.5)
 
     bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
     bp2 = float(np.interp(v_ego, [2., 11.], [125., 150.]))
@@ -109,9 +114,8 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   else:
     target = 0.0
 
-  # Dynamic rate_dn: 200 Nm light grip → 0.004 (sticky), 500 Nm moderate → 0.014
-  # (= legacy fixed value), 800 Nm heavy override → 0.04 (~3× faster yield).
-  rate_dn_mag = float(np.interp(abs(steering_torque), [200., 500., 800.],
+  # Dynamic rate_dn aligned to CCNC active-steering torque distribution.
+  rate_dn_mag = float(np.interp(abs(steering_torque), [150., 350., 600.],
                                                        [0.004, 0.014, 0.04]))
   gain = rate_limit(target, last_gain, -rate_dn_mag,
                     CarControllerParams.ACI_GAIN_RATE_UP)
@@ -184,7 +188,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.vtau_lpf = 0.0
     self.vtau_sustained_cnt = 0
     self.vtau_prev_sign = 0
-    self.vtau_prev_op = 0.0
     # Phase 5: driver-override snap state — tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
@@ -558,6 +561,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         speed_tau = float(np.interp(v_ego_safe, CarControllerParams.VTAU_SPEED_BP,
                                     CarControllerParams.VTAU_SPEED_V))
         vtau = max(angle_tau, speed_tau)
+        # Highway upper-bound: angle_tau goes to 2.5 s for |angle|<1° (centered)
+        # which is desirable as straight-line jitter suppression at low speed
+        # but turns into sluggish path tracking at highway. Cap tau ≤ 0.15 s
+        # at 25 m/s so ψ-error corrections happen promptly.
+        speed_max_tau = float(np.interp(v_ego_safe, [10.0, 25.0], [2.5, 0.15]))
+        vtau = min(vtau, speed_max_tau)
 
         # Adaptive tau: sustained same-direction change = real correction (not noise).
         # Noise oscillates direction every few frames; real corrections persist.
@@ -569,29 +578,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.vtau_prev_sign = cur_sign
         vtau = float(np.interp(self.vtau_sustained_cnt, [0, 30, 60], [vtau, 0.5, 0.1]))
 
-      # Rate-feedforward: scale tau down when op_curv_safe is changing fast so
-      # the LPF tracks aggressive corner entries closer to the model's command.
-      # Drive 0x15 aggressive entries (≥5°) d@90% 39→10ms (-74%, near-PURE);
-      # trade-off is +0.2° on Δ p99 in ~1% transient frames (still below PURE's
-      # 0.95°). Steady-state op_rate≈0 so this branch is inert during normal
-      # driving — only activates on rapid command changes.
-      op_rate = (op_curv_safe - self.vtau_prev_op) / LPF_DT
-      if abs(op_rate) > 1.0:
-        vtau = vtau / (1.0 + 0.05 * abs(op_rate))
-        vtau = max(vtau, 0.01)
-      self.vtau_prev_op = op_curv_safe
-
-      # During passthrough or while op is inactive, the rate limiter forces
-      # apply_angle_last == steer_angle_safe (lateral.py:129). Mirror that on
-      # vtau_lpf so re-engagement starts from the actual wheel angle and the
-      # next LPF convergence is short. Without this gate vtau_lpf accumulated
-      # up to 9.8° away from the wheel during passthrough on drive 0x15,
-      # producing an 80ms rate-saturated slew at the 17 km/h release boundary.
-      if CC.latActive and not in_passthrough and vtau > 0.001:
+      if CC.latActive and vtau > 0.001:
         alpha = LPF_DT / (vtau + LPF_DT)
         self.vtau_lpf = alpha * op_curv_safe + (1.0 - alpha) * self.vtau_lpf
-      else:
-        self.vtau_lpf = steer_angle_safe
+      elif not CC.latActive:
+        self.vtau_lpf = op_curv_safe
       desired_angle_deg = self.vtau_lpf
 
       # Driver override blend
@@ -706,7 +697,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       steering_error = self.apply_angle_last - steer_angle_safe
       effective_aci_gain = compute_torque_reduction_gain(
         steer_torque_safe, v_ego_safe, effective_lat_active, self.aci_gain_last,
-        steering_error=steering_error)
+        steering_error=steering_error, blinker_on=blinker_on)
       self.aci_gain_last = effective_aci_gain
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
