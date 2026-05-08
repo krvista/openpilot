@@ -191,7 +191,7 @@ class Controls(ControlsExt):
       y_std = float(y_std_list[5]) if len(y_std_list) > 5 else 0.0
       lane_min = min(float(lane_probs[1]), float(lane_probs[2])) if len(lane_probs) >= 4 else 1.0
       conf_y = float(np.interp(y_std,    [0.05, 0.30], [1.0, 0.0]))
-      conf_l = float(np.interp(lane_min, [0.30, 0.05], [1.0, 0.0]))
+      conf_l = float(np.interp(lane_min, [0.05, 0.30], [0.0, 1.0]))
       confidence = min(conf_y, conf_l)
       if confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
