@@ -110,17 +110,14 @@ class CarControllerParams:
   VTAU_SPEED_BP = [0.0, 3.0, 5.0, 15.0]  # m/s
   VTAU_SPEED_V  = [0.5, 0.3, 0.20, 0.0]  # was [5.0, 1.5, ...]; freeze<5kph already handles crawl
   # Speed-adaptive entering_curve threshold. Below 4 m/s the freeze latch is
-  # active so the value at v<4 doesn't fire. Above 25 m/s straight-line noise
-  # ~0.5° on highways needs the larger 1.5° guard. At 4–25 m/s scale linearly.
-  # Drivelog: <1.5° peak entries (sub-trigger) had d@90%=331ms vs ≥3° trigger
-  # 34ms — a 10x cliff that this table closes.
-  # Drive 0x14/0x15 grid search: lowering the mid breakpoint from 1.0° to 0.7°
-  # cuts 0x15 1.5-3° d@90% 107→78ms (-27%) and 3-7° d@90% 97→58ms (-40%) with
-  # zero regression on jitter RMS or EPS-bound Δ continuity (false-trigger risk
-  # is gated out by A-v2 + freeze<15kph; in straight-line noise vtau_lpf stays
-  # near 0 so |op-vtau_lpf| stays below 0.5° and never crosses the new mid TH).
+  # active so the value at v<4 doesn't fire. Drive 0x14/0x15 grid search
+  # lowered mid breakpoint 1.0°→0.7° (1.5-3° d@90% 107→78ms, 3-7° 97→58ms)
+  # with zero jitter regression. Drive 0x05 highway feedback (1.5° entry too
+  # slow; ψ-error correction sluggish at speed) lowers highway 1.5°→0.8° —
+  # straight-line noise is now caught by the controlsd lane-confidence
+  # damping before reaching this gate.
   VTAU_ENTRY_TH_BP = [4.0, 15.0, 25.0]   # m/s
-  VTAU_ENTRY_TH_V  = [0.3, 0.7, 1.5]     # deg
+  VTAU_ENTRY_TH_V  = [0.3, 0.7, 0.8]     # deg
   VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
