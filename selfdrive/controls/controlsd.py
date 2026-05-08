@@ -177,15 +177,24 @@ class Controls(ControlsExt):
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo) if CC.latActive else self.curvature
 
     # Model uncertainty damping: when the model is unsure about lane position
-    # (e.g. lead car occluding lane lines), blend toward previous curvature
-    # to suppress jittery steering commands.
+    # (e.g. lead car occluding lane lines, ambiguous lane split), blend toward
+    # previous curvature to suppress jittery steering commands.
+    #
+    # CCNC drivelog (route 0x05, 26% blinker, 70 osc/min during MADS) showed
+    # yStd[5] p99=0.071 (max 0.10) — the legacy yStd>0.3 gate was effectively
+    # dead code on this trim. Two-signal trigger: a much lower yStd threshold
+    # AND laneLineProbs MIN < 0.5 (left/right inner-lane confidence). When
+    # either fires, scale confidence proportionally and blend with previous.
     if CC.latActive and self.CP.steerControlType == car.CarParams.SteerControlType.angle:
       y_std_list = model_v2.position.yStd
-      if len(y_std_list) > 5:
-        y_std = y_std_list[5]
-        if y_std > 0.3:
-          confidence = float(np.interp(y_std, [0.3, 1.0], [1.0, 0.05]))
-          new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
+      lane_probs = model_v2.laneLineProbs
+      y_std = float(y_std_list[5]) if len(y_std_list) > 5 else 0.0
+      lane_min = min(float(lane_probs[1]), float(lane_probs[2])) if len(lane_probs) >= 4 else 1.0
+      conf_y = float(np.interp(y_std,    [0.05, 0.30], [1.0, 0.0]))
+      conf_l = float(np.interp(lane_min, [0.30, 0.05], [1.0, 0.0]))
+      confidence = min(conf_y, conf_l)
+      if confidence < 1.0:
+        new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
