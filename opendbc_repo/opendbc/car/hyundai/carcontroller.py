@@ -81,41 +81,58 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
      speed-dependent threshold, the ceiling is multiplied up to ×2 (capped at
      1.0). Boost gives MDPS more authority to catch up when op's command and
      the actual wheel diverge — typically corner-entry transients.
-  2. Blinker-aware authority reduction: during a lane change the driver
-     expects op to yield, but only when actively steering — light hand
-     placement to confirm the signal shouldn't trigger a full release. Cap
-     ceiling at 0.7 (light grip keeps ~70% authority) AND cap shelf at 0.4
-     (active-steering 125-275 Nm region yields heavily, op stepping aside).
-     Produces a U-shape under blinker: hands-off → ~0.7, "I'm steering" →
-     ~0.4, hard push → floor.
+  2. Blinker-aware authority map (4-level descent): under a turn signal the
+     driver's intent overrides the standard authority map. An explicit
+     4-point curve maps driver torque to op authority:
+       hands-off / pure signalling:  0.70  (tq ≈ 0)
+       light grip / hand on wheel:   0.50  (tq ≈ 30)
+       active steering / turning:    0.40  (tq ≈ 150)
+       strong override:              0.30  (tq ≈ 500)
+     This descent makes "I want to change lanes" preserve authority for a
+     smoother visual feedback, while "I'm doing it myself" yields op out
+     of the way. Error-boost is bypassed under blinker — driver leads.
   3. Dynamic rate_dn: heavier driver torque → faster gain decay. Breakpoints
      [150, 350, 600] Nm calibrated against CCNC route-0x49 active-steering
      torque distribution (p25=250, p50=381, p90=619 Nm). At 350 Nm op yields
      at the legacy -0.014 rate; light grip <150 Nm stays sticky.
   """
   if lat_active:
-    ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
-    shelf = float(np.interp(v_ego, [2., 11.], [0.45, 0.6]))
-    floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
-
-    # Error-based ceiling boost. Speed-dependent error_start: at standstill
-    # ignore <1.25° (column wind-up dominates), at highway sensitive to 0.2°.
-    error_start = float(np.interp(v_ego, [0., 5.56, 11.1, 33.3],
-                                          [1.25, 0.5, 0.3, 0.2]))
-    error_mult = float(np.interp(abs(steering_error),
-                                  [error_start, error_start * 2], [1.0, 2.0]))
-    ceiling = min(1.0, ceiling * error_mult)
-
     if blinker_on:
-      ceiling = min(ceiling, 0.7)
-      shelf = min(shelf, 0.4)
+      # Lane change: 4-level driver-intent map. Explicit override of the
+      # standard ceiling/shelf/floor map (and error-boost) — when the driver
+      # signals, their wheel input takes priority over MDPS authority and
+      # tracking-error catch-up. Levels:
+      #   tq ≈ 0   (hands-off / pure signalling): 0.70
+      #   tq ≈ 30  (light grip — hand on wheel):  0.50
+      #   tq ≈ 150 (active steering — turning):   0.40
+      #   tq ≈ 500 (strong override):             0.30
+      # The 30 Nm transition matches CCNC angle-control EPS reaction at
+      # light hand placement (route 0x49: light grip p50=36 Nm).
+      bp_grip   = 30.0
+      bp_active = float(np.interp(v_ego, [2., 11.], [125., 150.]))
+      bp_heavy  = float(np.interp(v_ego, [2., 22.], [400., 550.]))
+      target = float(np.interp(abs(steering_torque),
+                                [0.0, bp_grip, bp_active, bp_heavy],
+                                [0.70, 0.50,    0.40,      0.30]))
+    else:
+      ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
+      shelf = float(np.interp(v_ego, [2., 11.], [0.45, 0.6]))
+      floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
 
-    bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
-    bp2 = float(np.interp(v_ego, [2., 11.], [125., 150.]))
-    bp3 = float(np.interp(v_ego, [2., 11.], [175., 275.]))
-    bp4 = float(np.interp(v_ego, [2., 22.], [400., 700.]))
-    target = float(np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4],
-                              [ceiling, shelf, shelf, floor]))
+      # Error-based ceiling boost. Speed-dependent error_start: at standstill
+      # ignore <1.25° (column wind-up dominates), at highway sensitive to 0.2°.
+      error_start = float(np.interp(v_ego, [0., 5.56, 11.1, 33.3],
+                                            [1.25, 0.5, 0.3, 0.2]))
+      error_mult = float(np.interp(abs(steering_error),
+                                    [error_start, error_start * 2], [1.0, 2.0]))
+      ceiling = min(1.0, ceiling * error_mult)
+
+      bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
+      bp2 = float(np.interp(v_ego, [2., 11.], [125., 150.]))
+      bp3 = float(np.interp(v_ego, [2., 11.], [175., 275.]))
+      bp4 = float(np.interp(v_ego, [2., 22.], [400., 700.]))
+      target = float(np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4],
+                                [ceiling, shelf, shelf, floor]))
   else:
     target = 0.0
 
