@@ -81,9 +81,13 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
      speed-dependent threshold, the ceiling is multiplied up to ×2 (capped at
      1.0). Boost gives MDPS more authority to catch up when op's command and
      the actual wheel diverge — typically corner-entry transients.
-  2. Blinker-aware ceiling cap: during a lane change the driver expects op to
-     yield. Cap ceiling at 0.5 so MDPS smoothing returns and op authority is
-     roughly halved, letting the driver lead the maneuver.
+  2. Blinker-aware authority reduction: during a lane change the driver
+     expects op to yield, but only when actively steering — light hand
+     placement to confirm the signal shouldn't trigger a full release. Cap
+     ceiling at 0.7 (light grip keeps ~70% authority) AND cap shelf at 0.4
+     (active-steering 125-275 Nm region yields heavily, op stepping aside).
+     Produces a U-shape under blinker: hands-off → ~0.7, "I'm steering" →
+     ~0.4, hard push → floor.
   3. Dynamic rate_dn: heavier driver torque → faster gain decay. Breakpoints
      [150, 350, 600] Nm calibrated against CCNC route-0x49 active-steering
      torque distribution (p25=250, p50=381, p90=619 Nm). At 350 Nm op yields
@@ -103,7 +107,8 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
     ceiling = min(1.0, ceiling * error_mult)
 
     if blinker_on:
-      ceiling = min(ceiling, 0.5)
+      ceiling = min(ceiling, 0.7)
+      shelf = min(shelf, 0.4)
 
     bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
     bp2 = float(np.interp(v_ego, [2., 11.], [125., 150.]))
