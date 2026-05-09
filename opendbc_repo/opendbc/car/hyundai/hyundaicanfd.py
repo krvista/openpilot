@@ -41,7 +41,8 @@ class CanBus(CanBusBase):
 def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
                              aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
-                             mads_lka_icon=None, lon_accel=0.0, effective_aci_gain=None):
+                             mads_lka_icon=None, lon_accel=0.0, effective_aci_gain=None,
+                             mads_force_assist=False):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
@@ -142,7 +143,15 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
-        "LKA_ASSIST":                1 if steering_active else lkas_alt_cam_msg["LKA_ASSIST"],
+        # Force LKA_ASSIST=1 when MADS is enabled, even during transient
+        # passive states (in_passthrough, override_snapped, was_in_reverse,
+        # parking_fully_faded, or VM rate-limit hold). Without this the
+        # cluster's green steering icon falls off during these windows
+        # because the camera passthrough value (LKA_ASSIST=0) takes over,
+        # even though MADS is still the active assistance source. STEER_REQ
+        # and TORQUE_REQUEST stay 0 and ACIGain follows effective_lat_active,
+        # so MDPS does not actually pull the wheel — only the icon stays on.
+        "LKA_ASSIST":                1 if (steering_active or mads_force_assist) else lkas_alt_cam_msg["LKA_ASSIST"],
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],

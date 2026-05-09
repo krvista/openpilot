@@ -196,6 +196,21 @@ class Controls(ControlsExt):
       if confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
 
+      # Lane-departure protection: when blinker is OFF, do not let op steer
+      # FURTHER into a lane line that the stock LKAS has flagged as departing.
+      # Use driverAssistance.{left,right}LaneDeparture (from camera ECU) — these
+      # only trigger near solid/edge lines, so gating on them avoids interfering
+      # with normal lane following. With blinker on, the driver intends a lane
+      # change so the gate is relaxed.
+      blinker_on = bool(CS.leftBlinker or CS.rightBlinker)
+      if not blinker_on and self.sm.valid['driverAssistance']:
+        da = self.sm['driverAssistance']
+        # left line departure → block further negative-curvature (=more left) commands
+        # right line departure → block further positive-curvature (=more right) commands
+        if (da.leftLaneDeparture and new_desired_curvature < self.desired_curvature) or \
+           (da.rightLaneDeparture and new_desired_curvature > self.desired_curvature):
+          new_desired_curvature = self.desired_curvature
+
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 

@@ -656,8 +656,30 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           steer_angle_safe, rate_lat_active, self.params, self.BASELINE_VM,
         )
       if apply_angle is None:
-        self.apply_angle_last = steer_angle_safe
-        apply_steer_req = False
+        # VM rate limiter rejected the command (lateral accel limit violated
+        # while rate limit can't pull back fast enough — typically a tight
+        # highway on-ramp where v² · κ exceeds MAX_LATERAL_ACCEL=3.59 m/s²).
+        # Previous behavior was to set apply_steer_req=False AND snap
+        # apply_angle_last to the actual wheel — MDPS released, the wheel
+        # returned to caster, the cluster icon fell off, and the driver
+        # experienced a SILENT disengage with no takeover alert. That was
+        # observed mid-ramp on drives 0x09 seg27/28/30/36 (v=20-28 m/s,
+        # sa=20-26°): apply_angle frozen for 1.5-3 s while wheel released.
+        #
+        # Instead, hold the previous compliant angle (apply_angle_last
+        # unchanged) and keep apply_steer_req=True. MDPS continues to track
+        # the held angle, the wheel doesn't snap to caster, the cluster icon
+        # stays, and the driver feels op is "still working" rather than
+        # "let go". Panda safety still validates per-frame angle delta vs
+        # last-accepted, so this is safe (delta=0 is always within window).
+        # Log telemetry so we can quantify how often this fires per drive.
+        if v_ego_safe > 8.0:
+          cloudlog.warning(
+            f"VM_LIMIT_TRIP: holding apply_angle={self.apply_angle_last:.1f} "
+            f"v={v_ego_safe:.1f} sa_meas={steer_angle_safe:.1f} "
+            f"op_curv={op_curv_safe:.1f} max_lat_a="
+            f"{CarControllerParams.ANGLE_LIMITS_VM.MAX_LATERAL_ACCEL:.2f}"
+          )
       else:
         self.apply_angle_last = apply_angle
 
@@ -762,7 +784,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                          in_passthrough=in_passthrough,
                                                          mads_lka_icon=mads_lka_icon,
                                                          lon_accel=lon_accel,
-                                                         effective_aci_gain=effective_aci_gain))
+                                                         effective_aci_gain=effective_aci_gain,
+                                                         mads_force_assist=bool(mads_enabled and ccnc_lka_alt)))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
