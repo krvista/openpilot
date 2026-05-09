@@ -585,7 +585,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         else:
           self.vtau_sustained_cnt = max(self.vtau_sustained_cnt - 2, 0)
         self.vtau_prev_sign = cur_sign
-        vtau = float(np.interp(self.vtau_sustained_cnt, [0, 30, 60], [vtau, 0.5, 0.1]))
+        # Cap intermediate/final breakpoints with min() so the adaptive stage
+        # NEVER increases tau. At highway speeds vtau has already been clamped
+        # by speed_max_tau (≤0.15 s @ 25 m/s) below the legacy 0.5 mid-point —
+        # without this guard, sustained_cnt building 0→30 would slow tau back
+        # up to 0.5 s exactly when the driver wants a small lane-deviation
+        # corrected quickly. Low-speed (vtau≥0.5) keeps the original
+        # 2-stage descent unchanged.
+        vtau = float(np.interp(self.vtau_sustained_cnt, [0, 30, 60],
+                                [vtau, min(vtau, 0.5), min(vtau, 0.1)]))
 
       # During passthrough or while op is inactive, the rate limiter forces
       # apply_angle_last == steer_angle_safe (lateral.py). Mirror that on
