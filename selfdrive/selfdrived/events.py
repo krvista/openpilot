@@ -582,6 +582,39 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Vehicle Steering Time Limit"),
   },
 
+  # CCNC angle-control: VM rate limiter rejected the command (lateral accel
+  # exceeds platform limit, e.g. tight on-ramp). Op holds the last compliant
+  # angle so the wheel does not snap to caster, but the driver should know
+  # the curve is at the edge of op's authority.
+  EventName.lateralAccelLimit: {
+    ET.WARNING: Alert(
+      "Tight Curve",
+      "Reduce Speed for Smooth Tracking",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.prompt, 1.5),
+  },
+
+  # Steering angle approached the EPS fault threshold (>=85 deg sustained).
+  # Op cut apply_steer_req to avoid an EPS latch - driver must take over.
+  EventName.steerAngleLimit: {
+    ET.WARNING: Alert(
+      "Take Control",
+      "Steering Angle Limit",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.MID, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 2.),
+  },
+
+  # LKAS_ALT camera frame counter has not incremented for >=250 ms - likely
+  # a camera ECU drop-out or harness glitch. Op silences steering until the
+  # stream resumes; surface it to the driver.
+  EventName.cameraDataStale: {
+    ET.WARNING: Alert(
+      "Camera Data Stale",
+      "Steering Temporarily Reduced",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.prompt, 1.5),
+  },
+
   EventName.outOfSpace: {
     ET.PERMANENT: out_of_space_alert,
     ET.NO_ENTRY: NoEntryAlert("Out of Storage"),
@@ -905,7 +938,7 @@ if HARDWARE.get_device_type() == 'mici':
     EventName.calibrationIncomplete: {
       ET.PERMANENT: calibration_incomplete_alert,
       ET.SOFT_DISABLE: soft_disable_alert("Calibration Incomplete"),
-      ET.NO_ENTRY: NoEntryAlert("Calibrating"),
+      ET.NO_ENTRY: NoEntryAlert("Calibration Invalid"),
     },
     EventName.reverseGear: {
       ET.PERMANENT: Alert(
