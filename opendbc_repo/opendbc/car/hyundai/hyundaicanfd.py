@@ -42,7 +42,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
                              aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
                              mads_lka_icon=None, lon_accel=0.0, effective_aci_gain=None,
-                             mads_force_assist=False):
+                             mads_force_assist=False, cam_invalid=False):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
@@ -141,18 +141,24 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
         # Force LKA_ASSIST=1 when MADS is enabled, even during transient
         # passive states (in_passthrough, override_snapped, was_in_reverse,
-        # cam_stale, fault_lfa, or VM rate-limit hold). Without this the
-        # cluster's green steering icon falls off during these windows
-        # because the camera passthrough value (LKA_ASSIST=0) takes over,
-        # even though MADS is still the active assistance source. STEER_REQ
-        # and TORQUE_REQUEST stay 0 and ACIGain follows effective_lat_active,
-        # so MDPS does not actually pull the wheel — only the icon stays on.
-        "LKA_ASSIST":                1 if (steering_active or mads_force_assist) else lkas_alt_cam_msg["LKA_ASSIST"],
+        # or VM rate-limit hold). Without this the cluster's green steering
+        # icon falls off during these windows because the camera
+        # passthrough value (LKA_ASSIST=0) takes over, even though MADS is
+        # still the active assistance source. STEER_REQ and TORQUE_REQUEST
+        # stay 0 and ACIGain follows effective_lat_active, so MDPS does not
+        # actually pull the wheel — only the icon stays on.
+        # When the camera is invalid (cam_stale or fault_lfa), drop the
+        # icon to reflect actual MADS health: an unhealthy camera path
+        # should not display "everything fine" green.
+        "LKA_ASSIST":                0 if cam_invalid else (1 if (steering_active or mads_force_assist) else lkas_alt_cam_msg["LKA_ASSIST"]),
         "DAMP_FACTOR":               lkas_alt_cam_msg["DAMP_FACTOR"],
         "STEER_MODE":                lkas_alt_cam_msg["STEER_MODE"],
         "NEW_SIGNAL_2":              lkas_alt_cam_msg["NEW_SIGNAL_2"],
         "LKAS_BYTE9_HIDDEN":         lkas_alt_cam_msg["LKAS_BYTE9_HIDDEN"],
-        "LKAS_ANGLE_ACTIVE":         2 if steering_active else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"],
+        # Override stale camera value with explicit passive (1) when the
+        # camera is broken, so we never forward a frozen "active=2"
+        # snapshot from a dead camera to MDPS.
+        "LKAS_ANGLE_ACTIVE":         2 if steering_active else (1 if cam_invalid else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"]),
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        effective_angle,
         "ADAS_ACIAnglTqRedcGainVal": effective_aci_gain,
@@ -170,6 +176,11 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # F13: Includes all fields that ADAS DRV may validate, even on boot.
       # steering_active is forced False here (no camera means no blend),
       # so every frame is fully passive = stock-compatible.
+      # LKAS_BYTE28..31 = 0x00: drivelog scan of 35,853 LKAS_ALT frames
+      # across 30 segments (/tmp/dlog/may09) showed bytes 28-31 always
+      # 0x00 from the factory camera, so emitting 0x00 in fallback matches
+      # what ADAS DRV expects on boot; the prior 0x92/0x01/0xFF/0xFF was
+      # never observed in real captures.
       steering_active = False
       lkas_values = {
         "LKA_MODE": 0,
@@ -192,10 +203,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKAS_BYTE7_BITS4_5": 0,
         "LKAS_BYTE7_BIT7": 0,
         "LKAS_BYTE13": 0,
-        "LKAS_BYTE28": 0x92,
-        "LKAS_BYTE29": 0x01,
-        "LKAS_BYTE30": 0xFF,
-        "LKAS_BYTE31": 0xFF,
+        "LKAS_BYTE28": 0x00,
+        "LKAS_BYTE29": 0x00,
+        "LKAS_BYTE30": 0x00,
+        "LKAS_BYTE31": 0x00,
       }
     return [packer.make_can_msg("LKAS_ALT", CAN.ACAN, lkas_values)]
 
