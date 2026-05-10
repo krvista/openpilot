@@ -217,7 +217,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.aci_gain_last = 0.0
     self.low_speed_cam_latched = False
     self.traffic_following = False
-    # Phase 4-A: vehicle model for VM-based jerk/accel limiting
+    # Phase 4-A: vehicle model for VM-based jerk/accel limiting.
+    # BASELINE_VM (Sportage 5th gen) is used as a SECOND, more conservative
+    # safety check after the i6n-tuned VM in apply_steer_angle_limits_vm —
+    # both must accept the angle, so the effective limit is the tighter of
+    # the two. Mirrors how panda enforces lateral accel/jerk independently
+    # of the on-device VM tuning.
     if is_ccnc_angle_platform(CP.flags):
       self.VM = VehicleModel(CP)
       from opendbc.car.hyundai.interface import CarInterface
@@ -267,10 +272,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.alert_max_angle_frames = 0
     self.alert_cam_stale_frames = 0
     self.was_in_reverse = False
-    self.parking_mode = False
-    self.parking_enter_cnt = 0
-    self.parking_exit_speed_cnt = 0
-    self.parking_fade = 1.0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -422,9 +423,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
   def _snap_apply_angle_to_wheel(self, steer_angle_safe, reason):
     """Single source of truth for "yield apply_angle_last to physical wheel".
 
-    Three call sites (override_snapped, parking_fully_faded, future) used to
-    duplicate `self.apply_angle_last = steer_angle_safe` inline. Centralizing
-    makes drivelog replay easier - every snap event becomes searchable in
+    Two call sites (override_snapped + future) used to duplicate
+    `self.apply_angle_last = steer_angle_safe` inline. Centralizing makes
+    drivelog replay easier - every snap event becomes searchable in
     cloudlog by reason.
     """
     self.apply_angle_last = steer_angle_safe
@@ -432,7 +433,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       cloudlog.info(f"snap_to_wheel: reason={reason}")
 
   def _compute_effective_lat_active(self, CC, ccnc_lka_alt, apply_steer_req,
-                                    in_passthrough, parking_fully_faded,
+                                    in_passthrough,
                                     cam_stale_tripped=False, fault_lfa=False):
     """Decide whether the LKAS_ALT packer should mark op as actively steering.
 
@@ -452,7 +453,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if self.override_snapped:      reasons.append("override_snapped")
     if not apply_steer_req:        reasons.append("no_steer_req")
     if self.was_in_reverse:        reasons.append("was_in_reverse")
-    if parking_fully_faded:        reasons.append("parking_faded")
     if in_passthrough:             reasons.append("in_passthrough")
     if cam_stale_tripped:          reasons.append("cam_stale")
     if fault_lfa:                  reasons.append("fault_lfa")
@@ -795,11 +795,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode disabled - D+A strategy handles all speeds.
-    if ccnc_lka_alt:
-      self.parking_mode = False
-      self.parking_fade = 1.0
-
     if ccnc_lka_alt:
       fault_lfa = getattr(CS, 'fault_lfa', 0)
       if fault_lfa and not self.prev_fault_lfa:
@@ -833,15 +828,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # clear once we are clearly under way.
         self.was_in_reverse = False
 
-    parking_fully_faded = self.parking_mode and self.parking_fade < 0.01
-    if parking_fully_faded:
-      self._snap_apply_angle_to_wheel(steer_angle_safe, "parking_fully_faded")
-      if lkas_alt_cam_msg is not None:
-        lkas_alt_cam_msg = dict(lkas_alt_cam_msg)
-        lkas_alt_cam_msg["LKA_ASSIST"] = 0
-        lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"] = 1
-        lkas_alt_cam_msg["ADAS_StrAnglReqVal"] = steer_angle_safe
-    # in_passthrough also gates effective_lat_active so the LKAS_ALT packer
+    # in_passthrough gates effective_lat_active so the LKAS_ALT packer
     # emits LKAS_ANGLE_ACTIVE=1 (= camera passive value) and ACIGain=0 below
     # 20 km/h (LOW_SPEED_PASSTHROUGH_ENTER_MS). Without this gate the angle
     # bit stayed at 2 even while apply_angle_last was being forced to follow
@@ -856,7 +843,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     cam_stale_tripped = bool(self.alert_cam_stale_frames >= 30)
     fault_lfa_bool = bool(getattr(CS, 'fault_lfa', 0))
     effective_lat_active, lat_passive_reasons = self._compute_effective_lat_active(
-        CC, ccnc_lka_alt, apply_steer_req, in_passthrough, parking_fully_faded,
+        CC, ccnc_lka_alt, apply_steer_req, in_passthrough,
         cam_stale_tripped=cam_stale_tripped, fault_lfa=fault_lfa_bool)
     # 1Hz cloudlog of why op is passive - invaluable for drivelog forensics.
     if ccnc_lka_alt and lat_passive_reasons and (self.frame % 100) == 0:
