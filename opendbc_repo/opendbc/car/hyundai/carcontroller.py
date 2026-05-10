@@ -816,12 +816,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       elif gear in (structs.CarState.GearShifter.drive,
                     structs.CarState.GearShifter.sport,
                     structs.CarState.GearShifter.eco,
-                    structs.CarState.GearShifter.manumatic):
+                    structs.CarState.GearShifter.manumatic,
+                    structs.CarState.GearShifter.low,
+                    structs.CarState.GearShifter.brake):
         # Driver explicitly shifted to a forward gear — clear the latch
         # immediately so multi-direction parking maneuvers (R -> D -> R ->
         # D crawl) re-engage op on each forward leg, instead of waiting
         # for a 10 km/h speed crossing that may never arrive in a tight
-        # parking lot.
+        # parking lot. `low` (L) and `brake` (B regen) cover EV/HEV regen
+        # gear positions that may exist on future CCNC platforms even
+        # though current Ioniq 6 N CAN-FD parses only emit {P,R,N,D,S}.
         self.was_in_reverse = False
       elif self.was_in_reverse and CS.out.vEgo > 10 * CV.KPH_TO_MS:
         # Fallback: ambiguous gear (park, neutral, brake, low, unknown);
@@ -874,7 +878,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                          mads_lka_icon=mads_lka_icon,
                                                          lon_accel=lon_accel,
                                                          effective_aci_gain=effective_aci_gain,
-                                                         mads_force_assist=bool(mads_enabled and ccnc_lka_alt)))
+                                                         mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
+                                                         cam_invalid=bool(cam_stale_tripped or fault_lfa_bool)))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
