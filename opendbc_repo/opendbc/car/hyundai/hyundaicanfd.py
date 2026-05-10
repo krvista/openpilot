@@ -141,7 +141,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
         # Force LKA_ASSIST=1 when MADS is enabled, even during transient
         # passive states (in_passthrough, override_snapped, was_in_reverse,
-        # parking_fully_faded, or VM rate-limit hold). Without this the
+        # cam_stale, fault_lfa, or VM rate-limit hold). Without this the
         # cluster's green steering icon falls off during these windows
         # because the camera passthrough value (LKA_ASSIST=0) takes over,
         # even though MADS is still the active assistance source. STEER_REQ
