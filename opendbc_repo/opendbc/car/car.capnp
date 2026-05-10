@@ -379,7 +379,7 @@ struct CarControl {
     # Both are 0 when the blend is inactive (non-Ioniq-6-N cars, op not
     # steering, or ACI not latched). Logged so that drivelog analysis
     # can attribute tracking error changes to the blend dynamics.
-    camrefAlpha @9: Float32;    # effective α used: α₀(v) · q_trust (capped by nav_gate)
+    camrefAlpha @9: Float32;    # effective alpha used: a0(v) * q_trust (capped by nav_gate)
     camrefQTrust @10: Float32;  # rolling camera-trust multiplier in [Q_MIN, Q_MAX]
 
     enum LongControlState @0xe40f3a917d908282{
@@ -456,6 +456,13 @@ struct CarOutput {
   # the CarController are reflected in actuatorsOutput
   # and matches what is sent to the car
   actuatorsOutput @0 :CarControl.Actuators;
+  # Lateral alert flags surfaced by the carcontroller for silent failure
+  # paths (no EPS hardware fault, but op authority is degraded). controlsd
+  # reads these to push corresponding onroadEvents (lateralAccelLimit,
+  # steerAngleLimit, cameraDataStale).
+  vmLimitTripped @1 :Bool;
+  steerAngleLimitTripped @2 :Bool;
+  cameraDataStaleTripped @3 :Bool;
 }
 
 # ****** car param ******
