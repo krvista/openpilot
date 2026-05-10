@@ -131,6 +131,9 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     userBookmark @95;
     excessiveActuation @96;
     audioFeedback @97;
+    lateralAccelLimit @99;
+    steerAngleLimit @100;
+    cameraDataStale @101;
 
     soundsUnavailableDEPRECATED @47;
   }
@@ -1482,9 +1485,9 @@ struct ProcLog {
     exe @16 :Text;
 
     # from /proc/<pid>/smaps_rollup (proportional/private memory)
-    memPss @17 :UInt64;        # Pss — shared pages split by mapper count
-    memPssAnon @18 :UInt64;    # Pss_Anon — private anonymous (heap, stack)
-    memPssShmem @19 :UInt64;   # Pss_Shmem — proportional MSGQ/tmpfs share
+    memPss @17 :UInt64;        # Pss - shared pages split by mapper count
+    memPssAnon @18 :UInt64;    # Pss_Anon - private anonymous (heap, stack)
+    memPssShmem @19 :UInt64;   # Pss_Shmem - proportional MSGQ/tmpfs share
   }
 
   struct CPUTimes {
