@@ -111,16 +111,12 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # reference source while doing its own smoothing.
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
       # Gain pre-computed by carcontroller (with rate limit + quantization).
-      # Fallback: compute inline if caller didn't supply it.
+      # The CCNC carcontroller always passes a non-None effective_aci_gain
+      # (compute_torque_reduction_gain output), so this fallback is only
+      # reached if a caller violates the contract. Mirror the camera value
+      # in that case — safer than fabricating one from undefined constants.
       if effective_aci_gain is None:
-        lon_comfort_factor = float(np.interp(abs(lon_accel),
-                                            CarControllerParams.LON_COMFORT_ACCEL_BP,
-                                            CarControllerParams.LON_COMFORT_GAIN_V))
-        if steering_active:
-          raw_gain = max(speed_blend, 0.20) * aci_gain_ramp * driver_torque_blend * lon_comfort_factor
-          effective_aci_gain = max(raw_gain, 0.10)
-        else:
-          effective_aci_gain = cam_aci_gain
+        effective_aci_gain = cam_aci_gain
 
       # Angle command: when not steering, mirror camera's advisory so ADAS
       # DRV sees no delta from op's side. This closes the remaining window
