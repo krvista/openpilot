@@ -72,7 +72,8 @@ JITTER_STEP = 0.05        # deg - imperceptible but keeps EPS alive
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
-                                  steering_error=0.0, blinker_on=False):
+                                  steering_error=0.0, blinker_on=False,
+                                  override_factor=0.0):
   """Sunnypilot-style ACIGain: torque + speed -> gain with rate limit + quantization.
 
   Adds three adaptive mechanisms on top of the base 4-breakpoint torque/speed map:
@@ -125,6 +126,14 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
                                             [1.25, 0.5, 0.3, 0.2]))
       error_mult = float(np.interp(abs(steering_error),
                                     [error_start, error_start * 2], [1.0, 2.0]))
+      # Suppress the boost when the driver is clearly overriding (>50% of
+      # full-override threshold). Otherwise the tracking-error catch-up
+      # could fight a heavy hand: error rises BECAUSE the driver is
+      # turning the wheel, then ACIGain ceiling jumps up to 2x just as op
+      # should be yielding. Mirrors the blinker branch's "driver leads"
+      # philosophy.
+      if override_factor > 0.5:
+        error_mult = 1.0
       ceiling = min(1.0, ceiling * error_mult)
 
       bp1 = float(np.interp(v_ego, [2., 11.], [75., 125.]))
@@ -423,13 +432,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       cloudlog.info(f"snap_to_wheel: reason={reason}")
 
   def _compute_effective_lat_active(self, CC, ccnc_lka_alt, apply_steer_req,
-                                    in_passthrough, parking_fully_faded):
+                                    in_passthrough, parking_fully_faded,
+                                    cam_stale_tripped=False, fault_lfa=False):
     """Decide whether the LKAS_ALT packer should mark op as actively steering.
 
     Returns (effective_lat_active: bool, false_reasons: list[str]). The
     reasons list is emitted at 1Hz to cloudlog so drivelog inspection can
-    immediately answer "why was op passive at frame N?". Pure refactor of
-    the previous one-liner - same boolean output for the same inputs.
+    immediately answer "why was op passive at frame N?".
+
+    Also gates two camera-side fault conditions: cam_stale_tripped (LKAS_ALT
+    COUNTER not advancing for >=300 ms — sensor data is unreliable) and
+    fault_lfa (the camera ECU itself reports LFA fault). Both must force op
+    to passive so MDPS does not act on stale or faulted sensor input.
     """
     if not ccnc_lka_alt:
       return apply_steer_req, []
@@ -440,6 +454,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if self.was_in_reverse:        reasons.append("was_in_reverse")
     if parking_fully_faded:        reasons.append("parking_faded")
     if in_passthrough:             reasons.append("in_passthrough")
+    if cam_stale_tripped:          reasons.append("cam_stale")
+    if fault_lfa:                  reasons.append("fault_lfa")
     return (len(reasons) == 0), reasons
 
   def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
@@ -799,9 +815,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.prev_fault_lfa = fault_lfa
 
     if ccnc_lka_alt:
-      if CS.out.gearShifter == structs.CarState.GearShifter.reverse:
+      gear = CS.out.gearShifter
+      if gear == structs.CarState.GearShifter.reverse:
         self.was_in_reverse = True
-      if self.was_in_reverse and CS.out.vEgo > 10 * CV.KPH_TO_MS:
+      elif gear in (structs.CarState.GearShifter.drive,
+                    structs.CarState.GearShifter.sport,
+                    structs.CarState.GearShifter.eco,
+                    structs.CarState.GearShifter.manumatic):
+        # Driver explicitly shifted to a forward gear — clear the latch
+        # immediately so multi-direction parking maneuvers (R -> D -> R ->
+        # D crawl) re-engage op on each forward leg, instead of waiting
+        # for a 10 km/h speed crossing that may never arrive in a tight
+        # parking lot.
+        self.was_in_reverse = False
+      elif self.was_in_reverse and CS.out.vEgo > 10 * CV.KPH_TO_MS:
+        # Fallback: ambiguous gear (park, neutral, brake, low, unknown);
+        # clear once we are clearly under way.
         self.was_in_reverse = False
 
     parking_fully_faded = self.parking_mode and self.parking_fade < 0.01
@@ -819,8 +848,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # the wheel - MDPS read that as "hold this exact angle" and refused to
     # let caster torque return the wheel toward center, making parking-lot
     # maneuvers feel sticky.
+    # Camera-side faults gate op steering identically to the alert
+    # thresholds applied in card.py: stale LKAS_ALT counter for >=300 ms,
+    # or any FAULT_LFA bit from the camera ECU. Both force MDPS into
+    # passive (LKAS_ANGLE_ACTIVE=1, ACIGain=0) so we don't ride a stale
+    # sensor or a faulted camera.
+    cam_stale_tripped = bool(self.alert_cam_stale_frames >= 30)
+    fault_lfa_bool = bool(getattr(CS, 'fault_lfa', 0))
     effective_lat_active, lat_passive_reasons = self._compute_effective_lat_active(
-        CC, ccnc_lka_alt, apply_steer_req, in_passthrough, parking_fully_faded)
+        CC, ccnc_lka_alt, apply_steer_req, in_passthrough, parking_fully_faded,
+        cam_stale_tripped=cam_stale_tripped, fault_lfa=fault_lfa_bool)
     # 1Hz cloudlog of why op is passive - invaluable for drivelog forensics.
     if ccnc_lka_alt and lat_passive_reasons and (self.frame % 100) == 0:
       cloudlog.info(f"lat_passive: {','.join(lat_passive_reasons)}")
@@ -836,7 +873,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       steering_error = self.apply_angle_last - steer_angle_safe
       effective_aci_gain = compute_torque_reduction_gain(
         steer_torque_safe, v_ego_safe, effective_lat_active, self.aci_gain_last,
-        steering_error=steering_error, blinker_on=blinker_on)
+        steering_error=steering_error, blinker_on=blinker_on,
+        override_factor=override_factor)
       self.aci_gain_last = effective_aci_gain
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
