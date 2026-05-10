@@ -204,6 +204,18 @@ class SelfdriveD(CruiseHelper):
     if self.sm.updated['audioFeedback']:
       self.events.add(EventName.audioFeedback)
 
+    # CCNC angle-control silent-failure alerts surfaced by the carcontroller.
+    # These trip when op authority is degraded but no EPS hardware fault is
+    # reported (so the standard steerFault* events would not fire). Each is
+    # already debounced upstream by frame-counter hysteresis.
+    co = self.sm['carOutput']
+    if co.vmLimitTripped:
+      self.events.add(EventName.lateralAccelLimit)
+    if co.steerAngleLimitTripped:
+      self.events.add(EventName.steerAngleLimit)
+    if co.cameraDataStaleTripped:
+      self.events.add(EventName.cameraDataStale)
+
     # Don't add any more events while in dashcam mode
     if self.CP.passive:
       return
