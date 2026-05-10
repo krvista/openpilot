@@ -45,14 +45,14 @@ ACI_GAIN_OP_FLOOR = 0.15
 
 # Low-speed freeze latch (hysteresis 20/22 km/h).
 # Below 20 km/h, hand the wheel back to the driver / EPS so caster torque
-# can self-center the wheel — needed for parking-lot maneuvers, where the
+# can self-center the wheel - needed for parking-lot maneuvers, where the
 # user routinely reaches ~20 km/h. Grid search (commit d6236ed) showed
 # freeze=20kph score=0.55 (vs 15kph=1.7); the original "no lateral assist
 # 0-20kph" downside is actually the desired behaviour here. The
 # traffic_following override below keeps op engaged when a close lead
 # (<3m) is present, so stop-and-go traffic still gets lateral support.
-LOW_SPEED_PASSTHROUGH_ENTER_MS = 20.0 / 3.6   # ≈ 5.56 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ≈ 6.11 m/s
+LOW_SPEED_PASSTHROUGH_ENTER_MS = 20.0 / 3.6   # ~ 5.56 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ~ 6.11 m/s
 
 # Traffic-following lead distance hysteresis. When a lead is closer than
 # this, op stays engaged below the freeze threshold so the wheel is held
@@ -63,35 +63,35 @@ TRAFFIC_FOLLOW_FAR_M  = 5.0
 
 LPF_DT = DT_CTRL  # 10 ms (100 Hz)
 
-# Stuck-angle jitter break: inject ±0.05° micro-steps when angle is frozen
+# Stuck-angle jitter break: inject +-0.05 deg micro-steps when angle is frozen
 # for 400ms to prevent MDPS from entering low-power mode.
-JITTER_DEADBAND = 0.03    # deg — below sensor quantization (0.1°)
+JITTER_DEADBAND = 0.03    # deg - below sensor quantization (0.1 deg)
 JITTER_FRAMES = 20        # ~200ms at 100 Hz
-JITTER_STEP = 0.05        # deg — imperceptible but keeps EPS alive
+JITTER_STEP = 0.05        # deg - imperceptible but keeps EPS alive
 
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
                                   steering_error=0.0, blinker_on=False):
-  """Sunnypilot-style ACIGain: torque + speed → gain with rate limit + quantization.
+  """Sunnypilot-style ACIGain: torque + speed -> gain with rate limit + quantization.
 
   Adds three adaptive mechanisms on top of the base 4-breakpoint torque/speed map:
 
   1. Error-based ceiling boost: when |apply_angle - measured_angle| exceeds the
-     speed-dependent threshold, the ceiling is multiplied up to ×2 (capped at
+     speed-dependent threshold, the ceiling is multiplied up to x2 (capped at
      1.0). Boost gives MDPS more authority to catch up when op's command and
-     the actual wheel diverge — typically corner-entry transients.
+     the actual wheel diverge - typically corner-entry transients.
   2. Blinker-aware authority map (4-level descent): under a turn signal the
      driver's intent overrides the standard authority map. An explicit
      4-point curve maps driver torque to op authority:
-       hands-off / pure signalling:  0.70  (tq ≈ 0)
-       light grip / hand on wheel:   0.50  (tq ≈ 30)
-       active steering / turning:    0.40  (tq ≈ 150)
-       strong override:              0.30  (tq ≈ 500)
+       hands-off / pure signalling:  0.70  (tq ~ 0)
+       light grip / hand on wheel:   0.50  (tq ~ 30)
+       active steering / turning:    0.40  (tq ~ 150)
+       strong override:              0.30  (tq ~ 500)
      This descent makes "I want to change lanes" preserve authority for a
      smoother visual feedback, while "I'm doing it myself" yields op out
-     of the way. Error-boost is bypassed under blinker — driver leads.
-  3. Dynamic rate_dn: heavier driver torque → faster gain decay. Breakpoints
+     of the way. Error-boost is bypassed under blinker - driver leads.
+  3. Dynamic rate_dn: heavier driver torque -> faster gain decay. Breakpoints
      [150, 350, 600] Nm calibrated against CCNC route-0x49 active-steering
      torque distribution (p25=250, p50=381, p90=619 Nm). At 350 Nm op yields
      at the legacy -0.014 rate; light grip <150 Nm stays sticky.
@@ -99,13 +99,13 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   if lat_active:
     if blinker_on:
       # Lane change: 4-level driver-intent map. Explicit override of the
-      # standard ceiling/shelf/floor map (and error-boost) — when the driver
+      # standard ceiling/shelf/floor map (and error-boost) - when the driver
       # signals, their wheel input takes priority over MDPS authority and
       # tracking-error catch-up. Levels:
-      #   tq ≈ 0   (hands-off / pure signalling): 0.70
-      #   tq ≈ 30  (light grip — hand on wheel):  0.50
-      #   tq ≈ 150 (active steering — turning):   0.40
-      #   tq ≈ 500 (strong override):             0.30
+      #   tq ~ 0   (hands-off / pure signalling): 0.70
+      #   tq ~ 30  (light grip - hand on wheel):  0.50
+      #   tq ~ 150 (active steering - turning):   0.40
+      #   tq ~ 500 (strong override):             0.30
       # The 30 Nm transition matches CCNC angle-control EPS reaction at
       # light hand placement (route 0x49: light grip p50=36 Nm).
       bp_grip   = 30.0
@@ -120,7 +120,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
       floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
 
       # Error-based ceiling boost. Speed-dependent error_start: at standstill
-      # ignore <1.25° (column wind-up dominates), at highway sensitive to 0.2°.
+      # ignore <1.25 deg (column wind-up dominates), at highway sensitive to 0.2 deg.
       error_start = float(np.interp(v_ego, [0., 5.56, 11.1, 33.3],
                                             [1.25, 0.5, 0.3, 0.2]))
       error_mult = float(np.interp(abs(steering_error),
@@ -142,7 +142,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   # Blinker fast-yield: when the driver turns on the indicator the lower
   # ceiling (0.5) above must reach the gain immediately, not after the
   # ~125-frame slow-decay at light grip. Force a minimum 0.05/frame rate_dn
-  # so the 1.0→0.5 transition completes in ≤100 ms (10 frames @ 100 Hz),
+  # so the 1.0->0.5 transition completes in <=100 ms (10 frames @ 100 Hz),
   # which is below human perception threshold for a steady-state authority
   # change.
   if blinker_on:
@@ -195,13 +195,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_angle_last = 0.0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
-    # HDA2-ALT + CCNC hysteresis state — prevents binary flip of
+    # HDA2-ALT + CCNC hysteresis state - prevents binary flip of
     # LKAS_ANGLE_ACTIVE / LKA_ASSIST at the authority boundary (the
     # residual low-speed tick source).
     # aci_active_latched: True once authority>=0.3 and stays True until <0.05.
     # passthrough_latched: True when driver really has the wheel, stable across
     # small torque oscillations below the driver_torque_blend threshold.
-    # aci_gain_ramp: first-order smoothing 0→1 over ~0.3 s on engagement.
+    # aci_gain_ramp: first-order smoothing 0->1 over ~0.3 s on engagement.
     self.aci_active_latched = False
     self.passthrough_latched = False
     self.aci_gain_ramp = 0.0
@@ -218,7 +218,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.vtau_lpf = 0.0
     self.vtau_sustained_cnt = 0
     self.vtau_prev_sign = 0
-    # Phase 5: driver-override snap state — tracks whether MADS has
+    # Phase 5: driver-override snap state - tracks whether MADS has
     # yielded to the driver (apply_angle_last follows actual wheel),
     # plus hysteresis counters so re-engage only happens after the
     # driver has fully released for OVERRIDE_SNAP_EXIT_FRAMES.
@@ -234,13 +234,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # frames without COUNTER change, force steering_active=False so we
     # never emit an active frame with stale camera bytes.
     # (R4) Previous revision used id() of the dict, but carstate does
-    # copy.copy() every frame → id() always changed → staleness never
+    # copy.copy() every frame -> id() always changed -> staleness never
     # detected. Tracking COUNTER fixes that.
     self.cam_msg_last_frame = 0
     self.cam_msg_last_counter = -1
     # HOD (hands-on detection) bypass. Opt-in via HOD_BYPASS=1 env var.
-    # Default OFF: factory ECU also publishes 0x208 on E-CAN → dual-publisher
-    # collision caused bus-off (busOffCnt 0→1,456, txErr 239/256).
+    # Default OFF: factory ECU also publishes 0x208 on E-CAN -> dual-publisher
+    # collision caused bus-off (busOffCnt 0->1,456, txErr 239/256).
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
     self.hod_bypass_counter = 0
 
@@ -249,6 +249,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # any realistic continuity-watchdog window.
     self.suppress_lfa_counter = 0
     self.prev_fault_lfa = 0
+    # Lateral-alert flags exposed to controlsd via CarOutput. card.py reads
+    # these counters and trips Bool flags at threshold; selfdrived pushes
+    # the matching onroadEvents (lateralAccelLimit / steerAngleLimit /
+    # cameraDataStale). Frame counters here implement N-frame hysteresis
+    # so transient single-frame trips do not spam alerts.
+    self.alert_vm_limit_frames = 0
+    self.alert_max_angle_frames = 0
+    self.alert_cam_stale_frames = 0
     self.was_in_reverse = False
     self.parking_mode = False
     self.parking_enter_cnt = 0
@@ -262,10 +270,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     MadsCarController.update(self, self.CP, CC, CC_SP, self.frame)
     if self.frame % 5 == 0:
       # On the HDA2-ALT + CCNC angle-control platform we never TX
-      # SCC_CONTROL (factory SCC owns longitudinal — see F3 guard below),
+      # SCC_CONTROL (factory SCC owns longitudinal - see F3 guard below),
       # so the tuning state produced here is only read by
       # new_actuators.accel as a telemetry report. Keeping the 5-frame
-      # cadence is intentional — it matches non-CCNC Hyundai cars and
+      # cadence is intentional - it matches non-CCNC Hyundai cars and
       # avoids branching the call site.
       LongitudinalController.update(self, CC, CS)
 
@@ -280,6 +288,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.angle_limit_counter, apply_steer_req = common_fault_avoidance(abs(CS.out.steeringAngleDeg) >= MAX_ANGLE, CC.latActive,
                                                                        self.angle_limit_counter, MAX_ANGLE_FRAMES,
                                                                        MAX_ANGLE_CONSECUTIVE_FRAMES)
+
+    # Trip the steerAngleLimit alert when fault-avoidance has actually cut
+    # the request bit (apply_steer_req=False because angle_limit_counter
+    # exceeded MAX_ANGLE_FRAMES). Hysteresis: count up while still cut, decay
+    # when active again. Driver-visible threshold = 5 frames (=50ms) so
+    # transient single-frame cuts during normal lock-to-lock sweeps do not
+    # raise the alert.
+    if CC.latActive and abs(CS.out.steeringAngleDeg) >= MAX_ANGLE and not apply_steer_req:
+      self.alert_max_angle_frames = min(self.alert_max_angle_frames + 1, 100)
+    else:
+      self.alert_max_angle_frames = max(self.alert_max_angle_frames - 2, 0)
 
     if not CC.latActive:
       apply_torque = 0
@@ -391,6 +410,38 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return can_sends
 
+  def _snap_apply_angle_to_wheel(self, steer_angle_safe, reason):
+    """Single source of truth for "yield apply_angle_last to physical wheel".
+
+    Three call sites (override_snapped, parking_fully_faded, future) used to
+    duplicate `self.apply_angle_last = steer_angle_safe` inline. Centralizing
+    makes drivelog replay easier - every snap event becomes searchable in
+    cloudlog by reason.
+    """
+    self.apply_angle_last = steer_angle_safe
+    if (self.frame % 100) == 0:
+      cloudlog.info(f"snap_to_wheel: reason={reason}")
+
+  def _compute_effective_lat_active(self, CC, ccnc_lka_alt, apply_steer_req,
+                                    in_passthrough, parking_fully_faded):
+    """Decide whether the LKAS_ALT packer should mark op as actively steering.
+
+    Returns (effective_lat_active: bool, false_reasons: list[str]). The
+    reasons list is emitted at 1Hz to cloudlog so drivelog inspection can
+    immediately answer "why was op passive at frame N?". Pure refactor of
+    the previous one-liner - same boolean output for the same inputs.
+    """
+    if not ccnc_lka_alt:
+      return apply_steer_req, []
+    reasons = []
+    if not CC.latActive:           reasons.append("not_latActive")
+    if self.override_snapped:      reasons.append("override_snapped")
+    if not apply_steer_req:        reasons.append("no_steer_req")
+    if self.was_in_reverse:        reasons.append("was_in_reverse")
+    if parking_fully_faded:        reasons.append("parking_faded")
+    if in_passthrough:             reasons.append("in_passthrough")
+    return (len(reasons) == 0), reasons
+
   def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
     can_sends = []
 
@@ -403,9 +454,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
     # F1 / R4: Camera staleness detection via LKAS_ALT COUNTER field.
     # carstate does copy.copy(cp_cam.vl["LKAS_ALT"]) every frame, so the
-    # dict identity cannot indicate freshness — only the camera-driven
-    # COUNTER does. If COUNTER doesn't change for CAM_STALE_FRAMES (≥ 25
-    # frames ≈ 250 ms at 100 Hz), treat camera as dropped and force
+    # dict identity cannot indicate freshness - only the camera-driven
+    # COUNTER does. If COUNTER doesn't change for CAM_STALE_FRAMES (>= 25
+    # frames ~ 250 ms at 100 Hz), treat camera as dropped and force
     # steering_active=False in the packer.
     CAM_STALE_FRAMES = 25
     cam_stale = False
@@ -416,8 +467,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.cam_msg_last_counter = cam_counter
       if (self.frame - self.cam_msg_last_frame) > CAM_STALE_FRAMES:
         cam_stale = True
-    # Smooth low-speed authority ramp — replaces the old binary 3 km/h gate.
-    # authority ramps 0→1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
+    # Surface staleness as a hysteretic alert flag - controlsd reads it
+    # via CarOutput to push EventName.cameraDataStale. Counter decays
+    # quickly when the stream resumes so a recovered link clears the alert
+    # within ~10 frames.
+    if cam_stale:
+      self.alert_cam_stale_frames = min(self.alert_cam_stale_frames + 1, 100)
+    else:
+      self.alert_cam_stale_frames = max(self.alert_cam_stale_frames - 5, 0)
+    # Smooth low-speed authority ramp - replaces the old binary 3 km/h gate.
+    # authority ramps 0->1 linearly as vEgoRaw rises from 1 km/h to 3 km/h.
     # Below 1 km/h: 0 (effectively no ACI command). Above 3 km/h: full.
     ACI_SPEED_FULL_MS = 3.0 / 3.6   # full authority at/above 3 km/h
     ACI_SPEED_ZERO_MS = 1.0 / 3.6   # zero authority at/below 1 km/h
@@ -427,7 +486,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # harness fault. actuators.steeringAngleDeg: LatControlAngle can emit
     # NaN if the planner ever divides by zero. Any single NaN reaching
     # np.clip or float() downstream propagates and crashes the rate
-    # limiter / trust estimator — so we clamp at the boundary.
+    # limiter / trust estimator - so we clamp at the boundary.
     v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
     steer_angle_safe = float(CS.out.steeringAngleDeg) if np.isfinite(CS.out.steeringAngleDeg) else 0.0
     steer_torque_safe = float(CS.out.steeringTorque) if np.isfinite(CS.out.steeringTorque) else 0.0
@@ -438,7 +497,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                  (ACI_SPEED_FULL_MS - ACI_SPEED_ZERO_MS), 0.0, 1.0))
     # Phase 5: speed-dependent gradient driver override blending.
     # Fixed 150 Nm full-override threshold was unreachable at low speed
-    # (driver turning wheel 90° at 30 km/h applies only 60-80 Nm) → MADS
+    # (driver turning wheel 90 deg at 30 km/h applies only 60-80 Nm) -> MADS
     # kept fighting the driver. Lower the full-override torque at low v,
     # keep the higher value at highway for stability.
     # Route 0x49 discovery: on angle-control MDPS the reported column torque
@@ -522,18 +581,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.passthrough_latched = False
 
     # Low-speed camera passthrough: at creep speed, stock LFA stays
-    # fully passive (cam |Δ|≈0, LKAS_ANGLE_ACTIVE=1, ACIGain=0 — MDPS
+    # fully passive (cam |delta|~0, LKAS_ANGLE_ACTIVE=1, ACIGain=0 - MDPS
     # idle). Emulate that by keeping `steering_active=False` in the
     # LKAS_ALT packer (via the speed_blend > 0.1 gate), which mirrors
     # the camera's fields verbatim in the op-emitted frame. Driver has
-    # no assist AND no resistance at creep speed — identical to stock
+    # no assist AND no resistance at creep speed - identical to stock
     # LFA feel. Hysteresis on vEgoRaw prevents stop-and-go flapping.
     if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
       self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.low_speed_cam_latched = False
     # Traffic-following override: a close lead (<3m, with 5m exit) means
-    # we're in stop-and-go traffic, NOT a parking lot — keep op engaged
+    # we're in stop-and-go traffic, NOT a parking lot - keep op engaged
     # so the wheel is held. lead_visible already has 0.5s on/off
     # hysteresis (lead_data_ext.py:_update_lead_visible_hysteresis). The
     # 3/5m distance band keeps the latch stable when the lead drifts near
@@ -544,7 +603,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.traffic_following = True
     elif (not self.lead_visible) or self.lead_distance > TRAFFIC_FOLLOW_FAR_M:
       self.traffic_following = False
-    # Combined passthrough latch — used below to force `rate_lat_active=False`
+    # Combined passthrough latch - used below to force `rate_lat_active=False`
     # in the rate limiter so `apply_angle_last` tracks the actual wheel
     # while passive. The LKAS_ALT packer no longer takes a separate
     # passthrough code path (was a source of frame-format-switch faults
@@ -553,7 +612,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     in_passthrough = (self.passthrough_latched or self.low_speed_cam_latched) and not self.traffic_following
 
     # First-order ramp of ACI gain on re-engagement (smooths the
-    # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ≈ 30 frames.
+    # ADAS_ACIAnglTqRedcGainVal step). ~0.3 s at 100 Hz ~ 30 frames.
     ACI_GAIN_RAMP_TAU_FRAMES = 30.0
     if self.aci_active_latched:
       self.aci_gain_ramp = min(1.0, self.aci_gain_ramp + 1.0 / ACI_GAIN_RAMP_TAU_FRAMES)
@@ -561,13 +620,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.aci_gain_ramp = 0.0
 
     # HDA2-ALT + CCNC angle control: op-only, VM-based jerk/accel limiter
-    # at 100 Hz. Panda safety checks at 100Hz frequency — running the
+    # at 100 Hz. Panda safety checks at 100Hz frequency - running the
     # rate limiter at 50Hz (frame%2) wasted half the allowed jerk budget
     # because panda only permits 10ms of delta per TX.
     if ccnc_lka_alt:
       # Variable-tau LPF: unified filter replacing curvature LPF + low-speed
       # LPF + jerk FF + error FB. Tau is a continuous function of angle
-      # magnitude and speed — strong at center (suppresses straight-line
+      # magnitude and speed - strong at center (suppresses straight-line
       # jitter), weak at large angles (fast curve tracking), with low-speed
       # smoothing built in. No step response because tau is continuous.
       entry_th = float(np.interp(v_ego_safe, CarControllerParams.VTAU_ENTRY_TH_BP,
@@ -577,10 +636,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       if entering_curve or returning_to_center:
         # Soft trigger: fast LPF instead of an instantaneous state jump.
-        # alpha @ 100Hz = 0.01/0.06 = 0.17 ⇒ ~5 frames to 95% — looks like a
+        # alpha @ 100Hz = 0.01/0.06 = 0.17 => ~5 frames to 95% - looks like a
         # smooth slew to EPS rather than a single rate-limited cliff.
-        # Drivelog 0x15: cuts EPS frames with Δ>1° from 1.52% to 0.27% (5.6×)
-        # at the cost of +9–58ms entry lag depending on stratum.
+        # Drivelog 0x15: cuts EPS frames with delta>1 deg from 1.52% to 0.27% (5.6x)
+        # at the cost of +9-58ms entry lag depending on stratum.
         vtau = 0.05
         # Skip the sustained-direction warmup so tau stays at 0.1s through the
         # curve instead of slowly ramping in.
@@ -592,10 +651,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         speed_tau = float(np.interp(v_ego_safe, CarControllerParams.VTAU_SPEED_BP,
                                     CarControllerParams.VTAU_SPEED_V))
         vtau = max(angle_tau, speed_tau)
-        # Highway upper-bound: angle_tau goes to 2.5 s for |angle|<1° (centered)
+        # Highway upper-bound: angle_tau goes to 2.5 s for |angle|<1 deg (centered)
         # which is desirable as straight-line jitter suppression at low speed
-        # but turns into sluggish path tracking at highway. Cap tau ≤ 0.15 s
-        # at 25 m/s so ψ-error corrections happen promptly.
+        # but turns into sluggish path tracking at highway. Cap tau <= 0.15 s
+        # at 25 m/s so psi-error corrections happen promptly.
         speed_max_tau = float(np.interp(v_ego_safe, [10.0, 25.0], [2.5, 0.15]))
         vtau = min(vtau, speed_max_tau)
 
@@ -609,10 +668,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.vtau_prev_sign = cur_sign
         # Cap intermediate/final breakpoints with min() so the adaptive stage
         # NEVER increases tau. At highway speeds vtau has already been clamped
-        # by speed_max_tau (≤0.15 s @ 25 m/s) below the legacy 0.5 mid-point —
-        # without this guard, sustained_cnt building 0→30 would slow tau back
+        # by speed_max_tau (<=0.15 s @ 25 m/s) below the legacy 0.5 mid-point -
+        # without this guard, sustained_cnt building 0->30 would slow tau back
         # up to 0.5 s exactly when the driver wants a small lane-deviation
-        # corrected quickly. Low-speed (vtau≥0.5) keeps the original
+        # corrected quickly. Low-speed (vtau>=0.5) keeps the original
         # 2-stage descent unchanged.
         vtau = float(np.interp(self.vtau_sustained_cnt, [0, 30, 60],
                                 [vtau, min(vtau, 0.5), min(vtau, 0.1)]))
@@ -639,11 +698,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # the driver firmly has the wheel: let `apply_steer_angle_limits_vm`
       # track steer_angle_safe and let the stuck-angle jitter break
       # short-circuit on its `else` branch. Without this gate the
-      # ±0.05° jitter injection would keep running at standstill.
+      # +-0.05 deg jitter injection would keep running at standstill.
       rate_lat_active = bool(CC.latActive) and self.aci_active_latched and not in_passthrough
 
       if self.override_snapped:
-        self.apply_angle_last = steer_angle_safe
+        self._snap_apply_angle_to_wheel(steer_angle_safe, "override_snapped")
 
       # VM-based jerk/accel limiter
       apply_angle = apply_steer_angle_limits_vm(
@@ -657,14 +716,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         )
       if apply_angle is None:
         # VM rate limiter rejected the command (lateral accel limit violated
-        # while rate limit can't pull back fast enough — typically a tight
-        # highway on-ramp where v² · κ exceeds MAX_LATERAL_ACCEL=3.59 m/s²).
+        # while rate limit can't pull back fast enough - typically a tight
+        # highway on-ramp where v^2 * kappa exceeds MAX_LATERAL_ACCEL=3.59 m/s^2).
         # Previous behavior was to set apply_steer_req=False AND snap
-        # apply_angle_last to the actual wheel — MDPS released, the wheel
+        # apply_angle_last to the actual wheel - MDPS released, the wheel
         # returned to caster, the cluster icon fell off, and the driver
         # experienced a SILENT disengage with no takeover alert. That was
         # observed mid-ramp on drives 0x09 seg27/28/30/36 (v=20-28 m/s,
-        # sa=20-26°): apply_angle frozen for 1.5-3 s while wheel released.
+        # sa=20-26 deg): apply_angle frozen for 1.5-3 s while wheel released.
         #
         # Instead, hold the previous compliant angle (apply_angle_last
         # unchanged) and keep apply_steer_req=True. MDPS continues to track
@@ -674,14 +733,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # last-accepted, so this is safe (delta=0 is always within window).
         # Log telemetry so we can quantify how often this fires per drive.
         if v_ego_safe > 8.0:
-          cloudlog.warning(
-            f"VM_LIMIT_TRIP: holding apply_angle={self.apply_angle_last:.1f} "
-            f"v={v_ego_safe:.1f} sa_meas={steer_angle_safe:.1f} "
-            f"op_curv={op_curv_safe:.1f} max_lat_a="
-            f"{CarControllerParams.ANGLE_LIMITS_VM.MAX_LATERAL_ACCEL:.2f}"
-          )
+          self.alert_vm_limit_frames = min(self.alert_vm_limit_frames + 1, 100)
+          if (self.alert_vm_limit_frames % 100) == 1:  # rate-limit cloudlog to ~1Hz
+            cloudlog.warning(
+              f"VM_LIMIT_TRIP: holding apply_angle={self.apply_angle_last:.1f} "
+              f"v={v_ego_safe:.1f} sa_meas={steer_angle_safe:.1f} "
+              f"op_curv={op_curv_safe:.1f} max_lat_a="
+              f"{CarControllerParams.ANGLE_LIMITS_VM.MAX_LATERAL_ACCEL:.2f}"
+            )
       else:
         self.apply_angle_last = apply_angle
+        self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
 
       # Stuck-angle jitter break
       if rate_lat_active:
@@ -705,7 +767,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # passthrough, override snap, and any transient CC.latActive=False window
     # where MADS is still the active assistance source.
     # Off-but-available (ACC main on, MADS off): icon=0 (off but visible).
-    # ACC main off and MADS off: None → camera passthrough (stock LFA icon).
+    # ACC main off and MADS off: None -> camera passthrough (stock LFA icon).
     mads_enabled = getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled
     if ccnc_lka_alt:
       if mads_enabled:
@@ -717,7 +779,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # Parking mode disabled — D+A strategy handles all speeds.
+    # Parking mode disabled - D+A strategy handles all speeds.
     if ccnc_lka_alt:
       self.parking_mode = False
       self.parking_fade = 1.0
@@ -744,7 +806,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     parking_fully_faded = self.parking_mode and self.parking_fade < 0.01
     if parking_fully_faded:
-      self.apply_angle_last = steer_angle_safe
+      self._snap_apply_angle_to_wheel(steer_angle_safe, "parking_fully_faded")
       if lkas_alt_cam_msg is not None:
         lkas_alt_cam_msg = dict(lkas_alt_cam_msg)
         lkas_alt_cam_msg["LKA_ASSIST"] = 0
@@ -754,14 +816,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # emits LKAS_ANGLE_ACTIVE=1 (= camera passive value) and ACIGain=0 below
     # 20 km/h (LOW_SPEED_PASSTHROUGH_ENTER_MS). Without this gate the angle
     # bit stayed at 2 even while apply_angle_last was being forced to follow
-    # the wheel — MDPS read that as "hold this exact angle" and refused to
+    # the wheel - MDPS read that as "hold this exact angle" and refused to
     # let caster torque return the wheel toward center, making parking-lot
     # maneuvers feel sticky.
-    effective_lat_active = (CC.latActive and not self.override_snapped and apply_steer_req
-                            and not self.was_in_reverse and not parking_fully_faded
-                            and not in_passthrough) if ccnc_lka_alt else apply_steer_req
+    effective_lat_active, lat_passive_reasons = self._compute_effective_lat_active(
+        CC, ccnc_lka_alt, apply_steer_req, in_passthrough, parking_fully_faded)
+    # 1Hz cloudlog of why op is passive - invaluable for drivelog forensics.
+    if ccnc_lka_alt and lat_passive_reasons and (self.frame % 100) == 0:
+      cloudlog.info(f"lat_passive: {','.join(lat_passive_reasons)}")
 
-    # ACIGain: sunnypilot-style torque reduction gain (torque + speed → gain).
+    # ACIGain: sunnypilot-style torque reduction gain (torque + speed -> gain).
     # Must use effective_lat_active (not CC.latActive) to ensure gain=0
     # when LKAS_ANGLE_ACTIVE=1 (passive). Panda rejects gain>0 with ACTIVE=1.
     effective_aci_gain = None
@@ -809,7 +873,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     #
     # HDA2-ALT + CCNC: alert-suppression feature DISABLED (2026-04-15).
     # On this platform CCNC_0x161/0x162 are natively published by a
-    # gateway ECU on bus 1 (not forwarded from the camera — see
+    # gateway ECU on bus 1 (not forwarded from the camera - see
     # c6a33de). Any TX from openpilot on those addresses creates a
     # dual-publisher situation on bus 1; the other ADAS components
     # detect the duplication as a fault, flicker the cluster ADAS
@@ -830,13 +894,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # HOD (hands-on detection) bypass on HDA2-ALT + CCNC. TX 0x208 on
     # E-CAN at 10 Hz with GRIP_STRONG to keep the hands-off timer reset.
-    # Active whenever MADS is enabled (not just latActive) — prevents
+    # Active whenever MADS is enabled (not just latActive) - prevents
     # hands-on warning during transient latActive=False (driver override,
     # low-speed passthrough). Disabled only when MADS is fully OFF.
-    # Gated on hod_bypass_enabled (HOD_BYPASS=1 env var) — default OFF.
+    # Gated on hod_bypass_enabled (HOD_BYPASS=1 env var) - default OFF.
     # Factory ECU already publishes 0x208 on bus 1; unconditional TX
     # creates a dual-publisher collision causing CAN bus 1 bus-off
-    # (busOffCnt 0→1,456 over routes 0x28→0x4f, peak txErr=239/256).
+    # (busOffCnt 0->1,456 over routes 0x28->0x4f, peak txErr=239/256).
     if ccnc_lka_alt and self.frame % 10 == 0 and mads_enabled and self.hod_bypass_enabled:
       can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
       self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
@@ -845,7 +909,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
       can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
 
-    # F3: HDA2-ALT + CCNC platform NEVER does openpilot longitudinal —
+    # F3: HDA2-ALT + CCNC platform NEVER does openpilot longitudinal -
     # factory SCC handles it. Guard against misconfig that would TX
     # SCC_CONTROL (0x1A0) on E-CAN, colliding with the factory SCC ECU.
     if self.CP.openpilotLongitudinalControl and not ccnc_lka_alt:
@@ -865,7 +929,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         if CC.cruiseControl.cancel:
           if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS:
             # F3 (cont.): HDA2-ALT + CCNC must NOT TX SCC_CONTROL (0x1A0)
-            # for ACC cancel — factory SCC natively publishes on bus 1, and
+            # for ACC cancel - factory SCC natively publishes on bus 1, and
             # our TX creates a dual-publisher race (ACCEnable=3 within 20ms).
             # Driver cancels via the physical steering-wheel button instead.
             if not ccnc_lka_alt:
