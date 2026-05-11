@@ -148,16 +148,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   # Dynamic rate_dn aligned to CCNC active-steering torque distribution.
   rate_dn_mag = float(np.interp(abs(steering_torque), [150., 350., 600.],
                                                        [0.004, 0.014, 0.04]))
-  # Blinker fast-yield: when the driver turns on the indicator the lower
-  # ceiling (0.5) above must reach the gain immediately, not after the
-  # ~125-frame slow-decay at light grip. Force a minimum 0.05/frame rate_dn
-  # so the 1.0->0.5 transition completes in <=100 ms (10 frames @ 100 Hz),
-  # which is below human perception threshold for a steady-state authority
-  # change.
+  # Blinker symmetric fast yield/recovery.
+  #   Yield: rate_dn forced to 0.05 so the 1.0→0.5 yield reaches the wheel
+  #     within ~100 ms — already in place.
+  #   Recovery: when the driver releases mid-lane-change, the target jumps
+  #     from the active-grip levels (0.30~0.40) up to the hands-off level
+  #     (0.70). With the default ACI_GAIN_RATE_UP=0.004/frame it took
+  #     ~750 ms to ramp — long enough that the user perceived op as "not
+  #     recognizing" the wheel release. Mirror the yield rate on the up
+  #     side under blinker so op re-engages the lane-change motion in
+  #     ~80 ms, well under the planner's lane-change trajectory window.
+  rate_up_mag = CarControllerParams.ACI_GAIN_RATE_UP
   if blinker_on:
     rate_dn_mag = max(rate_dn_mag, 0.05)
-  gain = rate_limit(target, last_gain, -rate_dn_mag,
-                    CarControllerParams.ACI_GAIN_RATE_UP)
+    rate_up_mag = max(rate_up_mag, 0.05)
+  gain = rate_limit(target, last_gain, -rate_dn_mag, rate_up_mag)
   return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
 
 
@@ -538,13 +543,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
     driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
+    blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     # Phase 5: snap-to-wheel + grace-window state machine.
     # Enter snap after sustained full override; exit only after sustained
     # full release (OVERRIDE_SNAP_EXIT_FRAMES). While snapped, apply_angle_last
     # is forced to follow the actual wheel angle so MADS cannot build up a
     # restoring torque; on exit the rate limiter naturally ramps from there.
-    if override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR:
+    # Don't enter override-snap during a turn signal. The blinker authority
+    # map in compute_torque_reduction_gain already provides a continuous
+    # 4-level descent (0.70 → 0.30) that yields to driver torque without
+    # the binary snap state. Skipping entry under blinker keeps
+    # effective_lat_active=True throughout the lane change so op's
+    # steering command stream never goes silent — pair with the
+    # symmetric blinker rate_up so release-to-takeover stays smooth.
+    if override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR and not blinker_on:
       self.override_enter_cnt += 1
       self.override_exit_cnt = 0
     elif override_factor <= CarControllerParams.OVERRIDE_SNAP_EXIT_FACTOR:
@@ -563,7 +576,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.override_enter_cnt = 0
       self.override_exit_cnt = 0
       self.aci_gain_last = 0.0
-    blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     # ---- ACI engagement: always-active for angle-control platforms ----
     # Angle-control MDPS: LKAS_ANGLE_ACTIVE=2 whenever latActive=True.
