@@ -103,18 +103,25 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
       # standard ceiling/shelf/floor map (and error-boost) - when the driver
       # signals, their wheel input takes priority over MDPS authority and
       # tracking-error catch-up. Levels:
-      #   tq ~ 0   (hands-off / pure signalling): 0.70
-      #   tq ~ 30  (light grip - hand on wheel):  0.50
+      #   tq ~ 0   (hands-off / pure signalling): 0.80
+      #   tq ~ 30  (light grip - hand on wheel):  0.70
       #   tq ~ 150 (active steering - turning):   0.40
       #   tq ~ 500 (strong override):             0.30
       # The 30 Nm transition matches CCNC angle-control EPS reaction at
       # light hand placement (route 0x49: light grip p50=36 Nm).
+      # 2026-05-11: hands-off / light-grip levels raised (0.70→0.80 /
+      # 0.50→0.70) so op retains stronger authority during the early /
+      # release phase of a lane change. Pairs with the symmetric
+      # blinker rate_up — once the driver releases, ACIGain ramps
+      # quickly to the higher 0.80 ceiling rather than the previous
+      # 0.70, giving MDPS more headroom to complete the lane-change
+      # motion.
       bp_grip   = 30.0
       bp_active = float(np.interp(v_ego, [2., 11.], [125., 150.]))
       bp_heavy  = float(np.interp(v_ego, [2., 22.], [400., 550.]))
       target = float(np.interp(abs(steering_torque),
                                 [0.0, bp_grip, bp_active, bp_heavy],
-                                [0.70, 0.50,    0.40,      0.30]))
+                                [0.80, 0.70,    0.40,      0.30]))
     else:
       ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
       shelf = float(np.interp(v_ego, [2., 11.], [0.45, 0.6]))
