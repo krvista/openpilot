@@ -127,7 +127,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
                                 [0.80, 0.55,    0.25,      0.15]))
     else:
       ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
-      shelf = float(np.interp(v_ego, [2., 11.], [0.30, 0.40]))
+      shelf = float(np.interp(v_ego, [2., 11.], [0.22, 0.30]))
       floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
 
       # Error-based ceiling boost. Speed-dependent error_start: at standstill
@@ -147,18 +147,22 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
       ceiling = min(1.0, ceiling * error_mult)
 
       # Non-blinker descent breakpoints.
-      # 2026-05-11 (v2): user reported "op grips too strongly" during
-      # straight-line driving when applying moderate steering torque.
-      # Drivelog (~118k non-blinker samples, op active): p50(50-100 Nm)
-      # = 0.85, p50(150-200) = 0.60, p50(200-250) = 0.58. Op kept full
-      # ceiling until ~125 Nm and shelf authority well past 250 Nm.
-      # Lowered bp1-bp4 + shelf so light grip (50-150 Nm) starts the
-      # ceiling→shelf descent and moderate driver intent (150-300 Nm)
-      # quickly transitions toward floor. Light grip <50 Nm still gets
-      # ceiling — preserves stable straight-line driving with hands on
-      # the wheel.
-      bp1 = float(np.interp(v_ego, [2., 11.], [50., 75.]))
-      bp2 = float(np.interp(v_ego, [2., 11.], [100., 125.]))
+      # 2026-05-11 (v2): first tightening — bp1-bp4 + shelf pulled down
+      # so light grip (50-150 Nm) starts the ceiling→shelf descent and
+      # moderate driver intent (150-300 Nm) quickly transitions toward
+      # floor.
+      # 2026-05-11 (v3): user feedback after drivelog 0000000d — at
+      # parking-lot speeds (<30 km/h), p75(50-100 Nm) was still ~0.95
+      # because bp1=63 / bp2=113 at v=5 m/s left light grip above bp1
+      # most of the time. Pulled bp1[50,75]→[30,50], bp2 down (bp2 was
+      # [100,125], tried [70,100], settled at [50,70]) so steady-state
+      # at 50 Nm reaches ~0.46 at v=5 m/s rather than 0.66. shelf
+      # [0.30,0.40]→[0.22,0.30]. np.interp clamping leaves v≥11 m/s
+      # (>=40 km/h) behaviour unchanged from v2; only <30 km/h light
+      # grip is more responsive (50 Nm: 0.85→~0.46, 75 Nm: 0.38→~0.27).
+      # Light grip <30 Nm still gets full ceiling.
+      bp1 = float(np.interp(v_ego, [2., 11.], [30., 50.]))
+      bp2 = float(np.interp(v_ego, [2., 11.], [50., 70.]))
       bp3 = float(np.interp(v_ego, [2., 11.], [150., 200.]))
       bp4 = float(np.interp(v_ego, [2., 22.], [300., 450.]))
       target = float(np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4],
@@ -283,15 +287,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # collision caused bus-off (busOffCnt 0->1,456, txErr 239/256).
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
     self.hod_bypass_counter = 0
-    self.lfahda_op_tx_enabled = os.environ.get("LFAHDA_OP_TX", "1") != "0"
-    # LFAHDA_CLUSTER (0x1E0) op TX for i6n cluster icons.
-    # Default ON (set LFAHDA_OP_TX=0 to disable). Factory ADRV also
-    # publishes 0x1E0 on E-CAN -> dual-publisher risk (see CCNC_0x161
-    # precedent above). On i6n the factory ECU always emits HDA=0/LFA=0,
-    # so the cluster never shows a green steering icon. This TX forces
-    # HDA=1/LFA=2 when op is steering, attempting to override the
-    # cluster icon. Monitor panda busOff/txErr on first drive; revert
-    # via LFAHDA_OP_TX=0 (or commit revert) if errors rise.
 
     # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
     # camera-TX rate vs our frame%5==0 downsample. Wraps at 256, well above
@@ -977,23 +972,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       can_sends.append(hyundaicanfd.create_hod_bypass(self.CAN.ECAN, self.hod_bypass_counter))
       self.hod_bypass_counter = (self.hod_bypass_counter + 2) & 0xFF
 
-    # LFAHDA_CLUSTER (0x1E0) op TX for i6n cluster icons.
-    # Factory ADRV emits 0x1E0 with HDA_ICON=0 / LFA_ICON=0 always on i6n
-    # (verified in routes 0000000a + 0000000c, 11,964 frames/seg src=1).
-    # Cluster reads CCNC_0x161 LFA_ICON for the green steering icon, which
-    # the factory camera ECU keeps at HIDDEN because op suppresses stock
-    # LFA via CAM_0x362 — there is no architectural path for op to turn
-    # on the cluster green icon today.
-    # As an experimental workaround, op also TXes LFAHDA_CLUSTER at 20 Hz
-    # with HDA=1 / LFA=2 (GREEN) when MADS is active. This is a separate
-    # message from CCNC_0x161 but lives on the same ECAN bus alongside
-    # the factory ADRV publisher, so dual-publisher conflict is possible.
-    # Default ON; set LFAHDA_OP_TX=0 in launch_env.sh to disable without
-    # rebuilding (escape hatch for first-drive monitoring).
-    if ccnc_lka_alt and self.frame % 5 == 0 and self.lfahda_op_tx_enabled:
-      lfa_value = 2 if effective_lat_active else (1 if mads_enabled else 0)
-      can_sends.append(hyundaicanfd.create_lfahda_cluster(
-        self.packer, self.CAN, bool(mads_enabled), lfa_value))
+    # Note: LFAHDA_CLUSTER (0x1E0) op TX was tried in commit 7cda01d to
+    # override factory HDA=0/LFA=0 emits, hoping to force the cluster's
+    # green steering icon. Drivelog 0000000d (19 segs) confirmed zero
+    # panda errors (busOff/canSendErrs/canFwdErrs all Δ0) but ALSO zero
+    # cluster effect — the cluster ignores LFAHDA_CLUSTER fields and
+    # reads CCNC_0x161 LFA_ICON, which factory keeps at HIDDEN because
+    # op suppresses stock LFA via CAM_0x362. Re-enabling would require
+    # finding a way to influence CCNC_0x161 without dual-publisher
+    # conflict — a separate architectural task. TX code removed; see
+    # git history (commit 7cda01d) for the prior attempt.
 
     # blinkers
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
