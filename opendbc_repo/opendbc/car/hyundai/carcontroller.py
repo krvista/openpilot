@@ -283,14 +283,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # collision caused bus-off (busOffCnt 0->1,456, txErr 239/256).
     self.hod_bypass_enabled = os.environ.get("HOD_BYPASS") == "1"
     self.hod_bypass_counter = 0
-    self.lfahda_op_tx_enabled = os.environ.get("LFAHDA_OP_TX") == "1"
+    self.lfahda_op_tx_enabled = os.environ.get("LFAHDA_OP_TX", "1") != "0"
     # LFAHDA_CLUSTER (0x1E0) op TX for i6n cluster icons.
-    # Opt-in via LFAHDA_OP_TX=1 env var. Default OFF: factory ADRV also
+    # Default ON (set LFAHDA_OP_TX=0 to disable). Factory ADRV also
     # publishes 0x1E0 on E-CAN -> dual-publisher risk (see CCNC_0x161
     # precedent above). On i6n the factory ECU always emits HDA=0/LFA=0,
-    # so the cluster never shows a green steering icon. Enabling this
-    # TX forces HDA=1/LFA=2 when op is steering, attempting to override
-    # the cluster icon. Monitor panda busOff/txErr on first activation.
+    # so the cluster never shows a green steering icon. This TX forces
+    # HDA=1/LFA=2 when op is steering, attempting to override the
+    # cluster icon. Monitor panda busOff/txErr on first drive; revert
+    # via LFAHDA_OP_TX=0 (or commit revert) if errors rise.
 
     # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
     # camera-TX rate vs our frame%5==0 downsample. Wraps at 256, well above
@@ -987,9 +988,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # with HDA=1 / LFA=2 (GREEN) when MADS is active. This is a separate
     # message from CCNC_0x161 but lives on the same ECAN bus alongside
     # the factory ADRV publisher, so dual-publisher conflict is possible.
-    # Gated on LFAHDA_OP_TX=1 env var (default OFF) so the feature can
-    # be enabled per-driver after a smoke test, then reverted if panda
-    # reports rising busOff/txErr counts.
+    # Default ON; set LFAHDA_OP_TX=0 in launch_env.sh to disable without
+    # rebuilding (escape hatch for first-drive monitoring).
     if ccnc_lka_alt and self.frame % 5 == 0 and self.lfahda_op_tx_enabled:
       lfa_value = 2 if effective_lat_active else (1 if mads_enabled else 0)
       can_sends.append(hyundaicanfd.create_lfahda_cluster(
