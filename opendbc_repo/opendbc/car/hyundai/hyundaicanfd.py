@@ -134,7 +134,13 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "LKA_MODE":                  lkas_alt_cam_msg["LKA_MODE"],
         "LKA_AVAILABLE":             lkas_alt_cam_msg["LKA_AVAILABLE"],
         "LKA_WARNING":               lka_warning_out,
-        "LKA_ICON":                  icon_value if icon_value is not None else lkas_alt_cam_msg["LKA_ICON"],
+        # Force green icon (LKA_ICON=2) whenever op is actively steering,
+        # regardless of MADS vs ACC-only engagement source. The previous
+        # logic relied on `mads_lka_icon` which is 0 ("off-but-visible") for
+        # ACC-only — leaving op steering visually indistinguishable from
+        # off. icon_value still drives the off-state (e.g., MADS off but
+        # cruise available → 0).
+        "LKA_ICON":                  2 if steering_active else (icon_value if icon_value is not None else lkas_alt_cam_msg["LKA_ICON"]),
         "FCA_SYSWARN":               fca_syswarn_out,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
