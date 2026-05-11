@@ -166,7 +166,7 @@ class CarControllerParams:
   OVERRIDE_SNAP_ENTER_FACTOR = 0.95
   OVERRIDE_SNAP_ENTER_FRAMES = 3      # 30 ms at 100Hz — quick reaction
   OVERRIDE_SNAP_EXIT_FACTOR  = 0.10
-  OVERRIDE_SNAP_EXIT_FRAMES  = 15     # 150 ms at 100Hz — faster re-engage
+  OVERRIDE_SNAP_EXIT_FRAMES  = 10     # 100 ms at 100Hz — faster re-engage (was 15 = 150ms)
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
