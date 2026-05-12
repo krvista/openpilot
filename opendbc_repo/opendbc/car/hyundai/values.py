@@ -145,25 +145,49 @@ class CarControllerParams:
 
   # Angle-control MDPS (Ioniq 6 N CCNC + CANFD_LKA_STEERING_ALT) reports
   # STEERING_COL_TORQUE that INCLUDES EPS reaction force during angle tracking,
-  # not just driver input like torque-control cars. Route 0x49 (433dad5bb2)
-  # evidence on ~210k latActive frames:
+  # not just driver input like torque-control cars. Route 0x49 evidence on
+  # ~210k latActive frames:
   #   - Light hand grip (steeringPressed=False): p50=36, p75=92, p90=184 Nm
   #   - Active driver steering (steeringPressed=True): p50=381, p75=488, p90=619 Nm
-  # Route 0x01 (a46e2136) confirmed: steeringPressed=47% at seg10 caused
-  # 44% PASSIVE time → steering "felt like stock LFA".
-  # Revised thresholds: DEADZONE covers p90 of light grip (184) with margin;
-  # override ramp starts only above active-steering p25 (~250 Nm).
-  DRIVER_TORQUE_DEADZONE_ANGLE              = 200.0
-  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 450.0
-  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 600.0
+  #
+  # 2026-05-12 (drivelog 0000000d, 22,309 op-active samples): the prior
+  # thresholds (DEADZONE=200, FULL=450/600) made override_factor sit at
+  # ~0.20 even at 250 Nm — desired_angle_deg blend (carcontroller.py:746)
+  # only pulled 20% toward the wheel, and op kept commanding the lane-keep
+  # angle. Result: 32.9% of latActive frames had op commanding >1° opposite
+  # to the driver's torque direction; 78.2% under blinker; 69.8% under
+  # <8 m/s. ACIGain (lowered in v2/v3) reduced MDPS authority, but the
+  # commanded angle itself was still toward the lane — the residual
+  # fraction reached the wheel as resistance.
+  #
+  # Revised thresholds tighten the override ramp so the driver-intent
+  # zone blends desired_angle_deg linearly toward the actual wheel:
+  #   - DEADZONE 200 -> 100: starts blending just above light-grip p75
+  #     (92). Light grip (<100 Nm) still gets override_factor=0 —
+  #     preserves hands-off stability for cruising.
+  #   - FULL_OVERRIDE_LOW_V  450 -> 200: full wheel-tracking at active-
+  #     steering p25 (250) range; reaches 0.50 by 150 Nm.
+  #   - FULL_OVERRIDE_HIGH_V 600 -> 350: same shape at highway, where
+  #     EPS reaction adds more to the reading.
+  # DRIVER_TORQUE_LOW_V_SPEED=8.0 / HIGH_V_SPEED=15.0 unchanged.
+  DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 200.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
 
   # Snap + grace-window re-engage for angle-control:
-  #   - enter snap when override_factor > 0.95 for N frames →
+  #   - enter snap when override_factor > 0.90 for N frames →
   #     apply_angle_last follows actual wheel angle (stop MADS fighting).
-  #   - exit snap only after override_factor < 0.05 for GRACE_FRAMES
-  #     (25 frames = 0.5 s @ 50 Hz) — prevents flickering in/out of override
-  #     and guarantees a smooth re-engage through the rate limiter.
-  OVERRIDE_SNAP_ENTER_FACTOR = 0.95
+  #   - 0.90 (was 0.95) — at the new FULL_OVERRIDE=200 Nm low-v this is
+  #     190 Nm: above light-grip p90 (184) so road-bumps don't trip it
+  #     (3-frame=30 ms minimum hold), but well inside active-steering so
+  #     the snap captures the moment the driver clearly takes over.
+  #   - exit snap only after override_factor < 0.10 for EXIT_FRAMES
+  #     — prevents flickering in/out of override.
+  # Blinker branch keeps `and not blinker_on` snap gate (carcontroller.py)
+  # so op's command stream stays continuous through lane-changes; the
+  # new desired_angle_deg blend handles blinker yield without the binary
+  # snap (78% blinker-fight reduced via blend alone).
+  OVERRIDE_SNAP_ENTER_FACTOR = 0.90
   OVERRIDE_SNAP_ENTER_FRAMES = 3      # 30 ms at 100Hz — quick reaction
   OVERRIDE_SNAP_EXIT_FACTOR  = 0.10
   OVERRIDE_SNAP_EXIT_FRAMES  = 10     # 100 ms at 100Hz — faster re-engage (was 15 = 150ms)
