@@ -271,6 +271,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.override_snapped = False
     self.override_enter_cnt = 0
     self.override_exit_cnt  = 0
+    # 2026-05-12 (5차): noise + transition smoothing for override path.
+    # steer_torque_lpf — 30 ms LPF on STEERING_COL_TORQUE absorbs ±5 Nm
+    #   CAN noise at the DEADZONE boundary (70/100 Nm) so override_factor
+    #   stays stable. tau matches OVERRIDE_SNAP_ENTER_FRAMES (3 frames).
+    # blinker_frac  — 300 ms LPF on the blinker boolean used to lerp
+    #   DEADZONE_ANGLE / FULL_OVERRIDE_*_ANGLE between the non-blinker
+    #   (100/200/350) and blinker (70/130/220) constants. Removes the
+    #   step in wheel-blend at light grip (92 Nm) when the driver flips
+    #   the turn signal. ACIGain blinker branch + snap gate still use
+    #   the raw boolean blinker_on so op authority yields instantly.
+    self.steer_torque_lpf = 0.0
+    self.blinker_frac = 0.0
     # Phase 4-B: stuck-angle jitter break counter
     self.jitter_counter = 0
     self.jitter_sign = 1
@@ -537,7 +549,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # limiter / trust estimator - so we clamp at the boundary.
     v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
     steer_angle_safe = float(CS.out.steeringAngleDeg) if np.isfinite(CS.out.steeringAngleDeg) else 0.0
-    steer_torque_safe = float(CS.out.steeringTorque) if np.isfinite(CS.out.steeringTorque) else 0.0
+    # 2026-05-12 (5차): 30 ms LPF on driver torque so ±5 Nm CAN noise at
+    # the DEADZONE boundary (70/100 Nm) does not flap override_factor
+    # between 0 and ~0.08. tau matches OVERRIDE_SNAP_ENTER_FRAMES so the
+    # filter never adds more delay than the snap counter already imposes
+    # on a real driver-takeover.
+    steer_torque_raw = float(CS.out.steeringTorque) if np.isfinite(CS.out.steeringTorque) else 0.0
+    self.steer_torque_lpf = 0.25 * steer_torque_raw + 0.75 * self.steer_torque_lpf
+    steer_torque_safe = self.steer_torque_lpf
     lon_accel = float(CS.out.aEgo) if np.isfinite(CS.out.aEgo) else 0.0
     op_curv_raw = float(CC.actuators.steeringAngleDeg)
     op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
@@ -555,19 +574,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # full override. Branch on ccnc_lka_alt to use the wider angle-calibrated
     # thresholds.
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
+    # 2026-05-12 (5차): smooth threshold transition between non-blinker
+    # (100/200/350) and blinker (70/130/220) constants using a 300 ms LPF
+    # on the blinker boolean. 4차 used a hard if/else, producing a 1-frame
+    # step in override_factor (0→0.37 at 92 Nm light grip) the moment the
+    # driver flipped the signal — risky for stability if the driver intended
+    # to keep the current lane. With alpha=0.032 the threshold takes ~900 ms
+    # to converge, well inside any real lane-change maneuver (>2 s) but
+    # smooth enough to avoid a wheel-blend cliff at signal onset.
+    blinker_target = 1.0 if blinker_on else 0.0
+    self.blinker_frac = 0.032 * blinker_target + 0.968 * self.blinker_frac
     if ccnc_lka_alt:
-      # 2026-05-12 (4th): blinker = explicit lane-change intent. Use lower
-      # override thresholds so light hand placement already pulls
-      # desired_angle_deg toward the wheel — no fighting the driver's
-      # chosen direction. Non-blinker thresholds preserved.
-      if blinker_on:
-        DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
-        override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER
-        override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER
-      else:
-        DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
-        override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
-        override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
+      DZ_NB = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
+      DZ_BL = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
+      DRIVER_TORQUE_DEADZONE = DZ_NB + (DZ_BL - DZ_NB) * self.blinker_frac
+
+      LO_NB = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
+      LO_BL = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER
+      override_low_v = LO_NB + (LO_BL - LO_NB) * self.blinker_frac
+
+      HI_NB = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
+      HI_BL = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER
+      override_high_v = HI_NB + (HI_BL - HI_NB) * self.blinker_frac
     else:
       DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
       override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V
@@ -612,6 +640,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.override_enter_cnt = 0
       self.override_exit_cnt = 0
       self.aci_gain_last = 0.0
+      # 5차: also reset 5차 smoothing states so next engage starts from
+      # the actual driver torque / blinker boolean, not whatever residue
+      # accumulated while disengaged.
+      self.steer_torque_lpf = 0.0
+      self.blinker_frac = 0.0
 
     # ---- ACI engagement: always-active for angle-control platforms ----
     # Angle-control MDPS: LKAS_ANGLE_ACTIVE=2 whenever latActive=True.
