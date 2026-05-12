@@ -105,8 +105,12 @@ class CarControllerParams:
   # Drivelog 0x15 analysis (80 entry events, 100Hz rlog) showed previous
   # values caused ~828ms d@90% for soft (<1.5°) corner entries vs 127ms after
   # the table revisions below; straight-line RMS 0.625°→0.632° (+1%, ignorable).
+  # 2026-05-12 (6차): drivelog 0000000f+10 (06edc40, 49k frames) showed
+  # apply_angle Δ p90 = 0.22°/frame on highway straights (op-side jitter
+  # passes through center). center tau 2.5→3.5 strengthens absorption
+  # near 0° while higher-angle behaviour is unchanged.
   VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
-  VTAU_ANGLE_V  = [2.5, 0.4, 0.20, 0.20]  # was [2.5, 1.0, ...]; soft regime sluggish
+  VTAU_ANGLE_V  = [3.5, 0.4, 0.20, 0.20]  # 6차: center 2.5→3.5 (jitter ↓)
   VTAU_SPEED_BP = [0.0, 3.0, 5.0, 15.0]  # m/s
   VTAU_SPEED_V  = [0.5, 0.3, 0.20, 0.0]  # was [5.0, 1.5, ...]; freeze<5kph already handles crawl
   # Speed-adaptive entering_curve threshold. Below 4 m/s the freeze latch is
@@ -116,8 +120,13 @@ class CarControllerParams:
   # slow; ψ-error correction sluggish at speed) lowers highway 1.5°→0.8° —
   # straight-line noise is now caught by the controlsd lane-confidence
   # damping before reaching this gate.
+  # 2026-05-12 (6차): drivelog 0000000f+10 showed |op|>10° corner entries
+  # had apply<op (understeer) 59% of frames with mean lag -0.72°. Highway
+  # entry_th 0.8° too conservative — gradual curve onsets never tripped
+  # so tau LPF kept smoothing op_desired. Lowered highway 0.8→0.5 (still
+  # > center jitter p90 0.24°/frame so false-trigger risk low).
   VTAU_ENTRY_TH_BP = [4.0, 15.0, 25.0]   # m/s
-  VTAU_ENTRY_TH_V  = [0.3, 0.7, 0.8]     # deg
+  VTAU_ENTRY_TH_V  = [0.3, 0.5, 0.5]     # 6차: highway 0.7/0.8 → 0.5/0.5 (curve onset earlier)
   VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
 
   # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
@@ -170,8 +179,15 @@ class CarControllerParams:
   #   - FULL_OVERRIDE_HIGH_V 600 -> 350: same shape at highway, where
   #     EPS reaction adds more to the reading.
   # DRIVER_TORQUE_LOW_V_SPEED=8.0 / HIGH_V_SPEED=15.0 unchanged.
+  #
+  # 2026-05-12 (6차): drivelog 0000000f+10 showed 150-200 Nm snap entry
+  # rate only 51% — the transition zone where driver clearly intends
+  # override but snap entry trip (190 Nm) was just above. Lowered
+  # FULL_OVERRIDE_LOW_V 200→180 so snap trip is 172 Nm, still safely
+  # above light-grip p90 (184 Nm) and absorbed by 5차 steer_torque_lpf
+  # (30 ms) against ±5 Nm CAN noise.
   DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
-  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 200.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0   # 6차: 200→180
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
 
   # 2026-05-12 (4th): blinker-specific override thresholds. A turn signal
