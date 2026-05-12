@@ -119,12 +119,20 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
       # The hands-off ceiling stays at 0.80 so when the driver releases,
       # the rate-up=0.05/frame ramp still hits a high ceiling within
       # ~80 ms and op finishes the lane change.
+      # 2026-05-12 (6차): drivelog 0000000f+10 showed user feedback on
+      # 30+ km/h parking-entry left turn with blinker active. At 242 Nm
+      # the prior map produced target=0.22 (MDPS 22% authority) — the
+      # driver still felt op pulling. Bumped down active/heavy levels
+      # (0.25→0.18, 0.15→0.08) and shortened bp_heavy (350-500 → 250-350)
+      # so strong-grip blinker zones reach floor 0.08 within active-steer
+      # p25 (250 Nm) range. Hands-off (0.80) and light-grip (0.55)
+      # unchanged — assistance for actual lane changes preserved.
       bp_grip   = 30.0
       bp_active = float(np.interp(v_ego, [2., 11.], [100., 125.]))
-      bp_heavy  = float(np.interp(v_ego, [2., 22.], [350., 500.]))
+      bp_heavy  = float(np.interp(v_ego, [2., 22.], [250., 350.]))   # 6차: 350-500 → 250-350
       target = float(np.interp(abs(steering_torque),
                                 [0.0, bp_grip, bp_active, bp_heavy],
-                                [0.80, 0.55,    0.25,      0.15]))
+                                [0.80, 0.55,    0.18,      0.08]))   # 6차: 0.25→0.18, 0.15→0.08
     else:
       ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
       shelf = float(np.interp(v_ego, [2., 11.], [0.22, 0.30]))
@@ -621,7 +629,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # effective_lat_active=True throughout the lane change so op's
     # steering command stream never goes silent — pair with the
     # symmetric blinker rate_up so release-to-takeover stays smooth.
-    if override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR and not blinker_on:
+    # 2026-05-12 (6차): exception for very heavy grip under blinker
+    # (>200 Nm LPF). User reported parking-entry left turn with hazards
+    # on (both blinkers) where op kept steering the lane direction
+    # against a 242 Nm grip — blend alone (apply≈wheel) still left
+    # MDPS authority of 22% so EPS pushed back. Treat 200+ Nm under
+    # blinker as "driver clearly not changing lanes" and let snap take
+    # over; exit grace 100 ms still releases promptly when driver lets go.
+    HEAVY_SNAP_OVERRIDE_TQ = 200.0
+    snap_blinker_override = blinker_on and abs(steer_torque_safe) > HEAVY_SNAP_OVERRIDE_TQ
+    if override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR and \
+       (not blinker_on or snap_blinker_override):
       self.override_enter_cnt += 1
       self.override_exit_cnt = 0
     elif override_factor <= CarControllerParams.OVERRIDE_SNAP_EXIT_FACTOR:
@@ -750,9 +768,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         vtau = max(angle_tau, speed_tau)
         # Highway upper-bound: angle_tau goes to 2.5 s for |angle|<1 deg (centered)
         # which is desirable as straight-line jitter suppression at low speed
-        # but turns into sluggish path tracking at highway. Cap tau <= 0.15 s
-        # at 25 m/s so psi-error corrections happen promptly.
-        speed_max_tau = float(np.interp(v_ego_safe, [10.0, 25.0], [2.5, 0.15]))
+        # but turns into sluggish path tracking at highway. Cap tau at 25 m/s
+        # so psi-error corrections happen promptly.
+        # 2026-05-12 (6차): highway cap 0.15→0.22 — drivelog 0000000f+10
+        # showed apply Δ p90 = 0.22°/frame on straights, op-side jitter
+        # passing through. 0.22 s tau absorbs 50 Hz noise while keeping
+        # psi corrections within 1 tau (~220 ms) — still well below the
+        # ~2 s planner lane-change window.
+        speed_max_tau = float(np.interp(v_ego_safe, [10.0, 25.0], [2.5, 0.22]))
         vtau = min(vtau, speed_max_tau)
 
         # Adaptive tau: sustained same-direction change = real correction (not noise).
