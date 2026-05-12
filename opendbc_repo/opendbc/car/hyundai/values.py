@@ -211,6 +211,17 @@ class CarControllerParams:
   # so op's command stream stays continuous through lane-changes; the
   # new desired_angle_deg blend handles blinker yield without the binary
   # snap (78% blinker-fight reduced via blend alone).
+  #
+  # 2026-05-12 (5차): the snap state is entirely bypassed under blinker —
+  # yield happens via the desired_angle_deg blend (1 - override_factor)
+  # alone. DEADZONE_ANGLE / FULL_OVERRIDE_*_ANGLE values above are
+  # lerped against DEADZONE_ANGLE_BLINKER / FULL_OVERRIDE_*_BLINKER
+  # using a 300 ms LPF (`self.blinker_frac`) so the threshold step at
+  # the moment the driver flips the turn signal becomes a smooth ramp,
+  # avoiding the 0→37% wheel-blend jump at light grip (92 Nm). The
+  # 190 Nm trip number above therefore applies only to non-blinker
+  # driving — under blinker, override_factor reaches 1.0 well before
+  # any snap could fire, and the boolean gate blocks entry anyway.
   OVERRIDE_SNAP_ENTER_FACTOR = 0.90
   OVERRIDE_SNAP_ENTER_FRAMES = 3      # 30 ms at 100Hz — quick reaction
   OVERRIDE_SNAP_EXIT_FACTOR  = 0.10
