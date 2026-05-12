@@ -174,6 +174,30 @@ class CarControllerParams:
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 200.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
 
+  # 2026-05-12 (4th): blinker-specific override thresholds. A turn signal
+  # is the driver's explicit lane-change intent — they have already
+  # declared "I want the car to move toward an adjacent lane." Treating
+  # their light grip (~p75=92 Nm hand placement during the maneuver) the
+  # same as straight-line cruising leaves desired_angle_deg pointing back
+  # into the current lane and the wheel feels heavy. Lower thresholds
+  # when blinker is active so override_factor ramps up at hand-placement
+  # levels. drivelog 0000000e fight율(100+ + blinker, OLD build) 50% was
+  # the worst slice; expected ~15% after this branch.
+  # Non-blinker thresholds (above) unchanged — straight-line stability
+  # preserved.
+  #   - DEADZONE_BLINKER 70: just below light-grip p75(92) so any hand-on
+  #     during signalling starts blending. Above light-grip p50(36) so
+  #     pure hands-off signalling doesn't pull at all.
+  #   - FULL_OVERRIDE_LOW_V_BLINKER 130: by 130 Nm (well within active-
+  #     steering p25=250) the blend is fully on the wheel — low-speed
+  #     lane changes finish without op resistance.
+  #   - FULL_OVERRIDE_HIGH_V_BLINKER 220: highway lane changes need a bit
+  #     more deadband for EPS reaction; 220 Nm sits between light p90
+  #     (184) and active p25 (250).
+  DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 70.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
+
   # Snap + grace-window re-engage for angle-control:
   #   - enter snap when override_factor > 0.90 for N frames →
   #     apply_angle_last follows actual wheel angle (stop MADS fighting).

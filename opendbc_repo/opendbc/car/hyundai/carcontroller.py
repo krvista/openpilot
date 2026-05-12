@@ -177,16 +177,18 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   #   Yield: rate_dn forced to 0.05 so the 1.0→0.5 yield reaches the wheel
   #     within ~100 ms — already in place.
   #   Recovery: when the driver releases mid-lane-change, the target jumps
-  #     from the active-grip levels (0.30~0.40) up to the hands-off level
-  #     (0.70). With the default ACI_GAIN_RATE_UP=0.004/frame it took
-  #     ~750 ms to ramp — long enough that the user perceived op as "not
-  #     recognizing" the wheel release. Mirror the yield rate on the up
-  #     side under blinker so op re-engages the lane-change motion in
-  #     ~80 ms, well under the planner's lane-change trajectory window.
+  #     from the active-grip levels (0.15~0.25) up to the hands-off level
+  #     (0.80). 2026-05-12 (4th): user feedback "깜빡이가 켜져있더라도
+  #     운전자가 핸들을 놓으면 바로 op가 이어받도록" — bumped rate_up
+  #     0.05 → 0.10 so the 0.15→0.80 ramp completes in ~40 ms (4 frames @
+  #     100 Hz) instead of ~80 ms. Paired with the blinker override_factor
+  #     branch (DEADZONE 70 / FULL 130/220) which drops override_factor
+  #     to 0 the moment torque falls below ~70 Nm, so desired_angle_deg
+  #     snaps to op within 1 frame and ACIGain hits ceiling 40 ms later.
   rate_up_mag = CarControllerParams.ACI_GAIN_RATE_UP
   if blinker_on:
     rate_dn_mag = max(rate_dn_mag, 0.05)
-    rate_up_mag = max(rate_up_mag, 0.05)
+    rate_up_mag = max(rate_up_mag, 0.10)
   gain = rate_limit(target, last_gain, -rate_dn_mag, rate_up_mag)
   return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
 
@@ -552,10 +554,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # cars), so the torque-control thresholds flag every hand placement as
     # full override. Branch on ccnc_lka_alt to use the wider angle-calibrated
     # thresholds.
+    blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
     if ccnc_lka_alt:
-      DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
-      override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
-      override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
+      # 2026-05-12 (4th): blinker = explicit lane-change intent. Use lower
+      # override thresholds so light hand placement already pulls
+      # desired_angle_deg toward the wheel — no fighting the driver's
+      # chosen direction. Non-blinker thresholds preserved.
+      if blinker_on:
+        DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
+        override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER
+        override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER
+      else:
+        DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
+        override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
+        override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
     else:
       DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
       override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V
@@ -568,7 +580,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     override_factor = float(np.clip((driver_abs_torque - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
     driver_torque_blend = 1.0 - override_factor  # 1.0 = full ACI, 0.0 = fully yielded
-    blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     # Phase 5: snap-to-wheel + grace-window state machine.
     # Enter snap after sustained full override; exit only after sustained
