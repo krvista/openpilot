@@ -834,6 +834,26 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           apply_angle, self.apply_angle_last, v_ego_safe,
           steer_angle_safe, rate_lat_active, self.params, self.BASELINE_VM,
         )
+        # 2026-05-12 (7차): self-aligning protection during recentering.
+        # When the wheel is well off-center, the driver has gone light
+        # (releasing self-aligning torque), AND op's desired angle is
+        # smaller in magnitude than the wheel, never let apply_angle pull
+        # the wheel further from center. Drivelog 0000000f+10 confirmed
+        # the user-reported >70° turn + release scenario is already
+        # handled by snap entry (|apply-wheel|=0.29° p50 under strong
+        # grip), but this guard catches any short transient where op
+        # could still lead the wheel after snap exit. Conditions are
+        # conservative - in drivelog only ~1% of light-grip frames meet
+        # all four (large turn + light grip + op wants smaller + apply
+        # outside), so normal op corner tracking is unaffected. Snap and
+        # blend behavior in all other regimes is preserved.
+        if apply_angle is not None and abs(steer_angle_safe) > 15.0 and \
+           abs(steer_torque_safe) < 80.0:
+          sign_w = float(np.sign(steer_angle_safe))
+          op_wants_smaller = sign_w * op_curv_safe < sign_w * steer_angle_safe - 5.0
+          apply_outside_wheel = sign_w * apply_angle > sign_w * steer_angle_safe
+          if op_wants_smaller and apply_outside_wheel:
+            apply_angle = steer_angle_safe
       if apply_angle is None:
         # VM rate limiter rejected the command (lateral accel limit violated
         # while rate limit can't pull back fast enough - typically a tight
