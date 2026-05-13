@@ -26,6 +26,12 @@ MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
+# Width of the synthetic LFA_BUTTON pulse op emits on each MADS enabled-state
+# edge to keep the cluster's LFA green icon in lockstep with MADS. 2 frames at
+# 100 Hz ≈ 20 ms — same envelope the stock camera uses when it ACKs a real
+# wheel-button press, so the gateway's edge-detector behaves identically.
+LFA_SYNC_PULSE_FRAMES = 2
+
 def is_ccnc_angle_platform(flags):
   """True for Hyundai/Kia cars on the HDA2-ALT + CCNC angle-control path.
 
@@ -315,6 +321,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # any realistic continuity-watchdog window.
     self.suppress_lfa_counter = 0
     self.prev_fault_lfa = 0
+    # MADS↔cluster sync. The stock gateway ECU (publishing CCNC_0x161/0x162 on
+    # bus 1) maintains the cluster's LFA green icon and toggles it on each
+    # rising edge of LKAS_ALT.LFA_BUTTON it observes. Since op intercepts
+    # LKAS_ALT on the ADAS-DRV-facing bus, we can drive that bit ourselves:
+    # on every MADS enabled-state edge we hold LFA_BUTTON=1 for
+    # `LFA_SYNC_PULSE_FRAMES` carcontroller frames (~20 ms at 100 Hz),
+    # matching the camera's native press-ACK pulse width so the gateway
+    # toggles its internal LFA state exactly once per MADS transition.
+    self.prev_mads_enabled = False
+    self.lfa_sync_pulse_remaining = 0
     # Lateral-alert flags exposed to controlsd via CarOutput. card.py reads
     # these counters and trips Bool flags at threshold; selfdrived pushes
     # the matching onroadEvents (lateralAccelLimit / steerAngleLimit /
@@ -923,7 +939,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # where MADS is still the active assistance source.
     # Off-but-available (ACC main on, MADS off): icon=0 (off but visible).
     # ACC main off and MADS off: None -> camera passthrough (stock LFA icon).
-    mads_enabled = getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled
+    mads_enabled = bool(getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled)
     if ccnc_lka_alt:
       if mads_enabled:
         mads_lka_icon = 2
@@ -933,6 +949,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         mads_lka_icon = None
     else:
       mads_lka_icon = None
+
+    # MADS↔cluster sync pulse. Any MADS enabled-state edge — whether the
+    # source is a stock LFA wheel-button press routed through
+    # carstate.lfa_button_oem, an auto-attach with ACC, or a manual cancel —
+    # rearms a short LFA_BUTTON pulse on op's outgoing LKAS_ALT. The stock
+    # gateway interprets this as a button press and toggles the cluster icon
+    # exactly once, so the green light tracks MADS state regardless of how the
+    # transition was triggered. Gated to ccnc_lka_alt because non-HDA2-ALT
+    # platforms don't share this gateway path.
+    if ccnc_lka_alt and mads_enabled != self.prev_mads_enabled:
+      self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
+    self.prev_mads_enabled = mads_enabled
+    lfa_sync_pulse = self.lfa_sync_pulse_remaining > 0
+    if self.lfa_sync_pulse_remaining > 0:
+      self.lfa_sync_pulse_remaining -= 1
 
     if ccnc_lka_alt:
       fault_lfa = getattr(CS, 'fault_lfa', 0)
@@ -1018,7 +1049,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                          lon_accel=lon_accel,
                                                          effective_aci_gain=effective_aci_gain,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
-                                                         cam_invalid=bool(cam_stale_tripped or fault_lfa_bool)))
+                                                         cam_invalid=bool(cam_stale_tripped or fault_lfa_bool),
+                                                         lfa_sync_pulse=lfa_sync_pulse))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
