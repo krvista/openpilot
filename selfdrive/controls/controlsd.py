@@ -30,6 +30,19 @@ LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
+# Lateral accel envelope used to normalize the predicted ratio for the
+# curveSpeedAdvisory event. Matches CarControllerParams.ANGLE_LIMITS_VM.
+# MAX_LATERAL_ACCEL in opendbc/car/hyundai/values.py — angle-control panda
+# safety enforces the same number, so the ratio is comparable to the
+# threshold that trips vmLimitTripped. Non-angle cars never trip the
+# envelope but the ratio is still computed for unified logging.
+LAT_ACCEL_ENVELOPE = 3.0 + 9.81 * 0.06  # ~3.59 m/s²
+
+# EMA time constant for the predicted ratio (s). Short enough to react to
+# an imminent ramp/curve, long enough to suppress single-frame modelV2
+# noise. With DT_CTRL=0.01s this gives alpha ≈ 0.033 per frame.
+PRED_RATIO_TAU = 0.3
+
 
 class Controls(ControlsExt):
   def __init__(self) -> None:
@@ -52,6 +65,7 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.predicted_lat_accel_ratio = 0.0
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -113,6 +127,45 @@ class Controls(ControlsExt):
     curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
     return float(curv) if np.isfinite(curv) else fallback
 
+  def _predicted_lat_accel_excess(self, model_v2, v_ego, lookahead_s=1.5):
+    """Predicted v²·κ at lookahead_s ahead, normalized by LAT_ACCEL_ENVELOPE.
+
+    Returns 0.0 when v_ego is too low, the trajectory is too short, or the
+    polyfit is unusable. Used by curveSpeedAdvisory to give the driver a
+    soft heads-up ~1.5 s before the angle-control envelope trips.
+    """
+    if v_ego < 2.0:
+      return 0.0
+
+    pos_x = model_v2.position.x
+    pos_y = model_v2.position.y
+    n = len(pos_x)
+    if n < 5:
+      return 0.0
+
+    dist_ahead = min(v_ego * lookahead_s, 30.0)
+    if dist_ahead < 1.0:
+      return 0.0
+
+    n = min(n, 24)
+    x = np.fromiter((pos_x[i] for i in range(n)), dtype=np.float64, count=n)
+    y = np.fromiter((pos_y[i] for i in range(n)), dtype=np.float64, count=n)
+
+    if x[-1] < dist_ahead or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+      return 0.0
+
+    try:
+      c = np.polyfit(x, y, 3)
+    except (np.linalg.LinAlgError, ValueError):
+      return 0.0
+
+    curv_pred = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
+    if not np.isfinite(curv_pred):
+      return 0.0
+
+    a_lat_pred = v_ego * v_ego * abs(curv_pred)
+    return float(a_lat_pred / LAT_ACCEL_ENVELOPE)
+
   def state_control(self):
     CS = self.sm['carState']
 
@@ -140,6 +193,13 @@ class Controls(ControlsExt):
 
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
+
+    # curveSpeedAdvisory: EMA-filtered ratio of predicted v²·κ at 1.5 s
+    # lookahead to LAT_ACCEL_ENVELOPE. Updated every frame (cheap) so the
+    # advisory can fire just before latActive engages too.
+    raw_ratio = self._predicted_lat_accel_excess(model_v2, CS.vEgo, lookahead_s=1.5)
+    alpha = DT_CTRL / max(PRED_RATIO_TAU, DT_CTRL)
+    self.predicted_lat_accel_ratio = (1.0 - alpha) * self.predicted_lat_accel_ratio + alpha * raw_ratio
 
     CC = car.CarControl.new_message()
     CC.enabled = self.sm['selfdriveState'].enabled
@@ -286,6 +346,7 @@ class Controls(ControlsExt):
     cs.ufAccelCmd = float(self.LoC.pid.f)
     cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
+    cs.predictedLatAccelRatio = float(self.predicted_lat_accel_ratio)
 
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:

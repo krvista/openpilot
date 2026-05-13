@@ -321,6 +321,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # cameraDataStale). Frame counters here implement N-frame hysteresis
     # so transient single-frame trips do not spam alerts.
     self.alert_vm_limit_frames = 0
+    # 10 s cooldown (1000 frames @ 100 Hz) gating vmLimitTripped publish after
+    # each trip. Lets users distinguish "this corner is tight" from "this
+    # whole road is tight" without spamming the alert for the same ramp.
+    # cloudlog warnings still fire on every trip so the data is preserved.
+    self.alert_vm_limit_cooldown_frames = 0
     self.alert_max_angle_frames = 0
     self.alert_cam_stale_frames = 0
     self.was_in_reverse = False
@@ -420,6 +425,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if is_ccnc_angle_platform(self.CP.flags):
       new_actuators.steeringAngleDeg = self.apply_angle_last
     new_actuators.accel = self.tuning.actual_accel
+
+    if self.alert_vm_limit_cooldown_frames > 0:
+      self.alert_vm_limit_cooldown_frames -= 1
 
     self.frame += 1
     return new_actuators, can_sends
@@ -874,6 +882,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # Log telemetry so we can quantify how often this fires per drive.
         if v_ego_safe > 8.0:
           self.alert_vm_limit_frames = min(self.alert_vm_limit_frames + 1, 100)
+          # Rising edge of vmLimitTripped (frames just crossed the 50-frame
+          # publish threshold and no cooldown active): start a 10 s window
+          # during which card.py keeps vmLimitTripped=False even if the
+          # frame counter is still above the threshold. Lets users tell
+          # apart "this corner" vs "this whole road" without alert spam.
+          if self.alert_vm_limit_frames == 50 and self.alert_vm_limit_cooldown_frames == 0:
+            self.alert_vm_limit_cooldown_frames = 1000
           if (self.alert_vm_limit_frames % 100) == 1:  # rate-limit cloudlog to ~1Hz
             cloudlog.warning(
               f"VM_LIMIT_TRIP: holding apply_angle={self.apply_angle_last:.1f} "

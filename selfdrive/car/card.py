@@ -240,12 +240,16 @@ class Car:
     co_send.valid = self.sm.all_checks(['carControl'])
     co_send.carOutput.actuatorsOutput = self.last_actuators_output
     # Lateral alert flags from CarController hysteresis counters. Trip
-    # thresholds: VM-limit >=30 frames (~300 ms of sustained rejection),
+    # thresholds: VM-limit >=50 frames (~500 ms of sustained rejection,
+    # raised from 30 to suppress short on-ramp spikes — the carcontroller
+    # additionally clamps re-fires for 10 s after each trip via the
+    # alert_vm_limit_cooldown_frames counter),
     # max-angle >=5 frames (50 ms - faster because EPS fault is imminent),
     # cam-stale >=30 frames (300 ms after the 250 ms staleness threshold).
     cc_obj = getattr(self.CI, 'CC', None)
     if cc_obj is not None:
-      co_send.carOutput.vmLimitTripped = getattr(cc_obj, 'alert_vm_limit_frames', 0) >= 30
+      cooldown = getattr(cc_obj, 'alert_vm_limit_cooldown_frames', 0)
+      co_send.carOutput.vmLimitTripped = (cooldown == 0) and (getattr(cc_obj, 'alert_vm_limit_frames', 0) >= 50)
       co_send.carOutput.steerAngleLimitTripped = getattr(cc_obj, 'alert_max_angle_frames', 0) >= 5
       co_send.carOutput.cameraDataStaleTripped = getattr(cc_obj, 'alert_cam_stale_frames', 0) >= 30
     self.pm.send('carOutput', co_send)

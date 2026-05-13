@@ -120,6 +120,7 @@ class SelfdriveD(CruiseHelper):
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
     self.events = Events()
+    self.curve_advisory_active = False
 
     self.initialized = False
     self.enabled = False
@@ -215,6 +216,21 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.steerAngleLimit)
     if co.cameraDataStaleTripped:
       self.events.add(EventName.cameraDataStale)
+
+    # curveSpeedAdvisory: silent visual heads-up when predicted v²·κ at 1.5 s
+    # lookahead approaches the angle-control envelope. Hysteresis 0.65/0.85
+    # prevents flicker around the threshold and the advisory is suppressed
+    # while vmLimitTripped is already firing (the Tight Curve alert handles
+    # that case). Ratio is published by controlsd; non-angle cars get 0.
+    ratio = self.sm['controlsState'].predictedLatAccelRatio
+    if co.vmLimitTripped:
+      self.curve_advisory_active = False
+    elif ratio > 0.85:
+      self.curve_advisory_active = True
+    elif ratio < 0.65:
+      self.curve_advisory_active = False
+    if self.curve_advisory_active:
+      self.events.add(EventName.curveSpeedAdvisory)
 
     # Don't add any more events while in dashcam mode
     if self.CP.passive:
