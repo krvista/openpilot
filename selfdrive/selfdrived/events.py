@@ -594,6 +594,21 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.steerRequired, AudibleAlert.prompt, 1.5),
   },
 
+  # Soft heads-up before an angle-control envelope trip. Fires when the
+  # predicted v²·κ at ~1.5 s lookahead crosses 85% of LAT_ACCEL_ENVELOPE
+  # while the envelope is not yet tripped. Silent (visual only, small,
+  # normal status) so it does not compete with the real Tight Curve alert
+  # when the ramp actually exceeds the envelope. If the driver acts on it
+  # (small lift / cruise set-speed down), the subsequent vmLimitTripped is
+  # naturally suppressed by the 10 s cooldown in the carcontroller.
+  EventName.curveSpeedAdvisory: {
+    ET.WARNING: Alert(
+      "Curve Ahead, Consider Slowing",
+      "",
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOWEST, VisualAlert.none, AudibleAlert.none, 1.5),
+  },
+
   # Steering angle approached the EPS fault threshold (>=85 deg sustained).
   # Op cut apply_steer_req to avoid an EPS latch - driver must take over.
   EventName.steerAngleLimit: {
