@@ -1,5 +1,6 @@
 venv/
 .venv/
+drivelog/
 .ci_cache
 .env
 .clang-format
