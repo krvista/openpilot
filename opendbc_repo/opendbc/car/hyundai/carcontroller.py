@@ -742,7 +742,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # are in stop-and-go or slow flow — and op should hold the lane.
     # `steeringPressed` is the carstate hysteresis flag, so light contact
     # without applied torque still trips it and preserves the parking feel.
-    hands_off = not CS.out.steeringPressed
+    #
+    # 11th: i6n's STEER_THRESHOLD=350 Nm leaves a 100-350 Nm band where the
+    # driver IS actively steering (parking grip p90=184 Nm, hard p50=381 Nm
+    # per values.py:159-160) but `steeringPressed` is still False, so the
+    # PR #10 bypass wrongly classified these frames as hands-off. Require
+    # override_factor to also agree (≤0.5, ~140 Nm at low speed given the
+    # 100/180 deadzone/full curve) before declaring hands-off. Drivelog
+    # 99b215d21bbf8735_00000013 sim (tools/ioniq6n_patch11_sim.py): of 47k
+    # frames, 17,863 had steeringPressed=False but override_factor=1.0
+    # (full driver override); restoring those to the latch saves 10,099
+    # active-grip low-speed frames from op contention.
+    hands_off = (not CS.out.steeringPressed) and (override_factor <= 0.5)
     if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS and not hands_off:
       self.low_speed_cam_latched = True
     elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS or hands_off:
@@ -1009,7 +1020,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           f"LFA_ICON transition: {self.prev_lfa_icon} -> {lfa_icon} "
           f"mads={bool(mads_enabled)} cruise_en={CS.out.cruiseState.enabled} "
           f"cruise_avail={CS.out.cruiseState.available} cam_lfa_btn={cam_lfa_btn} "
-          f"lat_active={CC.latActive} v_kph={CS.out.vEgoRaw*3.6:.1f}"
+          f"lat_active={CC.latActive} v_kph={CS.out.vEgoRaw*3.6:.1f} "
+          f"in_passthrough={in_passthrough} override_snapped={self.override_snapped} "
+          f"aci_active={self.aci_active_latched}"
         )
       self.prev_lfa_icon = lfa_icon
 
