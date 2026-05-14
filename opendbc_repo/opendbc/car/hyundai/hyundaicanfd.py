@@ -42,8 +42,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
                              driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
                              aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
                              mads_lka_icon=None, lon_accel=0.0, effective_aci_gain=None,
-                             mads_force_assist=False, cam_invalid=False,
-                             lfa_sync_pulse=False):
+                             mads_force_assist=False, cam_invalid=False):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
@@ -145,15 +144,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "FCA_SYSWARN":               fca_syswarn_out,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
-        # LFA_BUTTON drives the stock gateway ECU's internal LFA toggle which in
-        # turn controls the cluster's LFA green icon on bus 1's CCNC_0x161/0x162
-        # (we don't publish those addresses — see carcontroller's note on the
-        # dual-publisher hazard, c6a33de). To keep cluster green in lockstep
-        # with MADS, the carcontroller emits a synthetic one-frame `lfa_sync_pulse`
-        # on every MADS enabled-state edge. When that pulse is active we force
-        # the bit high; otherwise we mirror the camera's bit so any direct
-        # press the camera still observes also propagates to the gateway.
-        "LFA_BUTTON":                1 if lfa_sync_pulse else lkas_alt_cam_msg["LFA_BUTTON"],
+        "LFA_BUTTON":                lkas_alt_cam_msg["LFA_BUTTON"],
         # Force LKA_ASSIST=1 when MADS is enabled, even during transient
         # passive states (in_passthrough, override_snapped, was_in_reverse,
         # or VM rate-limit hold). Without this the cluster's green steering

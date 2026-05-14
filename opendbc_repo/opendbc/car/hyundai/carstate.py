@@ -37,14 +37,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.main_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.lda_button = 0
-    # OEM LFA button from the camera-sent LKAS_ALT message. On the HDA2-ALT +
-    # CCNC angle-control platform (Ioniq 6 N 2026), the stock LFA wheel button
-    # press does NOT toggle CRUISE_BUTTONS_ALT.LDA_BTN — that bit never goes
-    # high across an entire route. The press surfaces only as a ~20 ms ACK
-    # pulse on LKAS_ALT.LFA_BUTTON published by the camera on the CAM bus.
-    # Captured here so a rising edge can be folded into ButtonType.lkas in
-    # `update_canfd` for MADS toggle parity with stock LFA UX.
-    self.lfa_button_oem = 0
 
     self.gear_msg_canfd = "ACCELERATOR" if CP.flags & HyundaiFlags.EV else \
                           "GEAR_ALT" if CP.flags & HyundaiFlags.CANFD_ALT_GEARS else \
@@ -337,7 +329,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     prev_cruise_buttons = self.cruise_buttons[-1]
     prev_main_buttons = self.main_buttons[-1]
     prev_lda_button = self.lda_button
-    prev_lfa_button_oem = self.lfa_button_oem
     self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     self.lda_button = cp.vl[self.cruise_btns_msg_canfd]["LDA_BTN"]
@@ -358,16 +349,12 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     # pipeline rather than falling back to LKA.
     if (self.CP.flags & HyundaiFlags.CCNC) and (self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT):
       self.lkas_alt_cam_msg = copy.copy(cp_cam.vl["LKAS_ALT"])
-      # OEM stock LFA wheel button press surfaces as a one-frame (~20 ms) ACK
-      # pulse on the camera-sent LKAS_ALT.LFA_BUTTON bit, not on LDA_BTN.
-      self.lfa_button_oem = int(self.lkas_alt_cam_msg["LFA_BUTTON"])
 
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
-                        *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas}),
-                        *create_button_events(self.lfa_button_oem, prev_lfa_button_oem, {1: ButtonType.lkas})]
+                        *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
 
     if self.CP.openpilotLongitudinalControl:
       ret.cruiseState.available = self.get_main_cruise(ret)

@@ -26,12 +26,6 @@ MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
-# Width of the synthetic LFA_BUTTON pulse op emits on each MADS enabled-state
-# edge to keep the cluster's LFA green icon in lockstep with MADS. 2 frames at
-# 100 Hz ≈ 20 ms — same envelope the stock camera uses when it ACKs a real
-# wheel-button press, so the gateway's edge-detector behaves identically.
-LFA_SYNC_PULSE_FRAMES = 2
-
 def is_ccnc_angle_platform(flags):
   """True for Hyundai/Kia cars on the HDA2-ALT + CCNC angle-control path.
 
@@ -263,6 +257,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.aci_gain_last = 0.0
     self.low_speed_cam_latched = False
     self.traffic_following = False
+    # Diagnostic capture for CCNC_0x161.LFA_ICON transitions, used to chase
+    # the open question of which signal actually drives the cluster's LFA
+    # icon. Drivelog 00000013 (PR #9 in flight) showed the icon toggling
+    # between HIDDEN(0) and GRAY(1) but never reaching GREEN(2), while op's
+    # synthetic LFA_BUTTON pulse on LKAS_ALT had no observable effect.
+    # cloudlog the surrounding state on every transition so the next
+    # drivelog narrows the search.
+    self.prev_lfa_icon = -1
     # Phase 4-A: vehicle model for VM-based jerk/accel limiting.
     # BASELINE_VM (Sportage 5th gen) is used as a SECOND, more conservative
     # safety check after the i6n-tuned VM in apply_steer_angle_limits_vm —
@@ -321,16 +323,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # any realistic continuity-watchdog window.
     self.suppress_lfa_counter = 0
     self.prev_fault_lfa = 0
-    # MADS↔cluster sync. The stock gateway ECU (publishing CCNC_0x161/0x162 on
-    # bus 1) maintains the cluster's LFA green icon and toggles it on each
-    # rising edge of LKAS_ALT.LFA_BUTTON it observes. Since op intercepts
-    # LKAS_ALT on the ADAS-DRV-facing bus, we can drive that bit ourselves:
-    # on every MADS enabled-state edge we hold LFA_BUTTON=1 for
-    # `LFA_SYNC_PULSE_FRAMES` carcontroller frames (~20 ms at 100 Hz),
-    # matching the camera's native press-ACK pulse width so the gateway
-    # toggles its internal LFA state exactly once per MADS transition.
-    self.prev_mads_enabled = False
-    self.lfa_sync_pulse_remaining = 0
     # Lateral-alert flags exposed to controlsd via CarOutput. card.py reads
     # these counters and trips Bool flags at threshold; selfdrived pushes
     # the matching onroadEvents (lateralAccelLimit / steerAngleLimit /
@@ -726,9 +718,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # the camera's fields verbatim in the op-emitted frame. Driver has
     # no assist AND no resistance at creep speed - identical to stock
     # LFA feel. Hysteresis on vEgoRaw prevents stop-and-go flapping.
-    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
+    #
+    # Hands-off bypass: the passthrough only emulates stock LFA's
+    # parking-lot self-centering bias, which only matters when the
+    # driver has hands on the wheel. If the driver has lifted off
+    # (steeringPressed=False), they are by definition not parking — they
+    # are in stop-and-go or slow flow — and op should hold the lane.
+    # `steeringPressed` is the carstate hysteresis flag, so light contact
+    # without applied torque still trips it and preserves the parking feel.
+    hands_off = not CS.out.steeringPressed
+    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS and not hands_off:
       self.low_speed_cam_latched = True
-    elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
+    elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS or hands_off:
       self.low_speed_cam_latched = False
     # Traffic-following override: a close lead (<3m, with 5m exit) means
     # we're in stop-and-go traffic, NOT a parking lot - keep op engaged
@@ -939,7 +940,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # where MADS is still the active assistance source.
     # Off-but-available (ACC main on, MADS off): icon=0 (off but visible).
     # ACC main off and MADS off: None -> camera passthrough (stock LFA icon).
-    mads_enabled = bool(getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled)
+    mads_enabled = getattr(self._cc_sp, 'mads', None) and self._cc_sp.mads.enabled
     if ccnc_lka_alt:
       if mads_enabled:
         mads_lka_icon = 2
@@ -949,21 +950,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         mads_lka_icon = None
     else:
       mads_lka_icon = None
-
-    # MADS↔cluster sync pulse. Any MADS enabled-state edge — whether the
-    # source is a stock LFA wheel-button press routed through
-    # carstate.lfa_button_oem, an auto-attach with ACC, or a manual cancel —
-    # rearms a short LFA_BUTTON pulse on op's outgoing LKAS_ALT. The stock
-    # gateway interprets this as a button press and toggles the cluster icon
-    # exactly once, so the green light tracks MADS state regardless of how the
-    # transition was triggered. Gated to ccnc_lka_alt because non-HDA2-ALT
-    # platforms don't share this gateway path.
-    if ccnc_lka_alt and mads_enabled != self.prev_mads_enabled:
-      self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
-    self.prev_mads_enabled = mads_enabled
-    lfa_sync_pulse = self.lfa_sync_pulse_remaining > 0
-    if self.lfa_sync_pulse_remaining > 0:
-      self.lfa_sync_pulse_remaining -= 1
 
     if ccnc_lka_alt:
       fault_lfa = getattr(CS, 'fault_lfa', 0)
@@ -978,6 +964,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       elif not fault_lfa and self.prev_fault_lfa:
         cloudlog.warning("FAULT_LFA cleared")
       self.prev_fault_lfa = fault_lfa
+
+    # Diagnostic: log CCNC_0x161.LFA_ICON transitions. Drivelog 00000013
+    # showed the icon never reaching GREEN(2) on PR #9, only HIDDEN(0) /
+    # GRAY(1) — the cluster ignores op's LKAS_ALT.LFA_BUTTON pulses, so
+    # whatever drives this icon lives elsewhere. Capture the surrounding
+    # state on each edge so the next drivelog can pinpoint the signal.
+    if ccnc_lka_alt:
+      lfa_icon = int(getattr(CS, 'msg_161', {}).get('LFA_ICON', 0)) if getattr(CS, 'msg_161', None) else 0
+      if lfa_icon != self.prev_lfa_icon and self.prev_lfa_icon != -1:
+        cam_lfa_btn = int(lkas_alt_cam_msg.get('LFA_BUTTON', 0)) if lkas_alt_cam_msg is not None else 0
+        cloudlog.warning(
+          f"LFA_ICON transition: {self.prev_lfa_icon} -> {lfa_icon} "
+          f"mads={bool(mads_enabled)} cruise_en={CS.out.cruiseState.enabled} "
+          f"cruise_avail={CS.out.cruiseState.available} cam_lfa_btn={cam_lfa_btn} "
+          f"lat_active={CC.latActive} v_kph={CS.out.vEgoRaw*3.6:.1f}"
+        )
+      self.prev_lfa_icon = lfa_icon
 
     if ccnc_lka_alt:
       gear = CS.out.gearShifter
@@ -1049,8 +1052,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                          lon_accel=lon_accel,
                                                          effective_aci_gain=effective_aci_gain,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
-                                                         cam_invalid=bool(cam_stale_tripped or fault_lfa_bool),
-                                                         lfa_sync_pulse=lfa_sync_pulse))
+                                                         cam_invalid=bool(cam_stale_tripped or fault_lfa_bool)))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):
