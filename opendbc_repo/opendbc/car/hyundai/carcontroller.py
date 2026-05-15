@@ -685,15 +685,44 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # over; exit grace 100 ms still releases promptly when driver lets go.
     HEAVY_SNAP_OVERRIDE_TQ = 200.0
     snap_blinker_override = blinker_on and abs(steer_torque_safe) > HEAVY_SNAP_OVERRIDE_TQ
-    if override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR and \
-       (not blinker_on or snap_blinker_override):
+    heavy_override_active = (override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR
+                             and (not blinker_on or snap_blinker_override))
+
+    # 14th: driver-active yield. Patches #12/#13 only react after the driver
+    # releases (snap-exit or release-time mismatch). User reported that
+    # during a 50°+ turn made with moderate grip (30-170 Nm — above a light
+    # hold but below the heavy snap threshold of 170+ Nm at low speed), op
+    # still blends into the wheel via the partial-override path, producing
+    # a slight stutter. Extend override_snapped entry to fire under
+    # "moderate driver-active steering": high wheel angle + meaningful
+    # grip + the wheel position is NOT being commanded by op (mismatch
+    # ≥ 20°). The mismatch gate excludes op-driven 50°+ corners (where the
+    # driver simply has hands resting) so op doesn't disengage mid-curve.
+    # Stay-condition uses lower thresholds so brief torque dips during the
+    # turn don't break the snap, and an exit_factor=0.1 path won't fire
+    # prematurely while the driver is still actively steering (the
+    # moderate-grip torque is below DEADZONE so override_factor=0 — would
+    # otherwise trigger the existing exit branch).
+    DRIVER_ACTIVE_STEERING_ANGLE_DEG = 50.0
+    DRIVER_ACTIVE_STEERING_TORQUE_NM = 30.0
+    DRIVER_ACTIVE_MISMATCH_DEG       = 20.0
+    DRIVER_ACTIVE_STAY_ANGLE_DEG     = 30.0
+    DRIVER_ACTIVE_STAY_TORQUE_NM     = 20.0
+    moderate_entry = (abs(steer_angle_safe) >= DRIVER_ACTIVE_STEERING_ANGLE_DEG
+                      and abs(steer_torque_safe) >= DRIVER_ACTIVE_STEERING_TORQUE_NM
+                      and not self.override_snapped
+                      and abs(self.apply_angle_last - steer_angle_safe) >= DRIVER_ACTIVE_MISMATCH_DEG)
+    moderate_stay = (abs(steer_angle_safe) >= DRIVER_ACTIVE_STAY_ANGLE_DEG
+                     and abs(steer_torque_safe) >= DRIVER_ACTIVE_STAY_TORQUE_NM)
+
+    if heavy_override_active or moderate_entry:
       self.override_enter_cnt += 1
       self.override_exit_cnt = 0
-    elif override_factor <= CarControllerParams.OVERRIDE_SNAP_EXIT_FACTOR:
+    elif override_factor <= CarControllerParams.OVERRIDE_SNAP_EXIT_FACTOR and not moderate_stay:
       self.override_exit_cnt += 1
       self.override_enter_cnt = 0
     else:
-      # in-between: hold counters (don't accumulate, don't reset)
+      # in-between or moderate-stay holding: hold counters (don't accumulate, don't reset)
       pass
     prev_override_snapped = self.override_snapped
     if not self.override_snapped and self.override_enter_cnt >= CarControllerParams.OVERRIDE_SNAP_ENTER_FRAMES:
@@ -719,7 +748,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # corners keep apply_angle_last ≈ wheel (mismatch ~5°) so this gate
     # cleanly excludes them.
     RECOVERY_ENTER_ABS_DEG      = 30.0
-    RECOVERY_EXIT_ABS_DEG       = 10.0
+    # 14th: raised from 10° to 20° — at 10° the caster torque is near zero,
+    # so op re-engages essentially cold-starting from a near-static wheel,
+    # producing a subtle hand-off stutter. At 20° caster is still active, so
+    # op picks up while the wheel is still in motion and the transition is
+    # smoother. The 10° → 20° change shortens recovery by ~80 ms on the
+    # drive 15 worst case sim (no functional regression).
+    RECOVERY_EXIT_ABS_DEG       = 20.0
     RECOVERY_TIMEOUT_FRAMES     = 200  # 2 s at 100 Hz
     HANDS_OFF_RECOVERY_ANGLE_DEG = 50.0
     HANDS_OFF_MISMATCH_DEG       = 20.0
