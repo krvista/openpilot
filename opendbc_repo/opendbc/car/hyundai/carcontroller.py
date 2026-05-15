@@ -293,6 +293,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.override_snapped = False
     self.override_enter_cnt = 0
     self.override_exit_cnt  = 0
+    # 12th: post-override recovery hold. After override_snapped releases
+    # with the wheel still away from center (driver just finished a 60°+
+    # turn and lifted off mid-recovery), apply_angle_last is snapped to
+    # the wheel value at snap-exit, but the VM rate limiter then converges
+    # toward the model's straight-line desired angle at ~0.02°/frame while
+    # the caster recovers the wheel at 5-10°/frame. Op ends up commanding
+    # an angle far behind the wheel, causing MDPS to fight the natural
+    # caster recovery. Hold passthrough + snap_to_wheel until the wheel
+    # returns near center or a 2-second timeout. Drivelog 14-16 audit
+    # (POST_PR11_AUDIT.md) showed 8 concerning events, worst with op-vs-
+    # wheel deviation reaching 122.9° during a left-turn release at
+    # 18.4 kph with blinker on.
+    self.post_override_recovery = False
+    self.recovery_remaining_frames = 0
     # 2026-05-12 (5차): noise + transition smoothing for override path.
     # steer_torque_lpf — 30 ms LPF on STEERING_COL_TORQUE absorbs ±5 Nm
     #   CAN noise at the DEADZONE boundary (70/100 Nm) so override_factor
@@ -533,13 +547,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if not ccnc_lka_alt:
       return apply_steer_req, []
     reasons = []
-    if not CC.latActive:           reasons.append("not_latActive")
-    if self.override_snapped:      reasons.append("override_snapped")
-    if not apply_steer_req:        reasons.append("no_steer_req")
-    if self.was_in_reverse:        reasons.append("was_in_reverse")
-    if in_passthrough:             reasons.append("in_passthrough")
-    if cam_stale_tripped:          reasons.append("cam_stale")
-    if fault_lfa:                  reasons.append("fault_lfa")
+    if not CC.latActive:                  reasons.append("not_latActive")
+    if self.override_snapped:             reasons.append("override_snapped")
+    if self.post_override_recovery:       reasons.append("post_override_recovery")
+    if not apply_steer_req:                reasons.append("no_steer_req")
+    if self.was_in_reverse:                reasons.append("was_in_reverse")
+    if in_passthrough:                     reasons.append("in_passthrough")
+    if cam_stale_tripped:                  reasons.append("cam_stale")
+    if fault_lfa:                          reasons.append("fault_lfa")
     return (len(reasons) == 0), reasons
 
   def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
@@ -680,15 +695,38 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       # in-between: hold counters (don't accumulate, don't reset)
       pass
+    prev_override_snapped = self.override_snapped
     if not self.override_snapped and self.override_enter_cnt >= CarControllerParams.OVERRIDE_SNAP_ENTER_FRAMES:
       self.override_snapped = True
     elif self.override_snapped and self.override_exit_cnt >= CarControllerParams.OVERRIDE_SNAP_EXIT_FRAMES:
       self.override_snapped = False
+
+    # 12th: post-override recovery hold. Triggered on snap exit when the
+    # wheel is still > RECOVERY_ENTER_ABS_DEG from center — keeps op in
+    # passthrough + apply_angle_last = wheel for up to RECOVERY_TIMEOUT_FRAMES
+    # or until the wheel returns within RECOVERY_EXIT_ABS_DEG of center.
+    # Re-armed if the driver re-engages override mid-recovery (handles a
+    # quick second turn before the first finishes recovering).
+    RECOVERY_ENTER_ABS_DEG  = 30.0
+    RECOVERY_EXIT_ABS_DEG   = 10.0
+    RECOVERY_TIMEOUT_FRAMES = 200  # 2 s at 100 Hz
+    if prev_override_snapped and not self.override_snapped \
+       and abs(steer_angle_safe) >= RECOVERY_ENTER_ABS_DEG:
+      self.post_override_recovery = True
+      self.recovery_remaining_frames = RECOVERY_TIMEOUT_FRAMES
+    if self.post_override_recovery:
+      self.recovery_remaining_frames -= 1
+      if abs(steer_angle_safe) < RECOVERY_EXIT_ABS_DEG or self.recovery_remaining_frames <= 0:
+        self.post_override_recovery = False
+        self.recovery_remaining_frames = 0
+
     if not CC.latActive:
       # disengaged: reset so next engage doesn't inherit stale state
       self.override_snapped = False
       self.override_enter_cnt = 0
       self.override_exit_cnt = 0
+      self.post_override_recovery = False
+      self.recovery_remaining_frames = 0
       self.aci_gain_last = 0.0
       # 5차: also reset 5차 smoothing states so next engage starts from
       # the actual driver torque / blinker boolean, not whatever residue
@@ -875,6 +913,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       if self.override_snapped:
         self._snap_apply_angle_to_wheel(steer_angle_safe, "override_snapped")
+      elif self.post_override_recovery:
+        self._snap_apply_angle_to_wheel(steer_angle_safe, "post_override_recovery")
 
       # VM-based jerk/accel limiter
       apply_angle = apply_steer_angle_limits_vm(
