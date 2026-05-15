@@ -707,11 +707,30 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # or until the wheel returns within RECOVERY_EXIT_ABS_DEG of center.
     # Re-armed if the driver re-engages override mid-recovery (handles a
     # quick second turn before the first finishes recovering).
-    RECOVERY_ENTER_ABS_DEG  = 30.0
-    RECOVERY_EXIT_ABS_DEG   = 10.0
-    RECOVERY_TIMEOUT_FRAMES = 200  # 2 s at 100 Hz
+    #
+    # 13th: light-grip extension. Patch #12 only fires when override_snapped
+    # was engaged (i.e. heavy grip 170+ Nm). For 50°+ turns made with
+    # moderate grip (no snap entry), the blend mechanism leaves apply_angle
+    # at e.g. 10-15° while wheel is at 50° — the lag is smaller than the
+    # snap case but still uncomfortable on release. Detect this by
+    # |apply_angle_last - wheel| ≥ HANDS_OFF_MISMATCH_DEG: large mismatch
+    # at high |wheel| with driver hands-off means op was NOT in control of
+    # the wheel position (i.e. the driver cranked it). Op-driven 50°+
+    # corners keep apply_angle_last ≈ wheel (mismatch ~5°) so this gate
+    # cleanly excludes them.
+    RECOVERY_ENTER_ABS_DEG      = 30.0
+    RECOVERY_EXIT_ABS_DEG       = 10.0
+    RECOVERY_TIMEOUT_FRAMES     = 200  # 2 s at 100 Hz
+    HANDS_OFF_RECOVERY_ANGLE_DEG = 50.0
+    HANDS_OFF_MISMATCH_DEG       = 20.0
     if prev_override_snapped and not self.override_snapped \
        and abs(steer_angle_safe) >= RECOVERY_ENTER_ABS_DEG:
+      self.post_override_recovery = True
+      self.recovery_remaining_frames = RECOVERY_TIMEOUT_FRAMES
+    elif not self.post_override_recovery \
+         and abs(steer_angle_safe) >= HANDS_OFF_RECOVERY_ANGLE_DEG \
+         and override_factor <= 0.1 \
+         and abs(self.apply_angle_last - steer_angle_safe) >= HANDS_OFF_MISMATCH_DEG:
       self.post_override_recovery = True
       self.recovery_remaining_frames = RECOVERY_TIMEOUT_FRAMES
     if self.post_override_recovery:
