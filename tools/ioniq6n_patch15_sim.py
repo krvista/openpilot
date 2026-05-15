@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Patch #15 sim — VTAU LPF acceleration for city speeds (20-50 km/h).
+"""Patch #15 sim — ACIGain rate_up boost + city shelf raise.
 
-Re-runs vtau LPF on actual op_curv_safe trajectories from drives 14-16
-with both the current and proposed (extended speed_max_tau curve + lowered
-city entry_th) settings. Measures the LPF tracking lag |op_curv - lpf|
-binned by speed.
+Tests two changes targeting EPS authority recovery speed:
 
-The previous data analysis showed 95% of drift events (mismatch>5° between
-op_curv and wheel) occur at 20-50 km/h where current vtau=1.95s. This sim
-quantifies how much the proposed change reduces the slow-mode LPF lag
-that contributes to those events.
+1. **B (rate_up boost)**: when steering_error > 1° or steering_torque < 30 Nm,
+   boost rate_up from 0.004/frame to 0.02-0.04/frame so ACIGain climbs back
+   to max in ~150ms instead of 1.25s after brief grip events.
+
+2. **B' (city shelf raise)**: raise shelf (the mid-grip target plateau) at
+   city speeds so brief grip events don't dip ACIGain as deep, reducing the
+   subsequent climb needed.
+
+Measures ACIGain trajectory across drives 14-16 at city speeds during
+mismatch>5° events. Gate: ACIGain mean during drift events should rise
+from current 0.50 to >0.80.
 """
 import glob
 import sys
@@ -23,66 +27,52 @@ sys.path.insert(0, '/home/user/openpilot')
 from cereal import log
 
 ROUTES = ('00000014', '00000015', '00000016')
-LPF_DT = 0.01  # 100 Hz
+QUANT = 0.004
 
-SPEED_BINS = [(0, 5.56), (5.56, 8.33), (8.33, 11.1), (11.1, 13.89),
-              (13.89, 16.67), (16.67, 22.22), (22.22, 99)]
-BIN_LABELS = ['<20', '20-30', '30-40', '40-50', '50-60', '60-80', '80+']
-
-
-def vtau_current(v, ang_abs):
-    angle_tau = float(np.interp(ang_abs, [0, 1, 3, 10], [3.5, 0.4, 0.20, 0.20]))
-    speed_tau = float(np.interp(v, [0, 3, 5, 15], [0.5, 0.3, 0.20, 0.0]))
-    cap = float(np.interp(v, [10.0, 25.0], [2.5, 0.22]))
-    return min(max(angle_tau, speed_tau), cap)
+SPEED_BINS = [(5.56, 8.33), (8.33, 11.1), (11.1, 13.89)]
+BIN_LABELS = ['20-30', '30-40', '40-50']
 
 
-def vtau_proposed(v, ang_abs):
-    angle_tau = float(np.interp(ang_abs, [0, 1, 3, 10], [3.5, 0.4, 0.20, 0.20]))
-    speed_tau = float(np.interp(v, [0, 3, 5, 15], [0.5, 0.3, 0.20, 0.0]))
-    cap = float(np.interp(v, [5.0, 15.0, 25.0], [0.8, 0.35, 0.15]))
-    return min(max(angle_tau, speed_tau), cap)
-
-
-def entry_th_current(v):
-    return float(np.interp(v, [4.0, 15.0, 25.0], [0.3, 0.5, 0.5]))
-
-
-def entry_th_proposed(v):
-    return float(np.interp(v, [4.0, 8.0, 15.0, 25.0], [0.3, 0.3, 0.35, 0.30]))
-
-
-def simulate(op_seq, init, v_seq, vtau_fn, entry_fn, exit_th=0.3):
-    """Re-simulate vtau_lpf trajectory with sustained_cnt cap mechanism."""
-    lpf = init
-    sustained_cnt = 0
-    prev_sign = 0
-    out = []
-    trips = 0
-    for op, v in zip(op_seq, v_seq):
-        entry_th = entry_fn(v)
-        entering = abs(op) > abs(lpf) + entry_th
-        returning = abs(op) < abs(lpf) - exit_th
-        if entering or returning:
-            tau = 0.05
-            sustained_cnt = 60
-            if entering:
-                trips += 1
+def compute_aci_gain(v, tq, err, gain_prev, blinker, *,
+                     rate_up_boost_err=False,
+                     rate_up_boost_light=False,
+                     city_shelf_raise=False):
+    """Mirror carcontroller.py compute_aci_gain (ccnc_lka_alt=True, non-blinker branch)."""
+    if blinker:
+        bp_grip = 30.0
+        bp_active = float(np.interp(v, [2., 11.], [100., 125.]))
+        bp_heavy = float(np.interp(v, [2., 22.], [250., 350.]))
+        target = float(np.interp(abs(tq), [0.0, bp_grip, bp_active, bp_heavy],
+                                  [0.80, 0.55, 0.18, 0.08]))
+        rate_dn = float(np.interp(abs(tq), [150., 350., 600.], [0.004, 0.014, 0.04]))
+        rate_dn = max(rate_dn, 0.05)
+        rate_up = max(0.004, 0.10)
+    else:
+        ceiling = float(np.interp(v, [0.5, 1.5], [1.0, 0.85]))
+        if city_shelf_raise:
+            shelf = float(np.interp(v, [2., 11.], [0.30, 0.40]))   # was [0.22, 0.30]
         else:
-            tau = vtau_fn(v, abs(lpf))
-            cur_sign = 1 if op > lpf + 0.01 else (-1 if op < lpf - 0.01 else 0)
-            if cur_sign != 0 and cur_sign == prev_sign:
-                sustained_cnt = min(sustained_cnt + 1, 100)
-            else:
-                sustained_cnt = max(sustained_cnt - 2, 0)
-            prev_sign = cur_sign
-            # sustained_cnt cap: 0→vtau, 30→min(vtau,0.5), 60→min(vtau,0.1)
-            tau = float(np.interp(sustained_cnt, [0, 30, 60],
-                                  [tau, min(tau, 0.5), min(tau, 0.1)]))
-        alpha = LPF_DT / (tau + LPF_DT)
-        lpf = alpha * op + (1.0 - alpha) * lpf
-        out.append(lpf)
-    return out, trips
+            shelf = float(np.interp(v, [2., 11.], [0.22, 0.30]))
+        floor = float(np.interp(v, [2., 22.], [0.1, 0.3]))
+        error_start = float(np.interp(v, [0., 5.56, 11.1, 33.3], [1.25, 0.5, 0.3, 0.2]))
+        error_mult = float(np.interp(abs(err), [error_start, error_start * 2], [1.0, 2.0]))
+        ceiling = min(1.0, ceiling * error_mult)
+        bp1 = float(np.interp(v, [2., 11.], [30., 50.]))
+        bp2 = float(np.interp(v, [2., 11.], [50., 70.]))
+        bp3 = float(np.interp(v, [2., 11.], [150., 200.]))
+        bp4 = float(np.interp(v, [2., 22.], [300., 450.]))
+        target = float(np.interp(abs(tq), [bp1, bp2, bp3, bp4], [ceiling, shelf, shelf, floor]))
+
+        rate_dn = float(np.interp(abs(tq), [150., 350., 600.], [0.004, 0.014, 0.04]))
+        rate_up = 0.004
+        # B: rate_up boost
+        if rate_up_boost_err and abs(err) > 1.0:
+            rate_up = max(rate_up, 0.04)
+        if rate_up_boost_light and abs(tq) < 30.0:
+            rate_up = max(rate_up, 0.02)
+
+    gain = max(gain_prev - rate_dn, min(gain_prev + rate_up, target))
+    return round(gain / QUANT) * QUANT
 
 
 def bin_for(v):
@@ -92,11 +82,19 @@ def bin_for(v):
     return None
 
 
-def scan():
-    lag_current = defaultdict(list)
-    lag_proposed = defaultdict(list)
-    trips_current = 0
-    trips_proposed = 0
+def main():
+    # Three configurations:
+    # 'current'    — baseline
+    # 'B'          — rate_up boost only
+    # 'B+B'''      — rate_up boost + city shelf raise
+    configs = {
+        'current':   dict(rate_up_boost_err=False, rate_up_boost_light=False, city_shelf_raise=False),
+        'B':         dict(rate_up_boost_err=True,  rate_up_boost_light=True,  city_shelf_raise=False),
+        'B+B prime': dict(rate_up_boost_err=True,  rate_up_boost_light=True,  city_shelf_raise=True),
+    }
+
+    gains_all = {k: {l: [] for l in BIN_LABELS} for k in configs}
+    gains_drift = {k: {l: [] for l in BIN_LABELS} for k in configs}
 
     for route in ROUTES:
         paths = sorted(glob.glob(f'/home/user/openpilot/drivelog/*_{route}--*--rlog.zst'))
@@ -107,7 +105,7 @@ def scan():
             except Exception:
                 continue
             cs = None
-            seq_op, seq_wheel, seq_v, seq_tq = [], [], [], []
+            gain_state = {k: 0.0 for k in configs}
             for msg in log.Event.read_multiple_bytes(raw):
                 w = msg.which()
                 if w == 'carState':
@@ -115,87 +113,86 @@ def scan():
                 elif w == 'carControl' and cs is not None:
                     cc = msg.carControl
                     if not cc.latActive:
-                        seq_op.clear(); seq_wheel.clear(); seq_v.clear(); seq_tq.clear()
+                        gain_state = {k: 0.0 for k in configs}
                         continue
-                    seq_op.append(float(cc.actuators.steeringAngleDeg))
-                    seq_wheel.append(float(cs.steeringAngleDeg))
-                    seq_v.append(float(cs.vEgoRaw))
-                    seq_tq.append(float(cs.steeringTorque))
-            if not seq_op:
-                continue
+                    wheel = float(cs.steeringAngleDeg)
+                    op = float(cc.actuators.steeringAngleDeg)
+                    tq = float(cs.steeringTorque)
+                    v = float(cs.vEgoRaw)
+                    err = op - wheel
+                    blinker = bool(cs.leftBlinker or cs.rightBlinker)
+                    # Step each config
+                    for k, kw in configs.items():
+                        gain_state[k] = compute_aci_gain(v, tq, err, gain_state[k], blinker, **kw)
+                    # Stats only at filtered frames
+                    if abs(wheel) >= 30 or abs(op) >= 30:
+                        continue
+                    if abs(tq) >= 30:
+                        continue
+                    b = bin_for(v)
+                    if not b:
+                        continue
+                    for k in configs:
+                        gains_all[k][b].append(gain_state[k])
+                        if abs(err) > 5:
+                            gains_drift[k][b].append(gain_state[k])
 
-            init = seq_wheel[0]
-            lpf_cur, tc = simulate(seq_op, init, seq_v, vtau_current, entry_th_current)
-            lpf_pro, tp = simulate(seq_op, init, seq_v, vtau_proposed, entry_th_proposed)
-            trips_current += tc
-            trips_proposed += tp
-
-            for i, (op, wheel, v, tq) in enumerate(zip(seq_op, seq_wheel, seq_v, seq_tq)):
-                if abs(wheel) >= 30 or abs(op) >= 30:
-                    continue
-                if abs(tq) >= 30:
-                    continue
-                lab = bin_for(v)
-                if not lab:
-                    continue
-                # LPF lag
-                lag_current[lab].append(abs(op - lpf_cur[i]))
-                lag_proposed[lab].append(abs(op - lpf_pro[i]))
-
-    return lag_current, lag_proposed, trips_current, trips_proposed
-
-
-def stats(arr):
-    if not arr:
-        return 0, 0, 0
-    a = np.array(arr)
-    return float(a.mean()), float(np.percentile(a, 90)), float(np.percentile(a, 99))
-
-
-def main():
-    print("Re-simulating vtau LPF on drives 14-16 (current vs Patch #15 proposed)...\n")
-    lc, lp, tc, tp = scan()
-
-    print(f"{'speed':>10} {'n':>7} | {'Cur mean':>8} {'Cur p90':>8} {'Cur p99':>8} | "
-          f"{'Pro mean':>8} {'Pro p90':>8} {'Pro p99':>8} | {'Δmean':>7} {'Δp90':>7}")
-    print("-" * 110)
-    city_n_cur = []
-    city_n_pro = []
-    for lab in BIN_LABELS:
-        if not lc[lab]:
+    # Print
+    print(f"=== ACIGain mean during ALL light-grip city frames ===\n")
+    print(f"{'bin':>10} {'n':>7} {'current':>9} {'B':>9} {'B+B prime':>11} | {'ΔB':>7} {'ΔB+B prime':>9}")
+    print("-" * 80)
+    for b in BIN_LABELS:
+        n = len(gains_all['current'][b])
+        if n == 0:
             continue
-        mc, p90c, p99c = stats(lc[lab])
-        mp, p90p, p99p = stats(lp[lab])
-        dmean = mp - mc
-        dp90 = p90p - p90c
-        print(f"{lab:>10} {len(lc[lab]):>7} | {mc:>7.3f}° {p90c:>7.3f}° {p99c:>7.3f}° | "
-              f"{mp:>7.3f}° {p90p:>7.3f}° {p99p:>7.3f}° | {dmean:>+6.3f}° {dp90:>+6.3f}°")
-        if lab in ('20-30', '30-40', '40-50'):
-            city_n_cur.extend(lc[lab])
-            city_n_pro.extend(lp[lab])
+        c = np.mean(gains_all['current'][b])
+        b1 = np.mean(gains_all['B'][b])
+        b2 = np.mean(gains_all['B+B prime'][b])
+        print(f"{b:>10} {n:>7} {c:>8.3f} {b1:>8.3f} {b2:>10.3f} | {b1-c:>+6.3f} {b2-c:>+8.3f}")
 
-    mc, p90c, p99c = stats(city_n_cur)
-    mp, p90p, p99p = stats(city_n_pro)
-    print(f"\n=== City aggregate (20-50 km/h) ===")
-    print(f"  n: {len(city_n_cur):,}")
-    print(f"  Current  : mean {mc:.3f}°  p90 {p90c:.3f}°  p99 {p99c:.3f}°")
-    print(f"  Proposed : mean {mp:.3f}°  p90 {p90p:.3f}°  p99 {p99p:.3f}°")
-    print(f"  Δ        : mean {mp-mc:+.3f}°  p90 {p90p-p90c:+.3f}°  p99 {p99p-p99c:+.3f}°")
-    print(f"  mean reduction: {(mc-mp)/max(mc,1e-6)*100:+.1f}%")
-    print(f"  p90 reduction:  {(p90c-p90p)/max(p90c,1e-6)*100:+.1f}%")
+    print(f"\n=== ACIGain mean during drift event frames (|err|>5°) ===\n")
+    print(f"{'bin':>10} {'n':>7} {'current':>9} {'B':>9} {'B+B prime':>11} | {'ΔB':>7} {'ΔB+B prime':>9}")
+    print("-" * 80)
+    drift_cur = []
+    drift_b = []
+    drift_bb = []
+    for b in BIN_LABELS:
+        n = len(gains_drift['current'][b])
+        if n == 0:
+            continue
+        c = np.mean(gains_drift['current'][b])
+        b1 = np.mean(gains_drift['B'][b])
+        b2 = np.mean(gains_drift['B+B prime'][b])
+        drift_cur.extend(gains_drift['current'][b])
+        drift_b.extend(gains_drift['B'][b])
+        drift_bb.extend(gains_drift['B+B prime'][b])
+        print(f"{b:>10} {n:>7} {c:>8.3f} {b1:>8.3f} {b2:>10.3f} | {b1-c:>+6.3f} {b2-c:>+8.3f}")
 
-    print(f"\n=== entering_curve trips ===")
-    print(f"  Current  : {tc:,}")
-    print(f"  Proposed : {tp:,}")
-    print(f"  Growth   : {(tp-tc)/max(tc,1)*100:+.1f}%")
+    if drift_cur:
+        c = np.mean(drift_cur)
+        b1 = np.mean(drift_b)
+        b2 = np.mean(drift_bb)
+        print(f"\n  Aggregate city drift (n={len(drift_cur):,}):")
+        print(f"    Current  : mean {c:.3f}")
+        print(f"    B        : mean {b1:.3f}  ({(b1-c)/c*100:+.1f}%)")
+        print(f"    B+B prime: mean {b2:.3f}  ({(b2-c)/c*100:+.1f}%)")
 
-    print(f"\n=== Patch #15 gates ===")
-    mean_drop = (mc - mp) / max(mc, 1e-6) * 100
-    p90_drop = (p90c - p90p) / max(p90c, 1e-6) * 100
-    ec_growth = (tp - tc) / max(tc, 1) * 100
-    print(f"  City mean lag reduction ≥ 20%: {'PASS' if mean_drop >= 20 else 'FAIL'} ({mean_drop:.1f}%)")
-    print(f"  City p90 lag reduction ≥ 25%: {'PASS' if p90_drop >= 25 else 'FAIL'} ({p90_drop:.1f}%)")
-    print(f"  entering_curve growth ≤ +40%: {'PASS' if ec_growth <= 40 else 'FAIL'} ({ec_growth:+.1f}%)")
+        # Estimated EPS lag reduction (assuming lag ∝ 1/gain)
+        lag_cur = 1.68
+        lag_b = lag_cur * c / b1
+        lag_bb = lag_cur * c / b2
+        print(f"\n  Estimated apply→wheel lag (assuming lag ∝ 1/gain, baseline 1.68°):")
+        print(f"    Current  : {lag_cur:.2f}°")
+        print(f"    B        : {lag_b:.2f}°  ({(lag_b - lag_cur):+.2f}°, {(lag_cur-lag_b)/lag_cur*100:+.0f}%)")
+        print(f"    B+B prime: {lag_bb:.2f}°  ({(lag_bb - lag_cur):+.2f}°, {(lag_cur-lag_bb)/lag_cur*100:+.0f}%)")
+
+    # Gates
+    print(f"\n=== Patch #15 gates (B+B prime) ===")
+    if drift_cur:
+        c = np.mean(drift_cur)
+        b2 = np.mean(drift_bb)
+        print(f"  ACIGain drift mean ≥ 0.80: {'PASS' if b2 >= 0.80 else 'FAIL'} ({b2:.3f})")
+        print(f"  ACIGain drift mean increase ≥ 50%: {'PASS' if (b2-c)/c >= 0.50 else 'FAIL'} ({(b2-c)/c*100:+.1f}%)")
 
 
 if __name__ == '__main__':
