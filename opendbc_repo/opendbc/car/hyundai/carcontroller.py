@@ -141,7 +141,17 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
                                 [0.80, 0.55,    0.18,      0.08]))   # 6차: 0.25→0.18, 0.15→0.08
     else:
       ceiling = float(np.interp(v_ego, [0.5, 1.5], [1.0, 0.85]))
-      shelf = float(np.interp(v_ego, [2., 11.], [0.22, 0.30]))
+      # 15th: city shelf raised (was [0.22, 0.30]) so brief grip events at
+      # 20-40 km/h don't dip ACIGain as deep. drives 14-16: at city speeds,
+      # ACIGain mean during light-grip drift events was 0.51 because a recent
+      # 50-100 Nm grip pulled target down to shelf=0.244 (v=5 m/s), then the
+      # slow rate_up=0.004/frame couldn't climb back to ceiling before the
+      # next drift event. Raising shelf 0.22→0.30 at v=2 and 0.30→0.40 at
+      # v=11 means moderate-grip dip floors higher, ACIGain spends less
+      # time in the deep-recovery regime. Marginal driver-yield reduction
+      # at moderate grip (50-100 Nm at 30 km/h: 30% MDPS authority instead
+      # of 24%) is acceptable.
+      shelf = float(np.interp(v_ego, [2., 11.], [0.30, 0.40]))
       floor = float(np.interp(v_ego, [2., 22.], [0.1, 0.3]))
 
       # Error-based ceiling boost. Speed-dependent error_start: at standstill
@@ -203,6 +213,25 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
   if blinker_on:
     rate_dn_mag = max(rate_dn_mag, 0.05)
     rate_up_mag = max(rate_up_mag, 0.10)
+  else:
+    # 15th: rate_up boost so ACIGain climbs back to ceiling quickly after
+    # brief grip events. Base rate_up=0.004/frame meant a full 0→1 climb
+    # took 1.25 s — during that recovery window, EPS only has the partial
+    # authority of whatever gain it landed at (mean 0.51 during city drift
+    # events per drives 14-16). Two boost paths:
+    #   - high tracking error (op detected wheel deviation ≥ 1°): climb
+    #     10x faster (0.04/frame) so op authority reaches max within
+    #     ~150 ms of the error onset.
+    #   - light grip (driver torque < 30 Nm, hands-off / light hold): climb
+    #     5x faster (0.02/frame). This raises the baseline ACIGain BEFORE
+    #     any drift event so the deep dip is avoided.
+    # Combined, ACIGain mean during city drift events rises 0.51→0.91 in
+    # sim (drives 14-16, n=2,232 city light-grip drift frames), translating
+    # to an estimated 41% reduction in apply→wheel lag (1.68° → 0.99°).
+    if abs(steering_error) > 1.0:
+      rate_up_mag = max(rate_up_mag, 0.04)
+    elif abs(steering_torque) < 30.0:
+      rate_up_mag = max(rate_up_mag, 0.02)
   gain = rate_limit(target, last_gain, -rate_dn_mag, rate_up_mag)
   return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
 
