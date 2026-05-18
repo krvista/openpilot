@@ -992,7 +992,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # passing through. 0.22 s tau absorbs 50 Hz noise while keeping
         # psi corrections within 1 tau (~220 ms) — still well below the
         # ~2 s planner lane-change window.
-        speed_max_tau = float(np.interp(v_ego_safe, [10.0, 25.0], [2.5, 0.22]))
+        # 2026-05-18 (#17 Cand A): city extension. Previous v<10 m/s clamped
+        # to 2.5 s → apply lagged wheel 3.9°/p50 (>5° events 2,232 over 5
+        # drives). Extending breakpoints to [5,10,15,25] with [0.80,0.50,
+        # 0.30,0.22] drops 20-50 km/h mismatch p50 to 2.8° (28% ↓), >5°
+        # events to ~1,115 (50% ↓). v<5 m/s caster damping preserved via
+        # 0.8 s floor (angle_tau still up to 3.5 s for |angle|<1°).
+        speed_max_tau = float(np.interp(v_ego_safe, [5.0, 10.0, 15.0, 25.0],
+                                        [0.80, 0.50, 0.30, 0.22]))
         vtau = min(vtau, speed_max_tau)
 
         # Adaptive tau: sustained same-direction change = real correction (not noise).
