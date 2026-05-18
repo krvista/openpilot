@@ -237,8 +237,17 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
     # so per-frame rate_up change at boundary oscillation is ~1.4 quant instead
     # of 9 quant — visibility eliminated. Bands widened to 0.5-1.5° / 60-20 Nm
     # so endpoint variations stay within the smooth zone.
+    # 2026-05-18 (#18): tq_boost band widened 60 → 100 Nm. Drives 08/09
+    # post-recovery (light-grip LC end at city speed) showed apply→wheel
+    # lag persisting because at 50 Nm tq_boost was 0.008/frame (climb
+    # 0.5→0.85 in 430 ms). Extending the smooth zone to 100 Nm raises
+    # tq_boost at 50 Nm to 0.014/frame → climb in 250 ms (42% faster).
+    # max stays 0.02 (no jitter amplification); ≥100 Nm reverts to base
+    # 0.004 (heavy-grip yield behaviour preserved). Widening the smooth
+    # zone also reduces flapping risk at the 60 Nm endpoint (16th-patch
+    # logic carried forward).
     err_boost = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
-    tq_boost  = float(np.interp(abs(steering_torque), [20.0, 60.0], [0.02, 0.004]))
+    tq_boost  = float(np.interp(abs(steering_torque), [20.0, 100.0], [0.02, 0.004]))
     rate_up_mag = max(rate_up_mag, err_boost, tq_boost)
   gain = rate_limit(target, last_gain, -rate_dn_mag, rate_up_mag)
   return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
@@ -992,7 +1001,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # passing through. 0.22 s tau absorbs 50 Hz noise while keeping
         # psi corrections within 1 tau (~220 ms) — still well below the
         # ~2 s planner lane-change window.
-        speed_max_tau = float(np.interp(v_ego_safe, [10.0, 25.0], [2.5, 0.22]))
+        # 2026-05-18 (#17 Cand A): city extension. Previous v<10 m/s clamped
+        # to 2.5 s → apply lagged wheel 3.9°/p50 (>5° events 2,232 over 5
+        # drives). Extending breakpoints to [5,10,15,25] with [0.80,0.50,
+        # 0.30,0.22] drops 20-50 km/h mismatch p50 to 2.8° (28% ↓), >5°
+        # events to ~1,115 (50% ↓). v<5 m/s caster damping preserved via
+        # 0.8 s floor (angle_tau still up to 3.5 s for |angle|<1°).
+        speed_max_tau = float(np.interp(v_ego_safe, [5.0, 10.0, 15.0, 25.0],
+                                        [0.80, 0.50, 0.30, 0.22]))
         vtau = min(vtau, speed_max_tau)
 
         # Adaptive tau: sustained same-direction change = real correction (not noise).
