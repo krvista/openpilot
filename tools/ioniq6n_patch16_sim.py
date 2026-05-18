@@ -294,7 +294,7 @@ def sim_fix_d():
                 # Fix-D early exit check
                 if fix_exit is None:
                     of_k = override_factor_of(abs(seq_tq[k]), seq_v[k])
-                    if of_k <= 0.1 and seq_op[k] * seq_w[k] >= 0 and abs(seq_op[k]) < 0.7 * abs(seq_w[k]):
+                    if of_k <= 0.1 and seq_op[k] * seq_w[k] >= 0 and abs(seq_op[k]) < 0.9 * abs(seq_w[k]):
                         fix_exit = k
             if now_exit is None: now_exit = min(n-1, release_i + 200)
             if fix_exit is None: fix_exit = now_exit

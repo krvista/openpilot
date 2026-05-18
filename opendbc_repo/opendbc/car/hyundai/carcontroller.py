@@ -827,8 +827,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # this early-exit lets MADS pick up at e.g. wheel=+25° (lane change end)
     # when the driver lets go. Direction check guards against op commanding
     # opposite to the residual wheel angle (which would yank the wheel away).
+    # 16b: ratio relaxed 0.7 → 0.9 — user confirmed natural-takeover should
+    # fire whenever op wants any less turn than the current wheel (not only
+    # when op is "clearly centering"). e.g. wheel=35°, op=30° (ratio 0.86)
+    # now triggers early-exit instead of waiting for caster to bring wheel
+    # below 20°, shortening the silent recovery window by ~500 ms in the
+    # gradual-release-after-fighting-heavy-snap path. op<wheel still
+    # guarantees direction is toward center; safety preserved.
     RECOVERY_EARLY_EXIT_FACTOR_TH = 0.1
-    RECOVERY_EARLY_EXIT_OP_RATIO  = 0.7
+    RECOVERY_EARLY_EXIT_OP_RATIO  = 0.9
     if self.post_override_recovery:
       self.recovery_remaining_frames -= 1
       released_and_op_centering = (override_factor <= RECOVERY_EARLY_EXIT_FACTOR_TH
