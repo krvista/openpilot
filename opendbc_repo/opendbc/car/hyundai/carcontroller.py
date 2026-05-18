@@ -228,10 +228,18 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain,
     # Combined, ACIGain mean during city drift events rises 0.51→0.91 in
     # sim (drives 14-16, n=2,232 city light-grip drift frames), translating
     # to an estimated 41% reduction in apply→wheel lag (1.68° → 0.99°).
-    if abs(steering_error) > 1.0:
-      rate_up_mag = max(rate_up_mag, 0.04)
-    elif abs(steering_torque) < 30.0:
-      rate_up_mag = max(rate_up_mag, 0.02)
+    # 16th: replace step-function boost with smooth np.interp ramps. Patch #15
+    # used hard if/elif at err=1° and tq=30 — drives 19/1a showed 1,050 frames
+    # where rate_up flapped 0.004↔0.04 within 200 ms at threshold boundaries,
+    # causing 10x ACIGain step jumps each toggle → MDPS pulsed wheel ("탁탁" feel).
+    # Smooth interp keeps the same end-points (0.004 base, 0.04 max on error,
+    # 0.02 max on light grip) but transitions continuously across the boundary,
+    # so per-frame rate_up change at boundary oscillation is ~1.4 quant instead
+    # of 9 quant — visibility eliminated. Bands widened to 0.5-1.5° / 60-20 Nm
+    # so endpoint variations stay within the smooth zone.
+    err_boost = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
+    tq_boost  = float(np.interp(abs(steering_torque), [20.0, 60.0], [0.02, 0.004]))
+    rate_up_mag = max(rate_up_mag, err_boost, tq_boost)
   gain = rate_limit(target, last_gain, -rate_dn_mag, rate_up_mag)
   return round(gain / CarControllerParams.ACI_GAIN_QUANT) * CarControllerParams.ACI_GAIN_QUANT
 
@@ -714,8 +722,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # over; exit grace 100 ms still releases promptly when driver lets go.
     HEAVY_SNAP_OVERRIDE_TQ = 200.0
     snap_blinker_override = blinker_on and abs(steer_torque_safe) > HEAVY_SNAP_OVERRIDE_TQ
+    # 16th: heavy snap mismatch guard. When driver applies heavy torque BUT
+    # apply_angle_last is aligned with the actual wheel (mismatch < 10°), the
+    # driver is steering in the same direction op wants — suppress the snap so
+    # STEER_REQ stays high and ACIGain keeps MDPS engaged. This pairs with
+    # Fix-D (recovery early-exit) to provide fast smooth takeover the moment
+    # the driver releases mid-turn (user-requested: "차선변경에서 차선을 넘자마자
+    # 핸들을 놓는 것과 같이 부드럽지만 빠르게 개입"). The fighting case (driver
+    # cranks against op's intent, mismatch ≥ 10°) still snaps and yields fully.
+    # Patch #14 moderate path already uses mismatch ≥ 20° for the same pattern.
+    HEAVY_ALIGNED_MISMATCH_DEG = 10.0
+    heavy_grip_aligned = abs(self.apply_angle_last - steer_angle_safe) < HEAVY_ALIGNED_MISMATCH_DEG
     heavy_override_active = (override_factor >= CarControllerParams.OVERRIDE_SNAP_ENTER_FACTOR
-                             and (not blinker_on or snap_blinker_override))
+                             and (not blinker_on or snap_blinker_override)
+                             and not heavy_grip_aligned)
 
     # 14th: driver-active yield. Patches #12/#13 only react after the driver
     # releases (snap-exit or release-time mismatch). User reported that
@@ -797,9 +817,26 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          and abs(self.apply_angle_last - steer_angle_safe) >= HANDS_OFF_MISMATCH_DEG:
       self.post_override_recovery = True
       self.recovery_remaining_frames = RECOVERY_TIMEOUT_FRAMES
+    # 16th: recovery early-exit on release + op-centering. User-requested
+    # behavior: "직진이 되기 전에 운전자가 핸들을 놓으면 부드럽지만 다시 빠르게
+    # 개입해야함 (차선변경에서 차선을 넘자마자 핸들을 놓는 것과 같이)" — when the
+    # driver releases mid-turn and op's command is already centering (same
+    # direction as wheel, smaller magnitude), exit recovery immediately so
+    # MADS takes the return-to-center back from the caster. The standard
+    # |wheel|<20° gate makes the user wait until the wheel is almost centered;
+    # this early-exit lets MADS pick up at e.g. wheel=+25° (lane change end)
+    # when the driver lets go. Direction check guards against op commanding
+    # opposite to the residual wheel angle (which would yank the wheel away).
+    RECOVERY_EARLY_EXIT_FACTOR_TH = 0.1
+    RECOVERY_EARLY_EXIT_OP_RATIO  = 0.7
     if self.post_override_recovery:
       self.recovery_remaining_frames -= 1
-      if abs(steer_angle_safe) < RECOVERY_EXIT_ABS_DEG or self.recovery_remaining_frames <= 0:
+      released_and_op_centering = (override_factor <= RECOVERY_EARLY_EXIT_FACTOR_TH
+                                    and abs(op_curv_safe) < RECOVERY_EARLY_EXIT_OP_RATIO * abs(steer_angle_safe)
+                                    and op_curv_safe * steer_angle_safe >= 0)
+      if abs(steer_angle_safe) < RECOVERY_EXIT_ABS_DEG \
+         or self.recovery_remaining_frames <= 0 \
+         or released_and_op_centering:
         self.post_override_recovery = False
         self.recovery_remaining_frames = 0
 
