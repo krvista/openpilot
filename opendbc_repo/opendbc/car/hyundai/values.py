@@ -18,64 +18,12 @@ class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s
   ACCEL_MAX = 2.0 # m/s
 
-  # Angle-based control limits for the HDA2-ALT + CCNC angle-control
-  # platform. This path activates automatically for any Hyundai/Kia car
-  # whose `flags` contains BOTH `HyundaiFlags.CCNC` AND
-  # `HyundaiFlags.CANFD_LKA_STEERING_ALT`. Ioniq 6 N 2026 is the first
-  # member; any future car with the same HDA2-ALT CCNC ADAS architecture
-  # (2025+ MY Hyundai/Kia/Genesis trims that use LKAS_ALT 0x110 with
-  # ADAS_StrAnglReqVal field to command ADAS DRV) will inherit the same
-  # rate limiter, hysteresis, camera-ref blend (Stage 4), and ACI gain
-  # policy by simply receiving those two flags in values.py.
-  #
-  # Rate table below is tuned from Ioniq 6 N drivelog (1.24M frames,
-  # routes 28-2d). If a future car shows materially different planner
-  # demand or EPS capability, per-fingerprint overrides can be added in
-  # CarControllerParams.__init__ below.
-  #
-  # Uses the standard speed-dependent rate limiter apply_std_steer_angle_limits,
-  # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
-  #
-  # Rate table is tuned for Korean speed regimes (도시 30/40/50, 시외 60,
-  # 고속도로 80/100/110 km/h) with the peak placed at ~25 km/h (v=7 m/s),
-  # where drivelog analysis shows the planner's angle-rate demand is highest
-  # (sharp-corner / intersection maneuvering). Mid-speed rates (12–25 m/s,
-  # 43–90 km/h) were raised to cover the planner's p95 demand during S-curve
-  # maneuvering — previous tune saturated in this range and the wheel could
-  # not follow quick serpentine lane changes.
-  #
-  #   v_ego  | v_ego  |   UP (°/20ms / °/s)   |   DOWN (°/20ms / °/s)  | Regime
-  #   m/s    | km/h   |                       |                        |
-  #     0    |   0    |     0.6  /  30        |      0.8  /  40        | stopped
-  #     3    |  11    |     0.9  /  45        |      1.1  /  55        | parking
-  #     7    |  25    |     1.3  /  65        |      1.5  /  75   peak | 20–30 km/h city
-  #    12    |  43    |     1.0  /  50        |      1.2  /  60        | 40 km/h city (↑ from 40/50)
-  #    18    |  65    |     0.6  /  30        |     0.75  /  37        | 60 km/h suburban (↑ from 25/32)
-  #    25    |  90    |     0.4  /  20        |     0.55  /  27        | 80–90 km/h highway (↑ from 15/20)
-  #    30    | 108    |    0.25  /  12        |     0.35  /  17        | 100–110 km/h highway (↑ from 10/15)
-  #
-  # 176-segment drivelog (1.03M frames, 44 min op + 79 min stock LFA) analysis
-  # shows op model emits |Δdesired| p99 demands of 75–100°/s in the 30–50 km/h
-  # buckets, exceeding the previous table's 35–44°/s ceiling — explaining the
-  # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
-  # v1 speed-dependent rate table kept as fallback for non-CCNC CANFD angle
-  # cars (if any future variant exists). CCNC angle platform uses v2
-  # VM-based jerk/accel limits (see ANGLE_LIMITS_VM below).
+  # CCNC angle-control platform: VM-based jerk/accel limits.
+  # The path activates automatically for any Hyundai/Kia car whose `flags`
+  # contains BOTH `HyundaiFlags.CCNC` AND `HyundaiFlags.CANFD_LKA_STEERING_ALT`
+  # — Ioniq 6 N 2026 is the first member. Limits below mirror panda safety
+  # (`HYUNDAI_CANFD_ANGLE_STEERING_LIMITS` in hyundai_canfd.h).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([0., 3., 7., 12., 18., 25., 30.], [0.6, 0.9, 1.3, 1.0, 0.6, 0.4, 0.25]),   # UP   (deg/20ms @ 50Hz)
-    ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.2, 0.75, 0.55, 0.35]), # DOWN (deg/20ms @ 50Hz)
-  )
-
-  # Phase 5: VM-based jerk/accel limits for CCNC angle-control platform.
-  # MAX_LATERAL_JERK raised 3.5 → 5.0 to match release-mici's clip_curvature
-  # (drive_helpers.py MAX_LATERAL_JERK=5.0).  This is the root fix for both
-  # user issue #5 (planner commands arrive too late) and #6 (cannot exit
-  # 40-60 km/h ramps fast enough): jerk dominates the angle-rate limit via
-  # max_curv_rate = JERK/v², so a 30% lower jerk was compressing the whole
-  # operating range.  ANGLE_RATE_V table is loosened accordingly to avoid
-  # being the new bottleneck.
-  ANGLE_LIMITS_VM: AngleSteeringLimits = AngleSteeringLimits(
     360,
     ([], []),
     ([], []),
@@ -83,21 +31,6 @@ class CarControllerParams:
     MAX_LATERAL_JERK=3.0 + (9.81 * 0.06),   # ~3.59 m/s³ (matches panda safety)
     MAX_ANGLE_RATE=5.0,                       # deg/frame — sunnypilot default
   )
-
-  # Phase 5: Speed-dependent per-step cap (deg/20ms @ 50Hz).
-  # Loosened at city-high/suburban/highway so off-ramp maneuvers at 40-60 km/h
-  # can swing 90° in ≤0.8 s (user issue #6).  Jerk 5.0 is the binding
-  # constraint at most speeds; this table is an absolute ceiling.
-  # Breakpoints:
-  #   0 m/s  (stopped)     : 2.5   — parking/stopped
-  #   7 m/s  (25 km/h)     : 2.5   — parking-exit (user-reported tick here)
-  #  11 m/s  (40 km/h)     : 2.5   — city-low top   (was 2.0) → ramp capable
-  #  17 m/s  (60 km/h)     : 2.3   — city-high top  (was 1.5) → ramp capable
-  #  23 m/s  (83 km/h)     : 2.3   — suburban top   (was 1.3)
-  #  30 m/s  (108 km/h)    : 1.5   — highway        (was 1.0) — jerk still binds
-  # Values are clamped to ANGLE_LIMITS_VM.MAX_ANGLE_RATE=3.0 as absolute ceiling.
-  ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
-  ANGLE_RATE_V  = [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]  # deg/20ms
 
   # Low-speed angle smoothing (sp_smooth_angle): EMA on commanded angle where
   # alpha is interpolated from v_ego_raw. Strong smoothing at low speed
@@ -177,7 +110,6 @@ class CarControllerParams:
       self.STEER_DELTA_DOWN = 3
       if CP.flags & HyundaiFlags.CCNC:
         self.STEER_STEP = 1  # 100 Hz — matches panda safety frequency
-        self.ANGLE_LIMITS = CarControllerParams.ANGLE_LIMITS_VM
         self.STEER_THRESHOLD = 350  # angle-control: EPS reaction inflates torque
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.

@@ -38,10 +38,9 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon, apply_angle=0.0, lkas_alt_cam_msg=None,
-                             driver_torque_blend=1.0, blinker_on=False, speed_blend=1.0,
-                             aci_active=None, aci_gain_ramp=1.0, in_passthrough=False,
-                             mads_lka_icon=None, lon_accel=0.0, effective_aci_gain=None,
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, lkas_icon,
+                             apply_angle=0.0, lkas_alt_cam_msg=None,
+                             mads_lka_icon=None, effective_aci_gain=None,
                              mads_force_assist=False, cam_invalid=False,
                              lfa_sync_pulse=False):
   """
@@ -49,48 +48,37 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEERING_ALT` flags; Ioniq 6 N
   2026 is the first member).
 
-  driver_torque_blend: 1.0 = no driver input, 0.0 = driver fully overriding.
-    Used for gradient ACI authority reduction (Toyota LTA TORQUE_WIND_DOWN style).
-  blinker_on: forwarded informationally only. The actual ACI authority cap
-    during turn signals is applied upstream in `compute_torque_reduction_gain`
-    (carcontroller.py) which ceilings the gain at 0.5 and forces a fast
-    rate_dn so the cap reaches the wheel within ~100 ms.
-  speed_blend: 0.0 below ~1 km/h, 1.0 above ~3 km/h, linear in between. Smooth
-    replacement for the old binary `aci_speed_ok` 3 km/h gate.
-  aci_active: latched ACI engagement state with hysteresis (enter at authority>=0.3,
-    exit at authority<0.05) computed in carcontroller. Prevents binary flips of
-    LKAS_ANGLE_ACTIVE / LKA_ASSIST at the authority threshold — the root cause of
-    the residual low-speed "tick" felt when returning wheel to center. If None,
-    falls back to single-threshold computation (legacy).
-  aci_gain_ramp: 0.0→1.0 first-order ramp applied to `effective_aci_gain` when
-    aci_active transitions False→True, smoothing the ACIGain discontinuity.
-  in_passthrough: carcontroller already decided to forward camera values. If True,
-    emit the camera passthrough frame (identical to the legacy early-return, but
-    now driven by carcontroller's latched state rather than recomputed here).
+  lat_active: carcontroller's `effective_lat_active`. Gated upstream on
+    CC.latActive, apply_steer_req, in_passthrough, was_in_reverse, cam_stale,
+    and fault_lfa — when False the frame is emitted in passive form.
+  effective_aci_gain: ADAS_ACIAnglTqRedcGainVal, computed by
+    `compute_torque_reduction_gain` in carcontroller (reference 17-line
+    version: torque + v_ego_kph + steering_error → 0.0..1.0). The LKAS_ALT
+    packer just forwards it.
+  mads_lka_icon: MADS-driven LKA_ICON override (2 = green / 0 = off-but-visible /
+    None = mirror camera).
+  lfa_sync_pulse: short LFA_BUTTON high pulse emitted on every MADS
+    enabled-state edge so the stock gateway toggles the cluster LFA icon.
+  cam_invalid: cam_stale or fault_lfa from carcontroller — forces
+    LKA_ASSIST=0 and LKAS_ANGLE_ACTIVE=1 even when MADS would otherwise
+    keep the icon green.
   """
   ccnc_lka_alt = bool(CP.flags & HyundaiFlags.CCNC) and bool(CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
 
   if ccnc_lka_alt:
     # IMPORTANT: no separate passthrough code path. Earlier builds had an
-    # early-return that emitted camera bytes verbatim (forwarding the
-    # camera frame when `in_passthrough=True`). It was removed because the
-    # two code paths produced *structurally different* LKAS_ALT frames —
-    # field ordering from camera passthrough vs. the dict-constructed
-    # active frame — and ADAS DRV flagged the format switch at each
-    # passthrough→active transition as a fault (observed on routes 3a /
-    # 32 / 34 on ccnc-port-prebuilt). Now the SAME dict is used for both
-    # active and passive frames; `in_passthrough` is still used upstream
-    # (carcontroller.py) to drive `rate_lat_active` in the rate limiter,
-    # but the emitted frame always goes through the dict construction
-    # below.
+    # early-return that emitted camera bytes verbatim. It was removed
+    # because the two code paths produced *structurally different*
+    # LKAS_ALT frames (field ordering from camera passthrough vs. the
+    # dict-constructed active frame), and ADAS DRV flagged the format
+    # switch at each passthrough→active transition as a fault (observed
+    # on routes 3a / 32 / 34 on ccnc-port-prebuilt). Now the SAME dict
+    # construction below is used for both active and passive frames,
+    # toggled only via `steering_active`.
 
-    # Always-active strategy: when latActive=True, always signal ACTIVE=2
-    # to MDPS. The five intermediate gates (authority hysteresis, cam_stale,
-    # speed_blend, blinker attenuation) that previously controlled the binary
-    # ACTIVE flag caused intermittent dropouts (route 0x49: 23.9% of
-    # latActive frames had steering_active=False). Instead, modulate effort
-    # via ACIGain continuously (0.0-1.0) while keeping ACTIVE=2 stable.
-    # MDPS's internal safety limits handle edge cases (standstill, override).
+    # Always-active strategy: when lat_active=True, signal LKAS_ANGLE_ACTIVE=2
+    # to MDPS. ACIGain (continuous 0.0..1.0) modulates effort while the
+    # ACTIVE flag stays stable.
     steering_active = bool(lat_active)
 
     if mads_lka_icon is not None:
@@ -155,13 +143,13 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         # press the camera still observes also propagates to the gateway.
         "LFA_BUTTON":                1 if lfa_sync_pulse else lkas_alt_cam_msg["LFA_BUTTON"],
         # Force LKA_ASSIST=1 when MADS is enabled, even during transient
-        # passive states (in_passthrough, override_snapped, was_in_reverse,
-        # or VM rate-limit hold). Without this the cluster's green steering
-        # icon falls off during these windows because the camera
-        # passthrough value (LKA_ASSIST=0) takes over, even though MADS is
-        # still the active assistance source. STEER_REQ and TORQUE_REQUEST
-        # stay 0 and ACIGain follows effective_lat_active, so MDPS does not
-        # actually pull the wheel — only the icon stays on.
+        # passive states (in_passthrough, was_in_reverse, VM rate-limit
+        # hold). Without this the cluster's green steering icon falls off
+        # during these windows because the camera passthrough value
+        # (LKA_ASSIST=0) takes over, even though MADS is still the active
+        # assistance source. STEER_REQ and TORQUE_REQUEST stay 0 and
+        # ACIGain follows effective_lat_active, so MDPS does not actually
+        # pull the wheel — only the icon stays on.
         # When the camera is invalid (cam_stale or fault_lfa), drop the
         # icon to reflect actual MADS health: an unhealthy camera path
         # should not display "everything fine" green.

@@ -199,34 +199,42 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     actuators = CC.actuators
     hud_control = CC.hudControl
 
-    # steering torque
-    new_torque = int(round(actuators.torque * self.params.STEER_MAX))
-    apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
-
-    # >90 degree steering fault prevention
-    self.angle_limit_counter, apply_steer_req = common_fault_avoidance(abs(CS.out.steeringAngleDeg) >= MAX_ANGLE, CC.latActive,
-                                                                       self.angle_limit_counter, MAX_ANGLE_FRAMES,
-                                                                       MAX_ANGLE_CONSECUTIVE_FRAMES)
-
-    # Trip the steerAngleLimit alert when fault-avoidance has actually cut
-    # the request bit (apply_steer_req=False because angle_limit_counter
-    # exceeded MAX_ANGLE_FRAMES). Hysteresis: count up while still cut, decay
-    # when active again. Driver-visible threshold = 5 frames (=50ms) so
-    # transient single-frame cuts during normal lock-to-lock sweeps do not
-    # raise the alert.
-    if CC.latActive and abs(CS.out.steeringAngleDeg) >= MAX_ANGLE and not apply_steer_req:
-      self.alert_max_angle_frames = min(self.alert_max_angle_frames + 1, 100)
-    else:
-      self.alert_max_angle_frames = max(self.alert_max_angle_frames - 2, 0)
-
-    if not CC.latActive:
+    # Steering. CCNC angle-control platform skips the torque-control limiter
+    # and the MAX_ANGLE / common_fault_avoidance gate — both are torque-path
+    # protections (EPS fault avoidance when torque is applied at high angle).
+    # Angle-control uses LKAS_ANGLE_ACTIVE + ACIGain, which the panda
+    # safety hooks (HYUNDAI_CANFD_ANGLE_STEERING_LIMITS) enforce
+    # independently.
+    if is_ccnc_angle_platform(self.CP.flags):
       apply_torque = 0
+      apply_steer_req = bool(CC.latActive)
+      torque_fault = False
+      self.alert_max_angle_frames = max(self.alert_max_angle_frames - 2, 0)
+    else:
+      new_torque = int(round(actuators.torque * self.params.STEER_MAX))
+      apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
 
-    # Hold torque with induced temporary fault when cutting the actuation bit
-    # FIXME: we don't use this with CAN FD?
-    torque_fault = CC.latActive and not apply_steer_req
+      # >90 degree steering fault prevention
+      self.angle_limit_counter, apply_steer_req = common_fault_avoidance(abs(CS.out.steeringAngleDeg) >= MAX_ANGLE, CC.latActive,
+                                                                         self.angle_limit_counter, MAX_ANGLE_FRAMES,
+                                                                         MAX_ANGLE_CONSECUTIVE_FRAMES)
 
-    self.apply_torque_last = apply_torque
+      # steerAngleLimit alert hysteresis: count up while fault-avoidance has
+      # actually cut the request bit, decay when active again. Threshold
+      # 5 frames (=50 ms) so transient single-frame cuts during normal
+      # lock-to-lock sweeps don't raise the alert.
+      if CC.latActive and abs(CS.out.steeringAngleDeg) >= MAX_ANGLE and not apply_steer_req:
+        self.alert_max_angle_frames = min(self.alert_max_angle_frames + 1, 100)
+      else:
+        self.alert_max_angle_frames = max(self.alert_max_angle_frames - 2, 0)
+
+      if not CC.latActive:
+        apply_torque = 0
+
+      # Hold torque with induced temporary fault when cutting the actuation bit
+      # FIXME: we don't use this with CAN FD?
+      torque_fault = CC.latActive and not apply_steer_req
+      self.apply_torque_last = apply_torque
 
     # accel + longitudinal
     accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
@@ -513,7 +521,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
-                                                         in_passthrough=in_passthrough,
                                                          mads_lka_icon=mads_lka_icon,
                                                          effective_aci_gain=effective_aci_gain,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
