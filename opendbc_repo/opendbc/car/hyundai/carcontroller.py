@@ -67,6 +67,13 @@ LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ~ 6.11 m/s
 TRAFFIC_FOLLOW_NEAR_M = 3.0
 TRAFFIC_FOLLOW_FAR_M  = 5.0
 
+# Failsafe: if apply_steer_angle_limits_vm returns None (lateral accel
+# limit violated and rate limit cannot pull back fast enough) for this
+# many consecutive frames, force STEER_REQ=0 instead of holding a
+# frozen angle with the active flag. 50 ms is short enough to filter
+# momentary rate-limit blips and shorter than the 500 ms alert window.
+VM_REJECT_FORCE_PASSIVE_FRAMES = 5
+
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False):
@@ -190,6 +197,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.alert_max_angle_frames = 0
     self.alert_cam_stale_frames = 0
     self.was_in_reverse = False
+    # Phase 5e failsafe: persistent VM rate-limit rejection counter.
+    self.vm_reject_consecutive_frames = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -461,11 +470,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # VM rate limiter rejected the command (lateral accel limit violated
         # while rate limit can't pull back fast enough). Hold the previous
         # compliant angle (apply_angle_last unchanged), trip the alert.
+        self.vm_reject_consecutive_frames += 1
         if v_ego_safe > 8.0:
           self.alert_vm_limit_frames = min(self.alert_vm_limit_frames + 1, 100)
           if self.alert_vm_limit_frames == 50 and self.alert_vm_limit_cooldown_frames == 0:
             self.alert_vm_limit_cooldown_frames = 1000
       else:
+        self.vm_reject_consecutive_frames = 0
         self.apply_angle_last = apply_angle
         self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
 
@@ -527,10 +538,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # alert thresholds so we never emit ACTIVE=2 with stale/faulted input.
     cam_stale_tripped = bool(self.alert_cam_stale_frames >= 30)
     fault_lfa_bool = bool(getattr(CS, 'fault_lfa', 0))
+    # Phase 5e: force STEER_REQ=0 to MDPS after a brief sustained VM
+    # rejection so panda receives an explicit "do not steer" rather than
+    # a frozen angle held with the active flag.
+    vm_reject_persistent = self.vm_reject_consecutive_frames >= VM_REJECT_FORCE_PASSIVE_FRAMES
     if ccnc_lka_alt:
       effective_lat_active = (bool(CC.latActive) and bool(apply_steer_req)
                               and not self.was_in_reverse and not in_passthrough
-                              and not cam_stale_tripped and not fault_lfa_bool)
+                              and not cam_stale_tripped and not fault_lfa_bool
+                              and not vm_reject_persistent)
     else:
       effective_lat_active = bool(apply_steer_req)
 
