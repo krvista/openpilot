@@ -18,64 +18,12 @@ class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s
   ACCEL_MAX = 2.0 # m/s
 
-  # Angle-based control limits for the HDA2-ALT + CCNC angle-control
-  # platform. This path activates automatically for any Hyundai/Kia car
-  # whose `flags` contains BOTH `HyundaiFlags.CCNC` AND
-  # `HyundaiFlags.CANFD_LKA_STEERING_ALT`. Ioniq 6 N 2026 is the first
-  # member; any future car with the same HDA2-ALT CCNC ADAS architecture
-  # (2025+ MY Hyundai/Kia/Genesis trims that use LKAS_ALT 0x110 with
-  # ADAS_StrAnglReqVal field to command ADAS DRV) will inherit the same
-  # rate limiter, hysteresis, camera-ref blend (Stage 4), and ACI gain
-  # policy by simply receiving those two flags in values.py.
-  #
-  # Rate table below is tuned from Ioniq 6 N drivelog (1.24M frames,
-  # routes 28-2d). If a future car shows materially different planner
-  # demand or EPS capability, per-fingerprint overrides can be added in
-  # CarControllerParams.__init__ below.
-  #
-  # Uses the standard speed-dependent rate limiter apply_std_steer_angle_limits,
-  # matching Toyota LTA / Tesla / Nissan / PSA / Subaru / Rivian architecture.
-  #
-  # Rate table is tuned for Korean speed regimes (도시 30/40/50, 시외 60,
-  # 고속도로 80/100/110 km/h) with the peak placed at ~25 km/h (v=7 m/s),
-  # where drivelog analysis shows the planner's angle-rate demand is highest
-  # (sharp-corner / intersection maneuvering). Mid-speed rates (12–25 m/s,
-  # 43–90 km/h) were raised to cover the planner's p95 demand during S-curve
-  # maneuvering — previous tune saturated in this range and the wheel could
-  # not follow quick serpentine lane changes.
-  #
-  #   v_ego  | v_ego  |   UP (°/20ms / °/s)   |   DOWN (°/20ms / °/s)  | Regime
-  #   m/s    | km/h   |                       |                        |
-  #     0    |   0    |     0.6  /  30        |      0.8  /  40        | stopped
-  #     3    |  11    |     0.9  /  45        |      1.1  /  55        | parking
-  #     7    |  25    |     1.3  /  65        |      1.5  /  75   peak | 20–30 km/h city
-  #    12    |  43    |     1.0  /  50        |      1.2  /  60        | 40 km/h city (↑ from 40/50)
-  #    18    |  65    |     0.6  /  30        |     0.75  /  37        | 60 km/h suburban (↑ from 25/32)
-  #    25    |  90    |     0.4  /  20        |     0.55  /  27        | 80–90 km/h highway (↑ from 15/20)
-  #    30    | 108    |    0.25  /  12        |     0.35  /  17        | 100–110 km/h highway (↑ from 10/15)
-  #
-  # 176-segment drivelog (1.03M frames, 44 min op + 79 min stock LFA) analysis
-  # shows op model emits |Δdesired| p99 demands of 75–100°/s in the 30–50 km/h
-  # buckets, exceeding the previous table's 35–44°/s ceiling — explaining the
-  # STEER_ANGLE_MAX matches ADAS_StrAnglReqVal DBC range [0|176.7] deg.
-  # v1 speed-dependent rate table kept as fallback for non-CCNC CANFD angle
-  # cars (if any future variant exists). CCNC angle platform uses v2
-  # VM-based jerk/accel limits (see ANGLE_LIMITS_VM below).
+  # CCNC angle-control platform: VM-based jerk/accel limits.
+  # The path activates automatically for any Hyundai/Kia car whose `flags`
+  # contains BOTH `HyundaiFlags.CCNC` AND `HyundaiFlags.CANFD_LKA_STEERING_ALT`
+  # — Ioniq 6 N 2026 is the first member. Limits below mirror panda safety
+  # (`HYUNDAI_CANFD_ANGLE_STEERING_LIMITS` in hyundai_canfd.h).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    176.7,  # STEER_ANGLE_MAX (deg) - matches ADAS_StrAnglReqVal DBC max
-    ([0., 3., 7., 12., 18., 25., 30.], [0.6, 0.9, 1.3, 1.0, 0.6, 0.4, 0.25]),   # UP   (deg/20ms @ 50Hz)
-    ([0., 3., 7., 12., 18., 25., 30.], [0.8, 1.1, 1.5, 1.2, 0.75, 0.55, 0.35]), # DOWN (deg/20ms @ 50Hz)
-  )
-
-  # Phase 5: VM-based jerk/accel limits for CCNC angle-control platform.
-  # MAX_LATERAL_JERK raised 3.5 → 5.0 to match release-mici's clip_curvature
-  # (drive_helpers.py MAX_LATERAL_JERK=5.0).  This is the root fix for both
-  # user issue #5 (planner commands arrive too late) and #6 (cannot exit
-  # 40-60 km/h ramps fast enough): jerk dominates the angle-rate limit via
-  # max_curv_rate = JERK/v², so a 30% lower jerk was compressing the whole
-  # operating range.  ANGLE_RATE_V table is loosened accordingly to avoid
-  # being the new bottleneck.
-  ANGLE_LIMITS_VM: AngleSteeringLimits = AngleSteeringLimits(
     360,
     ([], []),
     ([], []),
@@ -84,58 +32,12 @@ class CarControllerParams:
     MAX_ANGLE_RATE=5.0,                       # deg/frame — sunnypilot default
   )
 
-  # Phase 5: Speed-dependent per-step cap (deg/20ms @ 50Hz).
-  # Loosened at city-high/suburban/highway so off-ramp maneuvers at 40-60 km/h
-  # can swing 90° in ≤0.8 s (user issue #6).  Jerk 5.0 is the binding
-  # constraint at most speeds; this table is an absolute ceiling.
-  # Breakpoints:
-  #   0 m/s  (stopped)     : 2.5   — parking/stopped
-  #   7 m/s  (25 km/h)     : 2.5   — parking-exit (user-reported tick here)
-  #  11 m/s  (40 km/h)     : 2.5   — city-low top   (was 2.0) → ramp capable
-  #  17 m/s  (60 km/h)     : 2.3   — city-high top  (was 1.5) → ramp capable
-  #  23 m/s  (83 km/h)     : 2.3   — suburban top   (was 1.3)
-  #  30 m/s  (108 km/h)    : 1.5   — highway        (was 1.0) — jerk still binds
-  # Values are clamped to ANGLE_LIMITS_VM.MAX_ANGLE_RATE=3.0 as absolute ceiling.
-  ANGLE_RATE_BP = [0.,  7., 11., 17., 23., 30.]   # m/s
-  ANGLE_RATE_V  = [2.5, 2.5, 2.5, 2.3, 2.3, 1.5]  # deg/20ms
-
-  # Variable-tau LPF: unified angle filter. Tau is continuous function of
-  # angle magnitude + speed. Strong at center (straight-line jitter suppression),
-  # weak at large angles (fast curve tracking), with low-speed smoothing.
-  # Drivelog 0x15 analysis (80 entry events, 100Hz rlog) showed previous
-  # values caused ~828ms d@90% for soft (<1.5°) corner entries vs 127ms after
-  # the table revisions below; straight-line RMS 0.625°→0.632° (+1%, ignorable).
-  # 2026-05-12 (6차): drivelog 0000000f+10 (06edc40, 49k frames) showed
-  # apply_angle Δ p90 = 0.22°/frame on highway straights (op-side jitter
-  # passes through center). center tau 2.5→3.5 strengthens absorption
-  # near 0° while higher-angle behaviour is unchanged.
-  VTAU_ANGLE_BP = [0.0, 1.0, 3.0, 10.0]  # |desired_angle| deg
-  VTAU_ANGLE_V  = [3.5, 0.4, 0.20, 0.20]  # 6차: center 2.5→3.5 (jitter ↓)
-  VTAU_SPEED_BP = [0.0, 3.0, 5.0, 15.0]  # m/s
-  VTAU_SPEED_V  = [0.5, 0.3, 0.20, 0.0]  # was [5.0, 1.5, ...]; freeze<5kph already handles crawl
-  # Speed-adaptive entering_curve threshold. Below 4 m/s the freeze latch is
-  # active so the value at v<4 doesn't fire. Drive 0x14/0x15 grid search
-  # lowered mid breakpoint 1.0°→0.7° (1.5-3° d@90% 107→78ms, 3-7° 97→58ms)
-  # with zero jitter regression. Drive 0x05 highway feedback (1.5° entry too
-  # slow; ψ-error correction sluggish at speed) lowers highway 1.5°→0.8° —
-  # straight-line noise is now caught by the controlsd lane-confidence
-  # damping before reaching this gate.
-  # 2026-05-12 (6차): drivelog 0000000f+10 showed |op|>10° corner entries
-  # had apply<op (understeer) 59% of frames with mean lag -0.72°. Highway
-  # entry_th 0.8° too conservative — gradual curve onsets never tripped
-  # so tau LPF kept smoothing op_desired. Lowered highway 0.8→0.5 (still
-  # > center jitter p90 0.24°/frame so false-trigger risk low).
-  VTAU_ENTRY_TH_BP = [4.0, 15.0, 25.0]   # m/s
-  VTAU_ENTRY_TH_V  = [0.3, 0.5, 0.5]     # 6차: highway 0.7/0.8 → 0.5/0.5 (curve onset earlier)
-  VTAU_EXIT_TH  = 0.3   # deg: bypass LPF when returning to center (abs(raw) < abs(lpf) - TH)
-
-  # ACIGain asymmetric rate limit (HDA1-inspired): decrease 3.5× faster than
-  # increase so driver override yields quickly while re-engagement is smooth.
-  # HDA1 reference: -0.014/+0.004 @ 100Hz. We use ~2.5x down / 1x up.
-  ACI_GAIN_RATE_DOWN = -0.014   # per frame @ 100Hz (sunnypilot: -1.4/s)
-  ACI_GAIN_RATE_UP   =  0.004   # per frame @ 100Hz (sunnypilot: +0.4/s)
-  ACI_GAIN_QUANT     =  0.004   # DBC signal resolution
-  ACI_GAIN_CEILING   =  1.0     # steady-state max
+  # Low-speed angle smoothing (sp_smooth_angle): EMA on commanded angle where
+  # alpha is interpolated from v_ego_raw. Strong smoothing at low speed
+  # (alpha=0.05), no smoothing at/above 18 m/s. Mirrors sunnypilot reference.
+  SMOOTHING_ANGLE_VEGO_MATRIX = [0, 8.5, 11, 13.8, 18]
+  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.1, 0.3, 0.6, 1]
+  SMOOTHING_ANGLE_MAX_VEGO = SMOOTHING_ANGLE_VEGO_MATRIX[-1]
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
@@ -187,61 +89,16 @@ class CarControllerParams:
   # above light-grip p90 (184 Nm) and absorbed by 5차 steer_torque_lpf
   # (30 ms) against ±5 Nm CAN noise.
   DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
-  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0   # 6차: 200→180
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
-
-  # 2026-05-12 (4th): blinker-specific override thresholds. A turn signal
-  # is the driver's explicit lane-change intent — they have already
-  # declared "I want the car to move toward an adjacent lane." Treating
-  # their light grip (~p75=92 Nm hand placement during the maneuver) the
-  # same as straight-line cruising leaves desired_angle_deg pointing back
-  # into the current lane and the wheel feels heavy. Lower thresholds
-  # when blinker is active so override_factor ramps up at hand-placement
-  # levels. drivelog 0000000e fight율(100+ + blinker, OLD build) 50% was
-  # the worst slice; expected ~15% after this branch.
-  # Non-blinker thresholds (above) unchanged — straight-line stability
-  # preserved.
-  #   - DEADZONE_BLINKER 70: just below light-grip p75(92) so any hand-on
-  #     during signalling starts blending. Above light-grip p50(36) so
-  #     pure hands-off signalling doesn't pull at all.
-  #   - FULL_OVERRIDE_LOW_V_BLINKER 130: by 130 Nm (well within active-
-  #     steering p25=250) the blend is fully on the wheel — low-speed
-  #     lane changes finish without op resistance.
-  #   - FULL_OVERRIDE_HIGH_V_BLINKER 220: highway lane changes need a bit
-  #     more deadband for EPS reaction; 220 Nm sits between light p90
-  #     (184) and active p25 (250).
+  # Blinker variant: driver light grip (~92 Nm) during a lane change
+  # should immediately start override blend. Lowered deadzone +
+  # full-override thresholds keep the blend curve meaningful in the
+  # light-grip range so op yields the wheel as soon as the driver
+  # signals intent.
   DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 70.0
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
-
-  # Snap + grace-window re-engage for angle-control:
-  #   - enter snap when override_factor > 0.90 for N frames →
-  #     apply_angle_last follows actual wheel angle (stop MADS fighting).
-  #   - 0.90 (was 0.95) — at the new FULL_OVERRIDE=200 Nm low-v this is
-  #     190 Nm: above light-grip p90 (184) so road-bumps don't trip it
-  #     (3-frame=30 ms minimum hold), but well inside active-steering so
-  #     the snap captures the moment the driver clearly takes over.
-  #   - exit snap only after override_factor < 0.10 for EXIT_FRAMES
-  #     — prevents flickering in/out of override.
-  # Blinker branch keeps `and not blinker_on` snap gate (carcontroller.py)
-  # so op's command stream stays continuous through lane-changes; the
-  # new desired_angle_deg blend handles blinker yield without the binary
-  # snap (78% blinker-fight reduced via blend alone).
-  #
-  # 2026-05-12 (5차): the snap state is entirely bypassed under blinker —
-  # yield happens via the desired_angle_deg blend (1 - override_factor)
-  # alone. DEADZONE_ANGLE / FULL_OVERRIDE_*_ANGLE values above are
-  # lerped against DEADZONE_ANGLE_BLINKER / FULL_OVERRIDE_*_BLINKER
-  # using a 300 ms LPF (`self.blinker_frac`) so the threshold step at
-  # the moment the driver flips the turn signal becomes a smooth ramp,
-  # avoiding the 0→37% wheel-blend jump at light grip (92 Nm). The
-  # 190 Nm trip number above therefore applies only to non-blinker
-  # driving — under blinker, override_factor reaches 1.0 well before
-  # any snap could fire, and the boolean gate blocks entry anyway.
-  OVERRIDE_SNAP_ENTER_FACTOR = 0.90
-  OVERRIDE_SNAP_ENTER_FRAMES = 3      # 30 ms at 100Hz — quick reaction
-  OVERRIDE_SNAP_EXIT_FACTOR  = 0.10
-  OVERRIDE_SNAP_EXIT_FRAMES  = 10     # 100 ms at 100Hz — faster re-engage (was 15 = 150ms)
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
@@ -261,7 +118,6 @@ class CarControllerParams:
       self.STEER_DELTA_DOWN = 3
       if CP.flags & HyundaiFlags.CCNC:
         self.STEER_STEP = 1  # 100 Hz — matches panda safety frequency
-        self.ANGLE_LIMITS = CarControllerParams.ANGLE_LIMITS_VM
         self.STEER_THRESHOLD = 350  # angle-control: EPS reaction inflates torque
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
@@ -792,6 +648,12 @@ class CAR(Platforms):
     ],
     # weight from SX and above trims, average of FWD and AWD version, steering ratio according to Kia News https://www.kiamedia.com/us/en/models/sportage/2023/specifications
     CarSpecs(mass=1725, wheelbase=2.756, steerRatio=13.6),
+  )
+  KIA_SPORTAGE_HEV_2026 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Kia Sportage Hybrid 2026", car_parts=CarParts.common([CarHarness.hyundai_n])),
+    ],
+    CarSpecs(mass=1812, wheelbase=2.756, steerRatio=13.7),
   )
   KIA_SORENTO = HyundaiPlatformConfig(
     [

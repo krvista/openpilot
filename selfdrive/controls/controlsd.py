@@ -31,7 +31,7 @@ LaneChangeDirection = log.LaneChangeDirection
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 # Lateral accel envelope used to normalize the predicted ratio for the
-# curveSpeedAdvisory event. Matches CarControllerParams.ANGLE_LIMITS_VM.
+# curveSpeedAdvisory event. Matches CarControllerParams.ANGLE_LIMITS.
 # MAX_LATERAL_ACCEL in opendbc/car/hyundai/values.py — angle-control panda
 # safety enforces the same number, so the ratio is comparable to the
 # threshold that trips vmLimitTripped. Non-angle cars never trip the
