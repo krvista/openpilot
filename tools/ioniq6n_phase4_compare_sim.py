@@ -355,6 +355,151 @@ def jitter_metrics(rows):
     return out
 
 
+# ----- Phase 5 — augmented NEW pipeline (B1/B2/B3/A2/S1 toggles) -----
+PHASE5_BLEND_DEADBAND = 0.3
+PHASE5_BLINKER_ACI_CAP = 0.45
+PHASE5_VM_REJECT_FORCE_PASSIVE_FRAMES = 5
+
+
+class NewPipelineV5:
+    def __init__(self, b1=False, b2=False, b3=False, a2=False, s1=False):
+        self.apply_angle_last = 0.0
+        self.aci_gain_last = 0.0
+        self.vm_reject_consecutive = 0
+        self.b1, self.b2, self.b3, self.a2, self.s1 = b1, b2, b3, a2, s1
+
+    def _override_factor(self, abs_tq, v_ms, blinker_on):
+        if self.b2 and blinker_on:
+            dz = DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
+            lo = DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER
+            hi = DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER
+        else:
+            dz = DRIVER_TORQUE_DEADZONE_ANGLE
+            lo = DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
+            hi = DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
+        full = float(np.interp(v_ms, [DRIVER_TORQUE_LOW_V_SPEED, DRIVER_TORQUE_HIGH_V_SPEED], [lo, hi]))
+        return float(np.clip((abs_tq - dz) / max(full - dz, 1.0), 0.0, 1.0))
+
+    def _aci_gain(self, steering_torque, v_kph, lat_active, last_gain, steering_error, blinker_on):
+        if lat_active:
+            base_ceiling = float(np.interp(v_kph, [0, 20, 40, 120], [0.4, 0.62, 0.85, 1.0]))
+            error_start = float(np.interp(v_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2]))
+            error_mult = float(np.interp(abs(steering_error), [error_start, error_start * 2], [1.0, 2.0]))
+            dyn_ceiling = min(1.0, base_ceiling * error_mult)
+            if self.a2 and blinker_on:
+                dyn_ceiling = min(dyn_ceiling, PHASE5_BLINKER_ACI_CAP)
+            target = float(np.interp(abs(steering_torque), [140, 420], [dyn_ceiling, 0.19]))
+        else:
+            target = 0.0
+        delta = target - last_gain
+        rate_dn = float(np.interp(abs(steering_torque), [0, 300, 700], [0.004, 0.01, 0.04]))
+        rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04])) if self.b3 else 0.004
+        gain = last_gain + max(-rate_dn, min(rate_up, delta))
+        return round(gain / ACI_GAIN_QUANT) * ACI_GAIN_QUANT
+
+    def step(self, op_curv, v_ms, actual, lat_active, pressed_torque, steering_pressed, blinker_on, cam_aci_gain):
+        desired = float(np.clip(op_curv, -360.0, 360.0))
+        if abs(v_ms) < SMOOTHING_ANGLE_MAX_VEGO:
+            desired = _sp_smooth_angle(v_ms, desired, self.apply_angle_last)
+        override_factor = self._override_factor(abs(pressed_torque), v_ms, blinker_on)
+        if self.b1 and override_factor > PHASE5_BLEND_DEADBAND:
+            blend = (override_factor - PHASE5_BLEND_DEADBAND) / (1.0 - PHASE5_BLEND_DEADBAND)
+            desired = (1.0 - blend) * desired + blend * actual
+        # VM rate-limit proxy (closed-form): treat |Δapply| > 5°/frame as reject
+        delta_apply = abs(desired - self.apply_angle_last) if lat_active else 0.0
+        vm_reject = lat_active and delta_apply > 5.0
+        self.vm_reject_consecutive = self.vm_reject_consecutive + 1 if vm_reject else 0
+        s1_tripped = self.s1 and self.vm_reject_consecutive >= PHASE5_VM_REJECT_FORCE_PASSIVE_FRAMES
+        effective_lat = lat_active and not s1_tripped
+        if lat_active and not s1_tripped:
+            self.apply_angle_last = desired
+        elif not lat_active:
+            self.apply_angle_last = float(np.clip(actual, -360.0, 360.0))
+        steering_error = self.apply_angle_last - actual
+        gain = self._aci_gain(pressed_torque, v_ms * 3.6, effective_lat, self.aci_gain_last,
+                              steering_error, blinker_on)
+        self.aci_gain_last = gain
+        return self.apply_angle_last, self.aci_gain_last, override_factor, s1_tripped, vm_reject
+
+
+VARIANT_FLAGS = [
+    ('N0', {}),                                                                     # pure reference
+    ('N1', {'b1': True}),                                                           # +heavy-grip blend
+    ('N2', {'b1': True, 'b2': True}),                                               # +blinker deadzone
+    ('N3', {'b1': True, 'b2': True, 'a2': True}),                                   # +blinker ACI cap
+    ('N4', {'b1': True, 'b2': True, 'a2': True, 'b3': True}),                       # +rate_up boost
+    ('N5', {'b1': True, 'b2': True, 'a2': True, 'b3': True, 's1': True}),           # +S1 failsafe
+]
+
+
+def run_variants(by_seg):
+    """Run all Phase 5 variants over the same drivelog. Returns dict
+    variant -> list of per-frame state rows."""
+    out = {name: [] for name, _ in VARIANT_FLAGS}
+    for (route, seg), seg_frames in sorted(by_seg.items()):
+        pipes = {name: NewPipelineV5(**flags) for name, flags in VARIANT_FLAGS}
+        for fr in seg_frames:
+            v = fr['v_ms']
+            op_curv = float(fr['desired'])
+            actual = float(fr['actual'])
+            lat = bool(fr['lat_active'])
+            pressed = bool(fr['steering_pressed'])
+            tq = float(fr['pressed_torque'])
+            blink = bool(fr.get('blinker', False))
+            for name, pipe in pipes.items():
+                ap, g, ovf, s1, vmr = pipe.step(op_curv, v, actual, lat, tq, pressed, blink, 0.0)
+                out[name].append({
+                    'route': route, 'seg': seg, 'v_kmh': fr['v_kmh'], 'lat_active': lat,
+                    'pressed_torque': tq, 'blinker': blink, 'op_curv': op_curv, 'actual': actual,
+                    'apply': ap, 'gain': g, 'override_factor': ovf,
+                    's1_tripped': s1, 'vm_reject': vmr,
+                })
+    return out
+
+
+def variant_summary(variants):
+    """Print per-variant metrics for the Phase 5 pass-gate."""
+    print()
+    print('=' * 78)
+    print('PHASE 5 — variant comparison (Phase 5 pass-gate)')
+    print('=' * 78)
+    print(f"{'variant':>8} {'p99_jit_all':>11} {'p99_jit_ss':>11} {'5deg/fr%':>9} "
+          f"{'blink_aci':>10} {'lc_lt100_aci':>13} "
+          f"{'s1_trip%':>9}")
+    for name, rows in variants.items():
+        # jitter p99 — all lat_active vs steady-state (override_factor < 0.3)
+        deltas_all = []
+        deltas_ss = []
+        for i in range(1, len(rows)):
+            a, b = rows[i-1], rows[i]
+            if a['lat_active'] and b['lat_active'] and a['route'] == b['route'] and a['seg'] == b['seg']:
+                d = abs(b['apply'] - a['apply'])
+                deltas_all.append(d)
+                if a['override_factor'] < PHASE5_BLEND_DEADBAND and b['override_factor'] < PHASE5_BLEND_DEADBAND:
+                    deltas_ss.append(d)
+        p99_all = float(np.percentile(deltas_all, 99)) if deltas_all else 0.0
+        p99_ss = float(np.percentile(deltas_ss, 99)) if deltas_ss else 0.0
+        over_5 = sum(1 for d in deltas_all if d > 5.0)
+        n_lat = sum(1 for r in rows if r['lat_active'])
+        sel_b = [r for r in rows if r['lat_active'] and r['blinker']]
+        blink_aci = float(np.mean([r['gain'] for r in sel_b])) if sel_b else 0.0
+        sel_lc = [r for r in rows if r['lat_active'] and r['blinker'] and abs(r['pressed_torque']) <= 100]
+        lc_aci = float(np.mean([r['gain'] for r in sel_lc])) if sel_lc else 0.0
+        s1_trip = sum(1 for r in rows if r['s1_tripped'])
+        s1_pct = 100.0 * s1_trip / max(len(rows), 1)
+        print(f"{name:>8} {p99_all:>11.3f} {p99_ss:>11.3f} {100.0*over_5/max(n_lat,1):>9.2f} "
+              f"{blink_aci:>10.3f} {lc_aci:>13.3f} "
+              f"{s1_pct:>9.3f}")
+    print()
+    print('Pass gates (Plan D):')
+    print('  - N5 p99_jit_ss <= N0 p99_jit_ss * 1.10 (steady-state jitter preserved)')
+    print('  - N5 p99_jit_all elevated under override is expected — B1 blend toward wheel.')
+    print('    Panda safety: VM rate limiter (5°/frame) catches >5deg events in production.')
+    print('  - N3 blink_aci <= 0.55 (A2 cap effective)')
+    print('  - N3 vs N2 blink_aci diff >= 0.20 (A2 has measurable effect)')
+    print('  - N5 s1_trip% <= 0.1 (normal driving rarely trips S1)')
+
+
 def saturated_rate_metrics(rows):
     """Count frames where |Δapply| exceeds MAX_ANGLE_RATE=5°/frame.
     Real apply_steer_angle_limits_vm would clamp these. A higher count
@@ -481,6 +626,11 @@ PR     Feature                                Phase 1+2 fate        Notes
                                                                     smoothing tau (~70-300 ms)
  #17-B moderate_entry blinker guard           REMOVED               no moderate_entry path
 """)
+
+    # Phase 5 variant comparison — run the 6 augmented variants on the
+    # same drivelog and emit Plan D pass-gate metrics.
+    variants = run_variants(by_seg)
+    variant_summary(variants)
 
 
 if __name__ == '__main__':
