@@ -81,7 +81,12 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     target = 0.0
   delta = target - last_gain
   rate_dn = np.interp(abs(steering_torque), [0, 300, 700], [0.004, 0.01, 0.04])
-  gain = last_gain + max(-rate_dn, min(0.004, delta))
+  # Drift-recovery boost: when |steering_error| > 0.5°, climb up to 10x
+  # faster so ACIGain recovers from a brief grip event within ~250 ms
+  # instead of 2.5 s. Below 0.5° (well-tracking) rate_up matches the
+  # reference 0.004 — no behaviour change on the steady-state path.
+  rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
+  gain = last_gain + max(-rate_dn, min(rate_up, delta))
   return round(gain / 0.004) * 0.004
 
 
