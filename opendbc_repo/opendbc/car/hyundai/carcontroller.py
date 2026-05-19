@@ -376,14 +376,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
-    # Driver override factor — used only as a hands_off gate for the
-    # low-speed camera passthrough latch (kept-feature #11). Uses the
-    # angle-control deadzone/full-override thresholds without the
-    # blinker-specific LPF (removed with the extended ACIGain).
+    # Driver override factor — used as a hands_off gate for the low-speed
+    # camera passthrough latch (kept-feature #11) and as the blend
+    # coefficient for the heavy-grip yield (Phase 5a). When the blinker
+    # is on, lower thresholds so a light grip during a lane change
+    # immediately produces override_factor > 0 and op yields.
     if ccnc_lka_alt:
-      DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
-      override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
-      override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
+      if blinker_on:
+        DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
+        override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER
+        override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER
+      else:
+        DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE
+        override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE
+        override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE
     else:
       DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
       override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V

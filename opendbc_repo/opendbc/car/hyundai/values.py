@@ -91,6 +91,14 @@ class CarControllerParams:
   DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
+  # Blinker variant: driver light grip (~92 Nm) during a lane change
+  # should immediately start override blend. Lowered deadzone +
+  # full-override thresholds keep the blend curve meaningful in the
+  # light-grip range so op yields the wheel as soon as the driver
+  # signals intent.
+  DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 70.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
