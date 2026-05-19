@@ -422,6 +422,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if abs(v_ego_safe) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_safe, desired_angle, self.apply_angle_last)
 
+      # Heavy-grip yield blend: bias the commanded angle toward the actual
+      # wheel proportionally to override_factor so the VM rate limiter's
+      # slew target is closer to where the wheel already is — op stops
+      # pulling against the driver without needing a snap state.
+      # Light-grip dead-band: ignore override_factor ≤ 0.3 (deadzone +
+      # ~30 Nm) so 살짝 손 얹은 정도는 reference flow 그대로.
+      if override_factor > 0.3:
+        blend = (override_factor - 0.3) / 0.7
+        desired_angle = (1.0 - blend) * desired_angle + blend * steer_angle_safe
+
       apply_angle = apply_steer_angle_limits_vm(
         desired_angle, self.apply_angle_last, v_ego_safe,
         steer_angle_safe, CC.latActive, self.params, self.VM,
