@@ -69,13 +69,17 @@ TRAFFIC_FOLLOW_FAR_M  = 5.0
 
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error):
+def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False):
   if lat_active:
     base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.4, 0.62, 0.85, 1.0])
     # Error-based boost reduction gain: At 0 kph, ignore errors under 1.25 deg.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
     dynamic_ceiling = min(1.0, base_ceiling * error_mult)
+    # Blinker authority cap: when the driver signals intent, force MDPS
+    # ceiling down so light-grip LC doesn't fight op torque assistance.
+    if blinker_on:
+      dynamic_ceiling = min(dynamic_ceiling, 0.45)
     target = np.interp(abs(steering_torque), [140, 420], [dynamic_ceiling, 0.19])
   else:
     target = 0.0
@@ -537,6 +541,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       effective_aci_gain = compute_torque_reduction_gain(
         steer_torque_safe, v_ego_safe * CV.MS_TO_KPH,
         effective_lat_active, self.aci_gain_last, steering_error,
+        blinker_on=blinker_on,
       )
       self.aci_gain_last = effective_aci_gain
 
