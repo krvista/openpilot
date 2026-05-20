@@ -36,7 +36,11 @@ class CarControllerParams:
   # alpha is interpolated from v_ego_raw. Strong smoothing at low speed
   # (alpha=0.05), no smoothing at/above 18 m/s. Mirrors sunnypilot reference.
   SMOOTHING_ANGLE_VEGO_MATRIX = [0, 8.5, 11, 13.8, 18]
-  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.1, 0.3, 0.6, 1]
+  # Phase 6c-3: stronger EMA in 30-50 kph (8.5-13.8 m/s) absorbs model
+  # curvature jitter that drivelog 0000001f showed as 2.0-2.5°/frame
+  # |Δapply| at low speed (ACIGain authority was already low at p50=0.4,
+  # so the jitter source was the commanded angle, not MDPS gain).
+  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.05, 0.15, 0.4, 1]
   SMOOTHING_ANGLE_MAX_VEGO = SMOOTHING_ANGLE_VEGO_MATRIX[-1]
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
