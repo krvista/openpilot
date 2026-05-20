@@ -81,7 +81,14 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.4, 0.62, 0.85, 1.0])
     # Error-based boost reduction gain: At 0 kph, ignore errors under 1.25 deg.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
-    error_mult = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
+    error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
+    # The error-mult boost is meant to recover op tracking when hands-off
+    # drift opens the steering_error. Under grip, the driver is the source
+    # of the error — boosting MDPS authority then directly fights the
+    # driver. Suppress the boost linearly from full at deadzone (100 Nm)
+    # to zero at full-override (180 Nm low-v); above that, no boost.
+    torque_suppress = np.interp(abs(steering_torque), [100, 180], [1.0, 0.0])
+    error_mult = 1.0 + (error_mult_raw - 1.0) * torque_suppress
     dynamic_ceiling = min(1.0, base_ceiling * error_mult)
     # Blinker authority cap: when the driver signals intent, force MDPS
     # ceiling down so light-grip LC doesn't fight op torque assistance.
