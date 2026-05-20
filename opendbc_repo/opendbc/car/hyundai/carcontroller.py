@@ -452,9 +452,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # pulling against the driver without needing a snap state.
       # Light-grip dead-band: ignore override_factor ≤ 0.1 (~108 Nm low-v /
       # ~125 Nm high-v) so 살짝 손 얹은 정도는 reference flow 그대로. Moderate
-      # two-hand grip (100+ Nm) onwards blends progressively toward the wheel.
+      # two-hand grip saturates at override_factor=0.5 (~140 Nm low-v /
+      # ~225 Nm high-v): drivelog 0000001f showed 38% of 150-300 Nm grip
+      # frames stuck below full blend with divisor 0.9 — narrower divisor
+      # 0.4 reaches full wheel-tracking at typical two-hand grip torques.
       if override_factor > 0.1:
-        blend = (override_factor - 0.1) / 0.9
+        blend = min((override_factor - 0.1) / 0.4, 1.0)
         desired_angle = (1.0 - blend) * desired_angle + blend * steer_angle_safe
 
       apply_angle = apply_steer_angle_limits_vm(
