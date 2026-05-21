@@ -96,11 +96,15 @@ class CarControllerParams:
   DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
-  # Blinker variant: driver light grip (~92 Nm) during a lane change
-  # should immediately start override blend. Lowered deadzone +
+  # Phase 5b (B2) blinker variant: driver light grip (~92 Nm light-grip
+  # p90, measured in drivelog 0000000e where the non-blinker 100 Nm
+  # deadzone left override_factor=0 during 50% of lane-change frames)
+  # should immediately start the override blend. Lowered deadzone +
   # full-override thresholds keep the blend curve meaningful in the
   # light-grip range so op yields the wheel as soon as the driver
-  # signals intent.
+  # signals intent. Combined with the Phase 5d (A2) blinker ceiling
+  # cap of 0.45 in compute_torque_reduction_gain, both the command-
+  # and authority-side of the actuator stop pulling against the driver.
   DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 70.0
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0

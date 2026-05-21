@@ -72,26 +72,49 @@ TRAFFIC_FOLLOW_FAR_M  = 5.0
 # many consecutive frames, force STEER_REQ=0 instead of holding a
 # frozen angle with the active flag. 50 ms is short enough to filter
 # momentary rate-limit blips and shorter than the 500 ms alert window.
+# Phase 5e introduced this (commit 6df2939); Phase 6d adds the
+# angle-passive latch as an additional false-reason on the same chain.
 VM_REJECT_FORCE_PASSIVE_FRAMES = 5
 
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False):
+  # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
+  # augmented across Phase 5 and Phase 6 by stateless hooks that each
+  # take a single per-frame signal as input:
+  #   - Phase 5c (B3) — rate_up drift-recovery boost on |steering_error|.
+  #   - Phase 5d (A2) — blinker ceiling cap to yield during lane changes.
+  #   - Phase 6a (N6a) — torque interp [100, 350] aligned with the
+  #                       100 Nm deadzone (was [140, 420]).
+  #   - Phase 6c-2 (N7b commit b6e5842) — torque-aware suppression of
+  #                       the error_mult boost so grip-induced error
+  #                       does not amplify the ceiling against the driver.
   if lat_active:
     base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.4, 0.62, 0.85, 1.0])
-    # Error-based boost reduction gain: At 0 kph, ignore errors under 1.25 deg.
+    # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
-    # The error-mult boost is meant to recover op tracking when hands-off
-    # drift opens the steering_error. Under grip, the driver is the source
-    # of the error — boosting MDPS authority then directly fights the
-    # driver. Suppress the boost linearly from full at deadzone (100 Nm)
-    # to zero at full-override (180 Nm low-v); above that, no boost.
+    # Phase 6c-2 N7b: the error_mult boost was designed to recover op
+    # tracking when hands-off drift opens steering_error (i.e. ACIGain
+    # ceiling 1→2x to push MDPS harder back onto the desired angle).
+    # Under driver grip, the driver is the source of the error — boosting
+    # MDPS then fights the driver. Drivelog 0000001f (Phase 6a build,
+    # 71.5k urban frames in rain) measured sustained 200+ Nm grip with
+    # mean dynamic_ceiling=1.0 (saturated) while the driver was actively
+    # turning the wheel. Linearly suppress the boost from full at the
+    # 100 Nm deadzone to zero at the 180 Nm low-v full-override point;
+    # above 180 Nm there is no boost at all. The base_ceiling × 1 line
+    # remains, so light-grip / hands-off recovery is unchanged.
     torque_suppress = np.interp(abs(steering_torque), [100, 180], [1.0, 0.0])
     error_mult = 1.0 + (error_mult_raw - 1.0) * torque_suppress
     dynamic_ceiling = min(1.0, base_ceiling * error_mult)
-    # Blinker authority cap: when the driver signals intent, force MDPS
-    # ceiling down so light-grip LC doesn't fight op torque assistance.
+    # Phase 5d A2 (commit 4a4d29b): when the driver signals intent with
+    # the blinker, force the MDPS ceiling down so a light-grip lane
+    # change does not have to fight op torque. 0.45 mirrors the
+    # sunnypilot 18d75ca 4-level descent at the moderate point of the
+    # original curve. Combined with the Phase 5b (B2) blinker driver-
+    # torque deadzone shift (70/130/220), this gives both command-side
+    # (B1 blend on lowered override) and authority-side yield.
     if blinker_on:
       dynamic_ceiling = min(dynamic_ceiling, 0.45)
     target = np.interp(abs(steering_torque), [100, 350], [dynamic_ceiling, 0.19])
@@ -99,10 +122,13 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     target = 0.0
   delta = target - last_gain
   rate_dn = np.interp(abs(steering_torque), [0, 300, 700], [0.004, 0.01, 0.04])
-  # Drift-recovery boost: when |steering_error| > 0.5°, climb up to 10x
-  # faster so ACIGain recovers from a brief grip event within ~250 ms
-  # instead of 2.5 s. Below 0.5° (well-tracking) rate_up matches the
-  # reference 0.004 — no behaviour change on the steady-state path.
+  # Phase 5c B3 (commit 41a16ad): when |steering_error| > 0.5°, climb up
+  # to 10× faster so ACIGain recovers from a brief grip event within
+  # ~250 ms instead of 2.5 s. Below 0.5° rate_up matches the sunnypilot
+  # reference 0.004 — no behaviour change on the steady-state path. The
+  # 0.04 cap matches the legacy err_boost shape verified against
+  # drivelog 0000001f (drift event ACIGain mean 0.977 with the boost
+  # vs 0.583 with only the reference rate_up).
   rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
   gain = last_gain + max(-rate_dn, min(rate_up, delta))
   return round(gain / 0.004) * 0.004
