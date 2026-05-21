@@ -622,6 +622,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           self.angle_passive_active = True
       else:
         self.angle_passive_enter_frames = 0
+    # Phase 6e-2: clamp apply_angle_last to the actual wheel position
+    # whenever the angle-passive latch is engaged. This is the
+    # stateless equivalent of the Phase 1-retired snap_to_wheel: it
+    # bounds the post-release VM-rate-limited transition so MDPS
+    # take-over starts from where the driver currently holds the
+    # wheel rather than from a stale model-following anchor that
+    # drifted while STEER_REQ was held at 0. Drivelog 0000002[01]
+    # measured op_curv ↔ wheel mismatch p95 at only 3.2-3.8°, so on
+    # normal lane-following the clamp is essentially a no-op; it
+    # only matters in the 60-108 Nm "B1 dead-band" range where the
+    # Phase 6c-1 blend coefficient is 0 yet the latch is engaged.
+    if self.angle_passive_active:
+      self.apply_angle_last = float(np.clip(steer_angle_safe,
+                                            -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                                             self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
     if ccnc_lka_alt:
       # Phase 6d adds angle_passive_active to the false-reason chain
       # alongside vm_reject_persistent (Phase 5e). STEER_REQ=0 in this
