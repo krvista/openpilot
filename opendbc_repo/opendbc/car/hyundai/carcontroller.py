@@ -239,6 +239,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Mirrors the Phase 5e vm_reject_consecutive_frames latch pattern
     # (1-bool / 1-counter "essential hysteresis", not a state machine).
     self.angle_passive_active = False
+    # Phase 6e-1: counter for the 5-frame transient-blip filter on
+    # angle_passive entry. Resets whenever the entry conjunction
+    # becomes false or lat_active goes false.
+    self.angle_passive_enter_frames = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -596,15 +600,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # band holds the previous latch value — implicit hysteresis
     # without a separate frame counter. The latch is also cleared
     # whenever lat_active is False so a re-engage starts clean.
+    # Phase 6e-1 adds a 5-frame (50 ms) minimum on entry: a road bump
+    # or sensor blip can momentarily satisfy both thresholds, but
+    # the exit-only-on-torque rule would then hold STEER_REQ=0 across
+    # the driver's entire reactive-grip window even though no genuine
+    # driver-active turn occurred. The counter mirrors the Phase 5e
+    # vm_reject_consecutive_frames pattern.
     if not bool(CC.latActive):
       self.angle_passive_active = False
+      self.angle_passive_enter_frames = 0
     elif self.angle_passive_active:
       if abs(steer_torque_safe) < CarControllerParams.ANGLE_PASSIVE_EXIT_TORQUE_NM:
         self.angle_passive_active = False
+        self.angle_passive_enter_frames = 0
     else:
       if (abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
           and abs(steer_torque_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_TORQUE_NM):
-        self.angle_passive_active = True
+        self.angle_passive_enter_frames = min(self.angle_passive_enter_frames + 1,
+                                              CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES)
+        if self.angle_passive_enter_frames >= CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES:
+          self.angle_passive_active = True
+      else:
+        self.angle_passive_enter_frames = 0
     if ccnc_lka_alt:
       # Phase 6d adds angle_passive_active to the false-reason chain
       # alongside vm_reject_persistent (Phase 5e). STEER_REQ=0 in this

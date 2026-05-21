@@ -127,6 +127,15 @@ class CarControllerParams:
   ANGLE_PASSIVE_ENTER_WHEEL_DEG = 40.0
   ANGLE_PASSIVE_ENTER_TORQUE_NM = 60.0
   ANGLE_PASSIVE_EXIT_TORQUE_NM  = 30.0
+  # Phase 6e-1 transient-blip filter. The Phase 6d entry conjunction
+  # is met by sub-50 ms wheel spikes (road bumps, sensor noise) when
+  # combined with a driver's reactive grip — once latched, the
+  # torque-only exit holds STEER_REQ=0 across the entire reactive
+  # window even though no genuine driver-active turn occurred.
+  # Require 5 consecutive frames (50 ms) of entry conjunction before
+  # latching, mirroring the Phase 5e VM_REJECT_FORCE_PASSIVE_FRAMES
+  # 1-counter pattern. Exit and stay-zone behaviour are unchanged.
+  ANGLE_PASSIVE_MIN_ENTER_FRAMES = 5
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
