@@ -71,7 +71,7 @@ class CarInterface(CarInterfaceBase):
           if not ret.flags & HyundaiFlags.RADAR_SCC:
               ret.flags |= HyundaiFlags.CANFD_CAMERA_SCC.value
       
-      # Alt buttons 감지는 LKA/non-LKA 모두 적용
+      # CANFD_ALT_BUTTONS detection applies to both LKA and non-LKA variants.
       if 0x1cf not in fingerprint[CAN.ECAN]:
           ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
 
