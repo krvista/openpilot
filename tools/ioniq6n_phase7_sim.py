@@ -282,6 +282,42 @@ def main(argv=None):
           f'p99={percentile(light_grip_apply_delta, 99):.3f}  n={len(light_grip_apply_delta)}')
     print('  (N7a leaves override_factor≤0.1 untouched → no change expected on this metric)')
 
+  print('\n--- Phase 6d angle-aware passive latch (40°/60 Nm enter, 30 Nm exit) ---')
+  ap_enter_deg = 40.0
+  ap_enter_tq  = 60.0
+  ap_exit_tq   = 30.0
+  entry_zone_frames = 0
+  exit_zone_frames = 0
+  latch_active_frames = 0
+  total_lat_active = 0
+  latch = False
+  for f in collect_frames(paths):
+    if not f['lat_active']:
+      latch = False
+      continue
+    total_lat_active += 1
+    abs_wheel = abs(f['wheel'])
+    abs_tq = f['abs_tq']
+    if abs_wheel >= ap_enter_deg and abs_tq >= ap_enter_tq:
+      entry_zone_frames += 1
+    if abs_tq < ap_exit_tq:
+      exit_zone_frames += 1
+    if latch:
+      if abs_tq < ap_exit_tq:
+        latch = False
+    else:
+      if abs_wheel >= ap_enter_deg and abs_tq >= ap_enter_tq:
+        latch = True
+    if latch:
+      latch_active_frames += 1
+  if total_lat_active:
+    pct = lambda n: 100.0 * n / total_lat_active
+    print(f'  latActive frames analyzed: {total_lat_active}')
+    print(f'  entry-zone (|wheel|>=40 AND |tq|>=60):  {entry_zone_frames:6d}  ({pct(entry_zone_frames):5.2f}%)')
+    print(f'  exit-zone  (|tq|<30):                    {exit_zone_frames:6d}  ({pct(exit_zone_frames):5.2f}%)')
+    print(f'  Phase 6d latch active (STEER_REQ=0):     {latch_active_frames:6d}  ({pct(latch_active_frames):5.2f}%)')
+    print('  (latch ratio mirrors expected MDPS release time; entry-zone vs latch diff = stay-zone hysteresis effect)')
+
   return 0
 
 
