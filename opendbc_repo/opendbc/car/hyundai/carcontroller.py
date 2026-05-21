@@ -206,6 +206,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.was_in_reverse = False
     # Phase 5e failsafe: persistent VM rate-limit rejection counter.
     self.vm_reject_consecutive_frames = 0
+    # Phase 6d: 1-bool latch for angle-aware passive hysteresis. Set
+    # True when |wheel| ≥ ANGLE_PASSIVE_ENTER_WHEEL_DEG AND |torque|
+    # ≥ ANGLE_PASSIVE_ENTER_TORQUE_NM; cleared when |torque| drops
+    # below ANGLE_PASSIVE_EXIT_TORQUE_NM or lat_active goes False.
+    # Mirrors the Phase 5e vm_reject_consecutive_frames latch pattern
+    # (1-bool / 1-counter "essential hysteresis", not a state machine).
+    self.angle_passive_active = False
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -553,11 +560,35 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # rejection so panda receives an explicit "do not steer" rather than
     # a frozen angle held with the active flag.
     vm_reject_persistent = self.vm_reject_consecutive_frames >= VM_REJECT_FORCE_PASSIVE_FRAMES
+    # Phase 6d: update the angle-aware passive latch before computing
+    # effective_lat_active. Entry needs both the wheel-angle and
+    # torque thresholds; exit only the torque threshold so a driver
+    # who has lifted their hands releases the wheel back to op
+    # irrespective of the current wheel position. The 30-60 Nm grip
+    # band holds the previous latch value — implicit hysteresis
+    # without a separate frame counter. The latch is also cleared
+    # whenever lat_active is False so a re-engage starts clean.
+    if not bool(CC.latActive):
+      self.angle_passive_active = False
+    elif self.angle_passive_active:
+      if abs(steer_torque_safe) < CarControllerParams.ANGLE_PASSIVE_EXIT_TORQUE_NM:
+        self.angle_passive_active = False
+    else:
+      if (abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
+          and abs(steer_torque_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_TORQUE_NM):
+        self.angle_passive_active = True
     if ccnc_lka_alt:
+      # Phase 6d adds angle_passive_active to the false-reason chain
+      # alongside vm_reject_persistent (Phase 5e). STEER_REQ=0 in this
+      # state releases the MDPS active hold so the wheel can return on
+      # the caster while the driver completes an active turn; ACIGain
+      # naturally ramps to zero through the existing rate_dn curve in
+      # compute_torque_reduction_gain.
       effective_lat_active = (bool(CC.latActive) and bool(apply_steer_req)
                               and not self.was_in_reverse and not in_passthrough
                               and not cam_stale_tripped and not fault_lfa_bool
-                              and not vm_reject_persistent)
+                              and not vm_reject_persistent
+                              and not self.angle_passive_active)
     else:
       effective_lat_active = bool(apply_steer_req)
 
