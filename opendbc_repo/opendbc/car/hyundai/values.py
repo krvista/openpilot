@@ -104,6 +104,25 @@ class CarControllerParams:
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
 
+  # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
+  # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
+  # self-centering fight: at |wheel| 190-200° with 307-348 Nm grip,
+  # mean B1 blend reached 0.88-0.94 (op committed to wheel-follow)
+  # while the caster naturally returned the wheel — MDPS therefore
+  # held an active torque target on every new frame. Driving STEER_REQ
+  # to 0 in this regime lets the wheel coast freely on the caster.
+  #   - ENTER_WHEEL_DEG = 40°: clearly above gentle-curve wheel range
+  #     (highway typically <30°, lane changes <20°), so the latch
+  #     never trips during ordinary lane-keeping.
+  #   - ENTER_TORQUE_NM = 60: above the light-grip p90 (~92 Nm) so
+  #     resting hands do not arm the latch, but well below the
+  #     active-driver p25 (~250 Nm) range.
+  #   - EXIT_TORQUE_NM  = 30: 30 Nm hysteresis band; sits comfortably
+  #     above the ±5 Nm CAN noise floor so noise does not chatter.
+  ANGLE_PASSIVE_ENTER_WHEEL_DEG = 40.0
+  ANGLE_PASSIVE_ENTER_TORQUE_NM = 60.0
+  ANGLE_PASSIVE_EXIT_TORQUE_NM  = 30.0
+
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
     self.STEER_DELTA_DOWN = 7
