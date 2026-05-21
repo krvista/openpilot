@@ -286,37 +286,90 @@ def main(argv=None):
   ap_enter_deg = 40.0
   ap_enter_tq  = 60.0
   ap_exit_tq   = 30.0
+  ap_min_enter_frames = 5  # Phase 6e-1
   entry_zone_frames = 0
   exit_zone_frames = 0
-  latch_active_frames = 0
+  latch_6d_frames = 0  # Phase 6d (no transient filter)
+  latch_6e_frames = 0  # Phase 6e-1 (5-frame transient filter)
   total_lat_active = 0
-  latch = False
+  latch_6d = False
+  latch_6e = False
+  enter_cnt = 0
+  dwells_6d = []
+  dwells_6e = []
+  run_6d = 0
+  run_6e = 0
   for f in collect_frames(paths):
     if not f['lat_active']:
-      latch = False
+      if latch_6d:
+        dwells_6d.append(run_6d)
+      if latch_6e:
+        dwells_6e.append(run_6e)
+      run_6d = 0
+      run_6e = 0
+      latch_6d = False
+      latch_6e = False
+      enter_cnt = 0
       continue
     total_lat_active += 1
     abs_wheel = abs(f['wheel'])
     abs_tq = f['abs_tq']
-    if abs_wheel >= ap_enter_deg and abs_tq >= ap_enter_tq:
+    entry_now = (abs_wheel >= ap_enter_deg and abs_tq >= ap_enter_tq)
+    if entry_now:
       entry_zone_frames += 1
     if abs_tq < ap_exit_tq:
       exit_zone_frames += 1
-    if latch:
+    if latch_6d:
       if abs_tq < ap_exit_tq:
-        latch = False
+        latch_6d = False
+        dwells_6d.append(run_6d)
+        run_6d = 0
     else:
-      if abs_wheel >= ap_enter_deg and abs_tq >= ap_enter_tq:
-        latch = True
-    if latch:
-      latch_active_frames += 1
+      if entry_now:
+        latch_6d = True
+    if latch_6d:
+      latch_6d_frames += 1
+      run_6d += 1
+    if latch_6e:
+      if abs_tq < ap_exit_tq:
+        latch_6e = False
+        enter_cnt = 0
+        dwells_6e.append(run_6e)
+        run_6e = 0
+    else:
+      if entry_now:
+        enter_cnt = min(enter_cnt + 1, ap_min_enter_frames)
+        if enter_cnt >= ap_min_enter_frames:
+          latch_6e = True
+      else:
+        enter_cnt = 0
+    if latch_6e:
+      latch_6e_frames += 1
+      run_6e += 1
+  if latch_6d:
+    dwells_6d.append(run_6d)
+  if latch_6e:
+    dwells_6e.append(run_6e)
   if total_lat_active:
     pct = lambda n: 100.0 * n / total_lat_active
     print(f'  latActive frames analyzed: {total_lat_active}')
     print(f'  entry-zone (|wheel|>=40 AND |tq|>=60):  {entry_zone_frames:6d}  ({pct(entry_zone_frames):5.2f}%)')
     print(f'  exit-zone  (|tq|<30):                    {exit_zone_frames:6d}  ({pct(exit_zone_frames):5.2f}%)')
-    print(f'  Phase 6d latch active (STEER_REQ=0):     {latch_active_frames:6d}  ({pct(latch_active_frames):5.2f}%)')
-    print('  (latch ratio mirrors expected MDPS release time; entry-zone vs latch diff = stay-zone hysteresis effect)')
+    print(f'  Phase 6d latch active (STEER_REQ=0):     {latch_6d_frames:6d}  ({pct(latch_6d_frames):5.2f}%)')
+    print(f'  Phase 6e-1 latch active (5-frame filter):{latch_6e_frames:6d}  ({pct(latch_6e_frames):5.2f}%)')
+
+  def dwell_summary(label, ds):
+    short  = sum(1 for d in ds if d < 5)
+    medium = sum(1 for d in ds if 5 <= d < 50)
+    long_  = sum(1 for d in ds if d >= 50)
+    print(f'  {label}: events={len(ds)}  <5fr(transient)={short}  5-50fr={medium}  >=50fr={long_}', end='')
+    if ds:
+      print(f'   p50={percentile(ds,50):.0f}  p95={percentile(ds,95):.0f}  max={max(ds)}')
+    else:
+      print()
+  dwell_summary('  dwell 6d ', dwells_6d)
+  dwell_summary('  dwell 6e-1', dwells_6e)
+  print('  (transient events filtered out by Phase 6e-1 = 6d_<5fr - 6e-1_<5fr)')
 
   return 0
 
