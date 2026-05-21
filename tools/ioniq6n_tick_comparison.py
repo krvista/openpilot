@@ -3,7 +3,7 @@
 
 Answers two user questions using the DBC-accurate Stage 0 cache:
 
-  1. Is the "턱턱 걸리는" low-speed tick actually eliminated by the
+  1. Is the low-speed stepwise-jolt tick actually eliminated by the
      81c451f hysteresis + aci_gain_ramp + lat_active-latching fixes
      plus the Stage 4 camera-reference blend? We measure tick-proxy
      metrics on four signals frame-by-frame:

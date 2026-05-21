@@ -2,7 +2,7 @@
 """IONIQ 6N CCNC FORK: ADAS FAULT ROOT CAUSE ANALYSIS
    Deep diagnostic scan for suppress_lfa TX synchronization issues.
 
-HYPOTHESIS: The instrument cluster briefly displays "ADAS 오류" (ADAS error) and the
+HYPOTHESIS: The instrument cluster briefly displays "ADAS error" and the
 LFA icon completely disappears, indicating the stock ADAS ECU has declared the system
 unavailable (fault level, not just suspended).
 
