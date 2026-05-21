@@ -9,7 +9,7 @@ Fix-A: heavy_override_active mismatch guard
 
 Fix-B: rate_up smoothing
   Currently: step function (err>1° → 0.04, tq<30 → 0.02). At boundary,
-  rate_up flips between 0.004 and 0.04 every frame → 10x ACIGain step → 탁탁.
+  rate_up flips between 0.004 and 0.04 every frame → 10x ACIGain step → stepwise jolts.
   Proposed: smooth np.interp curves.
 
 Fix-D: recovery early-exit on release + op centering
@@ -208,7 +208,7 @@ def sim_fix_b():
                 if 5 < v < 12:  # city
                     rate_up_now_all.append(ru_now)
                     rate_up_fix_all.append(ru_fix)
-        # Count 200ms windows with LARGE step changes (user-felt 탁탁).
+        # Count 200ms windows with LARGE step changes (user-felt stepwise jolts).
         # Large = consecutive rate_up diff ≥ 0.01 (2.5 quant). Smooth interp should never produce this.
         STEP_THRESH = 0.01
         for i in range(20, len(rate_ups_now)):
