@@ -86,12 +86,13 @@ class CarControllerParams:
   #     EPS reaction adds more to the reading.
   # DRIVER_TORQUE_LOW_V_SPEED=8.0 / HIGH_V_SPEED=15.0 unchanged.
   #
-  # 2026-05-12 (6차): drivelog 0000000f+10 showed 150-200 Nm snap entry
-  # rate only 51% — the transition zone where driver clearly intends
-  # override but snap entry trip (190 Nm) was just above. Lowered
-  # FULL_OVERRIDE_LOW_V 200→180 so snap trip is 172 Nm, still safely
-  # above light-grip p90 (184 Nm) and absorbed by 5차 steer_torque_lpf
-  # (30 ms) against ±5 Nm CAN noise.
+  # 2026-05-12 (Phase 6 driver-torque retune): drivelog 0000000f+10
+  # showed only a 51% snap-entry rate in the 150-200 Nm band — the
+  # transition zone where the driver clearly intends to override but
+  # the snap-entry trip (190 Nm at the time) sat just above. Lowered
+  # FULL_OVERRIDE_LOW_V 200→180 so the snap trip falls to 172 Nm,
+  # still safely above the light-grip p90 (184 Nm) and absorbed by
+  # the Phase 5 30 ms steer_torque LPF against ±5 Nm CAN noise.
   DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
