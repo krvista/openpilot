@@ -282,6 +282,25 @@ def main(argv=None):
           f'p99={percentile(light_grip_apply_delta, 99):.3f}  n={len(light_grip_apply_delta)}')
     print('  (N7a leaves override_factor≤0.1 untouched → no change expected on this metric)')
 
+  print('\n--- Phase 6f-1 candidate (heavy-override >=0.9) ---')
+  heavy_mm = []
+  heavy_sm = 0
+  for f in collect_frames(paths):
+    if not f['lat_active']:
+      continue
+    of = override_factor(f['abs_tq'], f['v_ego'], f['blinker'])
+    if of >= 0.9:
+      heavy_mm.append(abs(f['apply'] - f['wheel']))
+      if abs(f['apply']) > 5 and abs(f['wheel']) > 5 and (f['apply'] * f['wheel'] < 0):
+        heavy_sm += 1
+  if heavy_mm:
+    lat_count = sum(1 for f in collect_frames(paths) if f['lat_active'])
+    print(f'  heavy-override frames: {len(heavy_mm)}  ({100*len(heavy_mm)/lat_count:.2f}% of latActive)')
+    print(f'  mismatch p50={percentile(heavy_mm,50):.1f}  p95={percentile(heavy_mm,95):.1f}  '
+          f'p99={percentile(heavy_mm,99):.1f}  max={max(heavy_mm):.1f}')
+    print(f'  sign-mismatch in heavy-override:  {heavy_sm}  ({100*heavy_sm/len(heavy_mm):.2f}%)')
+    print('  (Phase 6f-1 clamp anchors apply_angle_last=wheel each such frame → apply tracks wheel within 1-2 VM steps)')
+
   print('\n--- Phase 6d angle-aware passive latch (40°/60 Nm enter, 30 Nm exit) ---')
   ap_enter_deg = 40.0
   ap_enter_tq  = 60.0
