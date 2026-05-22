@@ -622,18 +622,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           self.angle_passive_active = True
       else:
         self.angle_passive_enter_frames = 0
-    # Phase 6e-2: clamp apply_angle_last to the actual wheel position
-    # whenever the angle-passive latch is engaged. This is the
-    # stateless equivalent of the Phase 1-retired snap_to_wheel: it
-    # bounds the post-release VM-rate-limited transition so MDPS
-    # take-over starts from where the driver currently holds the
-    # wheel rather than from a stale model-following anchor that
-    # drifted while STEER_REQ was held at 0. Drivelog 0000002[01]
-    # measured op_curv ↔ wheel mismatch p95 at only 3.2-3.8°, so on
-    # normal lane-following the clamp is essentially a no-op; it
-    # only matters in the 60-108 Nm "B1 dead-band" range where the
-    # Phase 6c-1 blend coefficient is 0 yet the latch is engaged.
-    if self.angle_passive_active:
+    # Phase 6e-2 + Phase 6f-1: clamp apply_angle_last to the actual
+    # wheel position whenever either the angle-passive latch is
+    # engaged OR the driver is in heavy-override territory
+    # (override_factor >= 0.9, ≈ 200+ Nm grip — well above the B1
+    # full-blend point). Both cases share the same root problem:
+    # the B1 blend hook sets desired_angle = wheel, but VM rate
+    # limiting starts from apply_angle_last which has already
+    # advanced on a stale trajectory toward op_curv, so the
+    # on-vehicle apply_angle takes many frames to catch up. Drivelog
+    # 0000002[23] measured heavy-override frame mismatch p95 = 31° /
+    # p99 = 95° / max = 122°, and 69.8% of all STEER_REQ=1
+    # sign-mismatch frames (op opposite of wheel) sat in this
+    # heavy-override population — predominantly lane-change cases
+    # under blinker. Anchoring apply_angle_last to the wheel each
+    # such frame turns the next-frame VM step into "wheel ± rate"
+    # so apply tracks the wheel within 1-2 frames of the override
+    # triggering. Phase 1-retired snap_to_wheel had the same goal
+    # but required a state machine; this is the stateless 1-line
+    # equivalent (per-frame condition, no latch). When the driver
+    # naturally releases (override < 0.9), the clamp lifts and the
+    # standard VM rate-limited transition takes over.
+    if self.angle_passive_active or override_factor >= 0.9:
       self.apply_angle_last = float(np.clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
