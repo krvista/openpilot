@@ -110,20 +110,24 @@ Route 0x25/0x2c 모두 cam_gap=0 / cam_stale=0 이므로 cam_invalid 가 트리�
 슬라이스. 6f-2 commit 메시지가 목표한 "p95 ≪ 5°, sign-mismatch share
 collapsing toward zero" 와 비교.
 
-**예비 결과 (Route 0x25+0x2c, 88 segs 기준)**:
+**8 라우트 통합 결과 (290 segs, 1.7M LKAS_ALT, 467k latActive frames)**:
 
 | Metric | 측정값 | 6f-1 commit (`818a6b9`) 시점 baseline (drive 0x22+0x23) | 6f-1 목표 |
-|---|---|---|---|
-| heavy-override frames | 54,873 (42.58% latActive) | 13,320 (24.97%) | — |
-| `|apply-wheel|` p50 | 3.5° | 2.7° | — |
-| **`|apply-wheel|` p95** | **25.6°** | 31.1° | **< 5°** ❌ |
-| `|apply-wheel|` p99 | 76.7° | 95.2° | — |
-| max | 170.6° | 122.2° | — |
-| sign-mismatch in heavy-override | 1,248 (2.27%) | 454 (3.41%) | → 0 (sign 1/3 감소) ✅ |
+|---|---:|---:|:-:|
+| heavy-override frames | 161,674 (34.62% latActive) | 13,320 (24.97%) | — |
+| `|apply-wheel|` p50 | 3.2° | 2.7° | — |
+| **`|apply-wheel|` p95** | **27.0°** | 31.1° | **< 5°** ❌ |
+| `|apply-wheel|` p99 | 76.9° | 95.2° | — |
+| max | 185.1° | 122.2° | — |
+| sign-mismatch in heavy-override | 3,945 (2.44%) | 454 (3.41%) | → 0 (sign 28% 감소) ✅ |
 
-→ 절대값 p95 31° → 25.6° 약 18% 감소; sign-mismatch share 3.41% → 2.27%
-약 34% 감소. **방향 OK, 크기 미달**. 8 라우트 통합 결과는 sim 진행 중 (별도
-업데이트).
+→ 절대값 p95 31° → 27.0° **13% 감소**, p99 95° → 77° **19% 감소**,
+sign-mismatch share 3.41% → 2.44% **28% 감소**. **방향은 맞고 크기는 미달**.
+heavy-override 비율 자체가 25% → 35% 로 증가했는데 이는 분석 대상 코너 /
+주행 비율 차이일 가능성 (89k → 467k latActive frame 으로 sample 5x 확대).
+
+부수 측정 (참고): >200 Nm 그립에서 N7b error_mult 의 ACIGain 평균 reduction
+10.2% (sim closed-form). 6c-2 의 deployed 효과 추정치.
 
 **근본 원인 — 코드 분석**:
 
