@@ -485,6 +485,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # double-limited apply_steer_angle_limits_vm. Mirrors the sunnypilot
     # reference flow.
     if ccnc_lka_alt:
+      # Phase 6F2-A pre-frame anchor: the post-frame clamp later in this
+      # method sets self.apply_angle_last := wheel AFTER the current frame's
+      # apply_angle is already computed below at apply_steer_angle_limits_vm
+      # using the stale (op_curv-tracking) apply_angle_last. On heavy-override
+      # transition frames the TX'd apply therefore lags wheel by up to one
+      # episode of VM drift. ccnc-drivelog 8-route sim on the Phase 6f-2
+      # build measured heavy-override |apply - wheel| p95 = 27.0° (target
+      # ≪ 5°). Anchoring here ensures the current frame's VM step starts
+      # from the wheel, collapsing transition-frame mismatch. The later
+      # post-frame clamp still runs, covering the angle_passive_active
+      # case which is updated mid-method.
+      if override_factor >= 0.9:
+        self.apply_angle_last = float(np.clip(steer_angle_safe,
+                                              -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                                               self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
       desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
       if abs(v_ego_safe) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
