@@ -26,12 +26,88 @@ predate Phase 6f and are excluded.
 | **0x2a** (`436e4ba3c2`) | **`5479ecc` Phase 6f-2** | 27 | pending |
 | **0x2b** (`e732a41028`) | **`5479ecc` Phase 6f-2** | 41 | pending |
 | **0x2c** (`275bbb3299`) | **`5479ecc` Phase 6f-2** | 51 | **analyzed (chunk 2)** |
+| **0x2d** (`075acf9f7e`) | **`d83c3b5` Phase 6F2-A** (post-fix) | 37 | **analyzed (chunk 3, 출근 morning commute)** |
+| **0x2e** (`4d0b891f77`) | **`d83c3b5` Phase 6F2-A** (post-fix) | 22 | **analyzed (chunk 3, 퇴근 evening commute)** |
 
-Phase 6f-2 합계 = ~290 rlog segments. 이번 보고서는 2 routes (0x25 + 0x2c,
-88 segs, 522k LKAS_ALT frames) chunk 까지 반영.
+Phase 6f-2 합계 = ~290 rlog segments (8 라우트). Phase 6F2-A 추가 = 59 segs (2 라우트, 2026-05-28).
+보고서는 4 routes (0x25 + 0x2c + 0x2d + 0x2e, 147 segs) chunk 까지 반영.
 
 추가로 라우트 0x26 (`a9ef010f25`) 은 47 qlog 만 업로드, rlog 누락 →
 **업로드 무결성 follow-up 1건**.
+
+### Phase 6F2-A 신규 빌드 데이터 (2026-05-28 commute)
+
+빌드 검증: 두 route 의 첫 세그먼트 `initData.gitCommit` 가 `d83c3b5214ad...`
+로 확정 (post 6F2-A pre-frame anchor), `dirty=False`, `branch=i6n`.
+
+## 1.A. Phase 6F2-A 빌드 (`d83c3b5`) 분석 — 0x2d + 0x2e (2026-05-28 commute)
+
+### A. heavy-override TX 측정 (override_factor ≥ 0.9)
+
+| Route | latActive | HO frames | HO% | op-ACTIVE during HO | passive/echo |
+|---|---:|---:|---:|---:|---:|
+| 0x2d 출근 | 74,891 | 22,155 | 29.58% | 20,280 (91.5%) | 1,875 (8.5%) |
+| 0x2e 퇴근 | 67,012 | 19,808 | 29.56% | 15,925 (80.4%) | 3,883 (19.6%) |
+
+**op-ACTIVE heavy-override only** (LKAS_ANGLE_ACTIVE>=2, 6F2-A pre-frame anchor scope):
+
+| Route | p50 | p90 | p95 | p99 | max | sign-mismatch | within 5° |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0x2d | 11.3° | 21.3° | **31.3°** | 43.1° | 54.5° | 23.66% | 10.6% |
+| 0x2e | 11.9° | 29.6° | **34.88°** | 47.4° | 129.2° | 40.99% | 20.8% |
+
+⚠️ sim 의 hypothetical 측정 (p95=27°) 과 직접 비교 불가 — metric 정의가 다름.
+
+### B. exit-transition (passive → active 첫 frame, 6F2-A 의 직접 효과 측정)
+
+| Route | n events | p50 | p90 | **p95** | p99 | max | baseline p95 (sustained active) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0x2d | 40 | 11.95° | 20.98° | **22.74°** | 34.98° | 37.40° | 22.30° → ratio **1.02 (smooth) ✅** |
+| 0x2e | 37 | 12.80° | 34.28° | **37.02°** | 116.41° | 158.10° | 24.70° → ratio **1.50 (spike) ⚠️** |
+
+### C. 카메라 passthrough 빈도
+
+| Route | latActive% | <20kph latch | passthrough active | ∩ latActive | entries/exits |
+|---|---:|---:|---:|---:|---:|
+| 0x25 (이전 빌드) | 29.5% | 20.4% | 90.4% | 3.05% | 542/537 |
+| 0x2d | 34.4% | 16.8% | 89.7% | 0.80% | 334/325 |
+| 0x2e | 52.7% | 14.8% | 97.7% | 0.50% | 167/162 |
+
+→ commute 는 stop-and-go 가 많아 traffic_following 우회가 잘 발동 → passthrough 가 latActive 와 overlap 하는 비율 1/4 ~ 1/6 수준으로 감소.
+
+### D. 속도 분포
+
+| 버킷 | 0x2d 출근 | 0x2e 퇴근 |
+|---|---:|---:|
+| stop+0-20 | 62.6% | 47.3% |
+| 20-60 | 31.3% | 33.1% |
+| 60-100 | 5.9% | 18.8% |
+| 100+ | 0.2% | 0.8% |
+| 120+ | 0% | 0% |
+
+→ 0x2e 가 highway 일부 포함 (60+ 19.6%), 그러나 둘 다 sustained 100+ km/h ≈ 0. **§6.1 의 Stage 1 highway 데이터 갭은 여전히 남음**.
+
+### E. **신규 발견 — 저속 hand-off lag 큼 (P0 후보)**
+
+저속 passthrough 중 driver 가 wheel 을 놓으면 op 가 얼마나 빠르게 이어받는가:
+
+| Route | hand-off events | p50 lag | p90 | p95 | < 100ms 비율 |
+|---|---:|---:|---:|---:|---:|
+| 0x2d 출근 | 20 | **1,541 ms** | 10.1 s | 15.5 s | **15%** |
+| 0x2e 퇴근 | 12 | **187 ms** | 5.0 s | 6.0 s | 50% |
+
+코드 의도와의 불일치:
+- `carcontroller.py:470-474` 는 `hands_off=True` 시 `low_speed_cam_latched=False` 로 **1 frame (≈ 10 ms)** 내 전환해야 함.
+- 실측 p50 0.2-1.5 s, p95 6-15 s — passthrough 해제 후에도 **다른 게이트가 막고 있음**.
+
+원인 후보 (effective_lat_active 의 8개 AND 게이트 중):
+1. `CC.latActive=False` (MADS auto-disengage 후 미복귀)
+2. `apply_steer_req=False` (controlsd 명령 미발행 구간)
+3. `vm_reject_persistent` (VM rate-limit reject latch)
+
+샘플 frame 의 `wheel_at_handoff ≤ 8°` → `angle_passive_active` 는 아님.
+
+**fix 보류 — 원인 미확정. 다음 chunk 에서 게이트별 frame-by-frame 분류 필요.**
 
 ## 2. 카테고리 sweep 결과 (8 routes, 290 rlog segments)
 
@@ -257,10 +333,14 @@ speed bucket 분포:
 
 | ID | Pri | Item | 근거 / 변경 위치 |
 |---|---|---|---|
-| **6F2-A** | **P0** | **Pre-frame anchor**: `carcontroller.py:491` 직전에 동일 clamp 추가 (`if angle_passive_active or override_factor >= 0.9: self.apply_angle_last = steer_angle_safe`) — line 633 의 post-frame clamp 와 쌍으로 동작. transition frame 에서 apply 가 wheel 에 직접 anchored. 안전 영향 없음 (VM rate limiter 통과). | §4 개선안 A |
+| **6F2-A** | **P0 ✅ DONE** | **Pre-frame anchor**: `carcontroller.py:491` 직전에 동일 clamp 추가. 빌드 `d83c3b5` 로 deployed. 0x2d 의 exit-transition p95 == baseline (smooth resume), 0x2e 에서 1.5x spike — 추가 sample 필요. | §1.A.B |
+| **6F2-I (신규)** | **P0** | **저속 hand-off lag** — driver 가 wheel 놓아도 op 가 take-over 안 함 (p50 0.2-1.5 s, p95 6-15 s). state machine 은 1 frame 안에 전환되지만 다른 게이트 (CC.latActive / apply_steer_req / vm_reject_persistent / MADS auto-disengage) 가 막고 있음. 다음 chunk 에서 게이트별 frame-by-frame 분류 후 fix 결정. | §1.A.E |
+| **6F2-J (신규)** | **P0** | **동일 route A/B baseline**: 다음 commute 1 회는 이전 빌드 (`5479ecc`) 로 같은 출/퇴근길 찍어 6F2-A 의 동일 조건 before/after 비교 가능하게 함. | §1.A |
 | 6F2-B | P0 | sim 의 closed-form 으로 6F2-A 의 효과 사전 검증 — frame re-simulation 으로 transition mismatch 가 p95 < 5° 도달하는지 (현 25.6° 에서). | §4 |
-| **6F2-C** | **P0** | **LKAS_ALT byte7/byte13 일관성**: 15,775 frames 의 inconsistency 분류 후 set 지점 모두 정렬. `hyundaicanfd.py:create_steering_messages` 의 cam_invalid 분기와 passive 분기 byte 패턴 매칭. | §3 |
-| 6F2-D | P1 | sim 의 `override_factor` 가 실제 controller 의 `controlsState.lateralOverride` (또는 cereal 새 필드) 와 매칭하는지 frame-level 비교 (sim 의 closed-form 가정 vs deployed 코드). | §4 #1 가설 검증 |
+| **6F2-C** | **P2 강등** | **LKAS_ALT byte7/byte13 일관성**: 15,775 frames TYPE B 98.8% (ACIGain rate_dn 잔존). op 결함 아님 — 카메라 echo + 자체 rate_dn 잔존. snap-to-zero 옵션은 MDPS 토크 끊김 위험. | §3 |
+| 6F2-D | P1 | sim 의 `override_factor` 가 실제 controller 와 매칭하는지 frame-level 비교. controlsState 에 신규 cereal field 추가. | §4 #1 가설 검증 |
+| **6F2-K (신규)** | P1 | sign-mismatch 23-41% 원인 분석 — sign-mismatch frame 의 model_v2 plan / lane lines / driver_input 상관 측정. driver disagreement 인지 모델 noise 인지 분리. | §1.A.A |
+| **6F2-L (신규)** | P1 | 고속도로 30+ min sustained drive — 90+ km/h ≈ 0% (commute 만으론 불가). 별도 의도적 highway run. | §1.A.D, §6.1 |
 | 6F2-E | P2 | 6e-1 transient filter 효과 검정 — 8 라우트 통합 sample 에서 saved transient 수 카운트, ≥10 건이면 효과 인정, ≤3 건이면 6e-1 제거 검토. | §5 |
 | 6F2-F | P2 | Route 0x26 rlog 업로드 누락 — 디바이스→repo 푸시 파이프라인 점검 (qlog 만 47 개 push 됨). | §1 |
 | 6F2-G | P3 | LFA_ICON 분포 측정 추가 — PR #11 audit baseline (Drive 14/15/16의 GREEN 32-63%) 와 Phase 6f-2 비교. 이번 audit 미수행. | §7 #2 |
