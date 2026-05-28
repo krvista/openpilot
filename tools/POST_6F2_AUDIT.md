@@ -40,74 +40,104 @@ Phase 6f-2 합계 = ~290 rlog segments (8 라우트). Phase 6F2-A 추가 = 59 se
 빌드 검증: 두 route 의 첫 세그먼트 `initData.gitCommit` 가 `d83c3b5214ad...`
 로 확정 (post 6F2-A pre-frame anchor), `dirty=False`, `branch=i6n`.
 
-## 1.A. Phase 6F2-A 빌드 (`d83c3b5`) 분석 — 0x2d + 0x2e (2026-05-28 commute)
+## 1.A. Phase 6F2-A 빌드 (`d83c3b5`) vs 6f-2 (`5479ecc`) — A/B baseline 비교 (2026-05-28)
 
-### A. heavy-override TX 측정 (override_factor ≥ 0.9)
+### ⚠️ 사전 정정: 이전 audit §4 의 sim p95=27° 는 **decode 버그**
 
-| Route | latActive | HO frames | HO% | op-ACTIVE during HO | passive/echo |
-|---|---:|---:|---:|---:|---:|
-| 0x2d 출근 | 74,891 | 22,155 | 29.58% | 20,280 (91.5%) | 1,875 (8.5%) |
-| 0x2e 퇴근 | 67,012 | 19,808 | 29.56% | 15,925 (80.4%) | 3,883 (19.6%) |
+`tools/ioniq6n_phase7_sim.py` + `tools/ioniq6n_full_drivelog_sweep.py` 의
+LKAS_ALT angle decode 는 `int.from_bytes(dat[4:6], 'little')` 였으나, DBC
+정의 `ADAS_StrAnglReqVal : 82|14@1-` 는 **byte 10-11** 에서 디코딩해야 함
+(start bit 82, length 14, little-endian, signed). byte 4-5 는 사용되지 않는
+영역으로 항상 0x80 → 12.8° 반환. 이전 audit §4 의 *모든* heavy-override
+mismatch 통계 (p95=27°, sign-mismatch %, transition-frame 추론) 는 이 decode
+오류 결과. **재측정 (byte 10-11) 결과 실제 op-active heavy-override TX 가
+wheel 을 0.1° 이내로 추적 중** — 6F2-A 가 fix 할 진짜 문제 자체가 없었음.
 
-**op-ACTIVE heavy-override only** (LKAS_ANGLE_ACTIVE>=2, 6F2-A pre-frame anchor scope):
+### A/B 매칭 (GPS 으로 검증)
+- **0x2b** (05-27 morning, 41 segs, `5479ecc`) ↔ **0x2d** (05-28 morning, 37 segs, `d83c3b5`)
+- **0x2c** (05-27 evening, 51 segs, `5479ecc`) ↔ **0x2e** (05-28 evening, 22 segs, `d83c3b5`)
 
-| Route | p50 | p90 | p95 | p99 | max | sign-mismatch | within 5° |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 0x2d | 11.3° | 21.3° | **31.3°** | 43.1° | 54.5° | 23.66% | 10.6% |
-| 0x2e | 11.9° | 29.6° | **34.88°** | 47.4° | 129.2° | 40.99% | 20.8% |
+같은 home/work 경로 + 같은 시간대, 다른 빌드.
 
-⚠️ sim 의 hypothetical 측정 (p95=27°) 과 직접 비교 불가 — metric 정의가 다름.
+### A. heavy-override TX (op-ACTIVE only) — 모두 0.1° 이내 추적
 
-### B. exit-transition (passive → active 첫 frame, 6F2-A 의 직접 효과 측정)
+| Route | latActive | HO% | op-active% | p50 | **p95** | p99 | max | sign-mis | within 1° |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0x2b 5479ecc | 82,146 | 27.0% | 80.8% | 0.00° | **0.10°** | 0.50° | 5.00° | 0 | 99.6% |
+| 0x2c 5479ecc | 64,841 | 32.2% | 85.9% | 0.00° | **0.10°** | 0.50° | 4.40° | 0 | 99.7% |
+| 0x2d d83c3b5 | 74,891 | 29.6% | 91.5% | 0.00° | **0.10°** | 0.40° | 11.40° | 2 | 99.7% |
+| 0x2e d83c3b5 | 67,012 | 29.6% | 80.4% | 0.00° | **0.10°** | 0.60° | 6.80° | 1 | 99.5% |
 
-| Route | n events | p50 | p90 | **p95** | p99 | max | baseline p95 (sustained active) |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 0x2d | 40 | 11.95° | 20.98° | **22.74°** | 34.98° | 37.40° | 22.30° → ratio **1.02 (smooth) ✅** |
-| 0x2e | 37 | 12.80° | 34.28° | **37.02°** | 116.41° | 158.10° | 24.70° → ratio **1.50 (spike) ⚠️** |
+→ 양 빌드 모두 op-active heavy-override 중 TX 가 wheel 을 **0.1° p95 (측정 한계 = CAN 양자화 0.1° 와 같음)** 로 추적. 6F2-A 효과는 floor 이하라 변별 불가. **p99 도 0.4-0.6° 로 매우 우수**.
 
-### C. 카메라 passthrough 빈도
+### B. exit-transition (passive → active 첫 frame) — 모두 ≤ 2.6° p95
+
+| Route | n events | transition p95 | baseline p95 |
+|---|---:|---:|---:|
+| 0x2b 5479ecc | 47 | 2.27° | 2.80° |
+| 0x2c 5479ecc | 45 | 2.38° | 2.20° |
+| 0x2d d83c3b5 | 40 | **1.62°** (best) | 2.40° |
+| 0x2e d83c3b5 | 37 | 2.64° | 1.90° |
+
+→ 모든 routes ≤ 3° transition spike. 6F2-A 와 baseline 사이 유의차 없음.
+
+### C. **저속 hand-off lag — A/B 양쪽 모두 동일 문제 (6F2-A 영향 아님)**
+
+passthrough 중 driver wheel-release → LKAS_ANGLE_ACTIVE=2 까지 latency:
+
+| Route | events | p50 lag | p90 | p95 | < 100ms | first_TX-wheel p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0x2b 5479ecc morning | 23 | 533 ms | 12.0 s | 16.9 s | 17% | 0.49° |
+| 0x2c 5479ecc evening | 27 | 339 ms | 5.5 s | 11.2 s | 30% | 1.32° |
+| 0x2d d83c3b5 morning | 20 | **1541 ms** | 10.1 s | 15.5 s | 15% | 0.30° |
+| 0x2e d83c3b5 evening | 12 | **187 ms** | 5.0 s | 6.0 s | 50% | 4.22° |
+
+**중요**:
+- 코드 (carcontroller.py:470-474) 는 1 frame (≈ 10 ms) 내 전환 의도.
+- 실측 p50 0.19-1.5 s, p95 6-17 s — **양 빌드 모두 동일** → 6F2-A 와 무관.
+- 다행히 **op 가 마침내 take-over 할 때는 매끄러움** (first_TX vs wheel p95 ≤ 4.22°).
+
+원인 후보 (effective_lat_active 의 다른 게이트):
+1. `apply_steer_req=False` (controlsd 명령 발행 중단)
+2. `vm_reject_persistent=True` (Phase 5e VM-reject latch 잔존)
+3. `angle_passive_active` 가 이전 코너에서 latched 상태 (|tq|<30 미달로 미해제)
+
+### D. 카메라 passthrough 빈도 — A/B 차이 작음
 
 | Route | latActive% | <20kph latch | passthrough active | ∩ latActive | entries/exits |
 |---|---:|---:|---:|---:|---:|
-| 0x25 (이전 빌드) | 29.5% | 20.4% | 90.4% | 3.05% | 542/537 |
-| 0x2d | 34.4% | 16.8% | 89.7% | 0.80% | 334/325 |
-| 0x2e | 52.7% | 14.8% | 97.7% | 0.50% | 167/162 |
+| 0x2b 5479ecc | 34.2% | 21.8% | 77.2% | 0.81% | 575/575 |
+| 0x2c 5479ecc | 21.3% | 14.9% | 69.2% | 1.15% | 434/434 |
+| 0x2d d83c3b5 | 34.4% | 16.8% | 89.7% | 0.80% | 334/325 |
+| 0x2e d83c3b5 | 52.7% | 14.8% | 97.7% | 0.50% | 167/162 |
 
-→ commute 는 stop-and-go 가 많아 traffic_following 우회가 잘 발동 → passthrough 가 latActive 와 overlap 하는 비율 1/4 ~ 1/6 수준으로 감소.
+→ 의도 설계대로 동작. A/B 큰 차이 없음.
 
-### D. 속도 분포
+### E. 속도 분포 — highway 데이터 갭 여전
 
-| 버킷 | 0x2d 출근 | 0x2e 퇴근 |
+| 버킷 | 0x2b 5479ecc | 0x2d d83c3b5 |
 |---|---:|---:|
-| stop+0-20 | 62.6% | 47.3% |
-| 20-60 | 31.3% | 33.1% |
-| 60-100 | 5.9% | 18.8% |
-| 100+ | 0.2% | 0.8% |
-| 120+ | 0% | 0% |
+| stop+0-20 | 64.5% | 62.6% |
+| 20-60 | 33.1% | 31.3% |
+| 60-80 | 2.4% | 4.1% |
+| 80+ | 0% | 2.0% |
+| 100+ | 0% | 0.2% |
 
-→ 0x2e 가 highway 일부 포함 (60+ 19.6%), 그러나 둘 다 sustained 100+ km/h ≈ 0. **§6.1 의 Stage 1 highway 데이터 갭은 여전히 남음**.
+→ 둘 다 sustained 100+ km/h 없음. **고속도로 데이터 별도 수집 필요**.
 
-### E. **신규 발견 — 저속 hand-off lag 큼 (P0 후보)**
+## 1.B. A/B 비교 결론
 
-저속 passthrough 중 driver 가 wheel 을 놓으면 op 가 얼마나 빠르게 이어받는가:
+| 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
+|---|---|---|---|
+| HO op-active TX 추적 | p95 0.10° | p95 0.10° | **둘 다 floor (동등)** |
+| exit-transition spike | p95 2.27-2.38° | p95 1.62-2.64° | **유의차 없음** |
+| hand-off lag p50 | 339-533 ms | 187-1541 ms | **빌드 무관 — 다른 게이트** |
+| sign-mismatch | 0-0.00% | 0.01% | **둘 다 사실상 0** |
+| 안전 회귀 (TX/cam/panda) | clean | clean | **무회귀** |
 
-| Route | hand-off events | p50 lag | p90 | p95 | < 100ms 비율 |
-|---|---:|---:|---:|---:|---:|
-| 0x2d 출근 | 20 | **1,541 ms** | 10.1 s | 15.5 s | **15%** |
-| 0x2e 퇴근 | 12 | **187 ms** | 5.0 s | 6.0 s | 50% |
-
-코드 의도와의 불일치:
-- `carcontroller.py:470-474` 는 `hands_off=True` 시 `low_speed_cam_latched=False` 로 **1 frame (≈ 10 ms)** 내 전환해야 함.
-- 실측 p50 0.2-1.5 s, p95 6-15 s — passthrough 해제 후에도 **다른 게이트가 막고 있음**.
-
-원인 후보 (effective_lat_active 의 8개 AND 게이트 중):
-1. `CC.latActive=False` (MADS auto-disengage 후 미복귀)
-2. `apply_steer_req=False` (controlsd 명령 미발행 구간)
-3. `vm_reject_persistent` (VM rate-limit reject latch)
-
-샘플 frame 의 `wheel_at_handoff ≤ 8°` → `angle_passive_active` 는 아님.
-
-**fix 보류 — 원인 미확정. 다음 chunk 에서 게이트별 frame-by-frame 분류 필요.**
+**핵심 발견:**
+1. **이전 audit §4 "p95=27° heavy-override 문제" 는 decode 버그**. 실제 deployed code 는 양 빌드 모두 wheel 을 0.1° 이내로 추적 중이었음. **6F2-A 가 fix 할 진짜 문제 없었음** (harmless code change — 회귀도 없음).
+2. **신규 P0 = hand-off lag (p50 0.2-1.5 s)** 양 빌드 동일 → 다른 게이트 (apply_steer_req / vm_reject_persistent / angle_passive_active latch) 의 frame-by-frame 분류 필요.
 
 ## 2. 카테고리 sweep 결과 (8 routes, 290 rlog segments)
 
