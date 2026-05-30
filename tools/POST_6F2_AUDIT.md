@@ -125,6 +125,103 @@ passthrough 중 driver wheel-release → LKAS_ANGLE_ACTIVE=2 까지 latency:
 
 → 둘 다 sustained 100+ km/h 없음. **고속도로 데이터 별도 수집 필요**.
 
+## 1.C. Phase HOD-clean (`c9a1ed6`) chunk — 6 신규 routes (2026-05-31 push)
+
+빌드 검증: 4개 메인 routes (0x2f, 0x30, 0x31, 0x35) 모두 `initData.gitCommit = c9a1ed6a2ecf` (HOD bypass 제거 + carstate TODO 정리 직후), `dirty=False`, `branch=i6n`. 0x32 / 0x34 = 너무 짧음 (2 / 7 segs), 0x33 = 빠짐.
+
+### A. 카테고리 sweep — **모두 clean** (158 segs, 933,998 LKAS_ALT)
+
+| Route | rlog | LKAS_ALT | TX audit | Angle | SCC bus1 | Cam max gap | ACI flip | carState |
+|---|---:|---:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 0x2f | 32 | 187,998 | ✅ | ✅ | ✅ 0 | 35 ms | ✅ | ✅ |
+| 0x30 | 32 | 188,561 | ✅ | ✅ | ✅ 0 | 44 ms | ✅ | ✅ |
+| 0x31 | 46 | 273,067 | ✅ | ✅ | ✅ 0 | 34 ms | ✅ | ✅ |
+| 0x35 | 48 | 284,372 | ✅ | ✅ | ✅ 0 | 38 ms | ✅ | ✅ |
+
+→ **HOD scaffold 제거 (`c9a1ed6`) 후 안전 회귀 없음**. panda safety counter, SCC bus1 collision, 카메라 health, ACI flip hotspot 모두 깨끗.
+
+### B. Heavy-override TX (op-active, 6F2-A scope) — floor 유지
+
+| Route | HO active | p95 `\|TX-wheel\|` | within 1° | sign-mismatch |
+|---|---:|---:|---:|---:|
+| 0x2f | 20,026 | **0.10°** | 99.5% | 0.06% |
+| 0x30 | 22,219 | **0.10°** | 99.6% | 0.01% |
+| 0x31 | 17,294 | **0.10°** | 99.8% | 0.00% |
+| 0x35 | 19,425 | **0.10°** | 99.8% | 0.01% |
+
+→ Phase 6F2-A floor (`p95 = CAN 양자화 0.1°`) 유지. HOD cleanup 이후 회귀 없음.
+
+### C. 속도 분포 — **첫 highway 데이터** 확보 (0x30)
+
+| 버킷 | 0x2f | 0x30 | 0x31 | 0x35 |
+|---|---:|---:|---:|---:|
+| stop+0-20 | 60.1% | 65.6% | n/a | n/a |
+| 80-100 | 2.1% | 1.9% | n/a | n/a |
+| **100-120** | 0.7% | **2.3%** | n/a | n/a |
+| **120+** | 0.6% | **2.0%** | n/a | n/a |
+
+0x30 = mixed urban + highway (100+ kph 4.3% ≈ 6 분). 0x31/0x35 = sustained latActive 31분/34분 (long drive). **§6.1 Stage 1 highway 데이터 gap 부분 해소**.
+
+### D. ACI consistency mismatch (TYPE B 잔존)
+
+| Route | mismatch | % of LKAS_ALT |
+|---|---:|---:|
+| 0x2f | 1,602 | 0.85% |
+| 0x30 | 2,648 | 1.40% |
+| 0x31 | **491** | **0.18%** (highway 가장 깨끗) |
+| 0x35 | 1,233 | 0.43% |
+
+8-route baseline (0.92%) 와 같은 패턴 — §3 분석 그대로 (TYPE B = ACIGain rate_dn 잔존, op 결함 아님, P2 유지).
+
+### E. **🔴 신규 발견 — hand-off lag P0 가설이 detection artifact 였음**
+
+이전 audit §1.A.C 에서 hand-off lag (p50 0.2-1.5 s, p95 6-17 s) 를 P0 후보로 documented. 4 routes 에 게이트별 분류 + driver torque 분포 측정 결과:
+
+**Gate 분류 (54 hand-off events 합계)**:
+
+| Dominant gate | n | 비율 | median lag |
+|---|---:|---:|---:|
+| `CC.latActive=False` | 29 | 54% | 600-900 ms |
+| `angle_passive_active` | 9 | 17% | 5-10 초 |
+| `in_passthrough_relapse` | 7 | 13% | 2-3 초 |
+| unknown (apply_steer_req / vm_reject / cam_stale) | 7 | 13% | 2 ms (즉시) |
+| `was_in_reverse` | 1 | 2% | 251 ms |
+
+**Driver torque 측정 (31 events with lag > 500ms)**:
+
+| Metric | 값 |
+|---|---:|
+| Per-event torque median (lag window 전체 평균) | **140 Nm** |
+| Per-event peak torque median | 359 Nm |
+| Max event peak | 1033 Nm |
+
+→ **lag 동안 driver 가 계속 wheel 잡고 있음** (median 140 Nm, peak 359 Nm). 진짜 hand-off 가 아니라 driver continuous override 중. MADS / angle_passive / passthrough 가 yield 하는 게 **정상 동작**.
+
+진짜 hand-off (lag < 100ms, ~13/54 events) 는 instant resolution. **즉 op 의 hand-off 메커니즘 자체에 문제 없음**.
+
+**Phase 6d EXIT threshold sensitivity** (현재 30 Nm 에서 변경 시 해소되는 events):
+
+| 새 threshold | 31 events 중 해소 |
+|---|---:|
+| 30 (현재) | 3 (10%) |
+| 50 | 7 (23%) |
+| 100 | 14 (45%) |
+| 150 | 16 (52%) |
+
+→ 30→50 효과 4 event 만. 100+ 필요한데 그러면 normal driving 에서 latch flap 위험. **driver 가 진짜 손 놓고 있는 게 아니라 변경 효과 한계적**.
+
+### F. 결론 — 코드 수정 없음 (현 `c9a1ed6` 유지)
+
+| 이전 P0 후보 | 실측 후 판정 |
+|---|---|
+| hand-off lag p50 0.2-1.5 s | **artifact** (driver 계속 grip, system 정상 yield) |
+| Phase 6d EXIT 30→50 | 효과 < 13% (driver torque median 140 Nm) |
+| MADS auto-disengage 완화 | driver 진짜 override 중일 때 정상 동작, 완화 시 의도 무시 위험 |
+| passthrough hysteresis 확장 | in_passthrough_relapse 7/54, stop-and-go 의도 동작 방해 가능 |
+| Sweep + ACI safety regression | **clean 확인** ✅ (이 단계가 의미 있는 P0 검증이었음) |
+
+**HOD cleanup (`c9a1ed6`) 후 회귀 없음 + 6F2-A floor 유지 + highway 데이터 일부 확보**. 추가 코드 변경 권장 없음.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
