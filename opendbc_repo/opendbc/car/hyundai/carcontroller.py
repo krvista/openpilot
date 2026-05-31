@@ -653,11 +653,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # under blinker. Anchoring apply_angle_last to the wheel each
     # such frame turns the next-frame VM step into "wheel ± rate"
     # so apply tracks the wheel within 1-2 frames of the override
-    # triggering. Phase 1-retired snap_to_wheel had the same goal
-    # but required a state machine; this is the stateless 1-line
-    # equivalent (per-frame condition, no latch). When the driver
-    # naturally releases (override < 0.9), the clamp lifts and the
-    # standard VM rate-limited transition takes over.
+    # triggering. Stateless 1-line equivalent of the historical
+    # snap_to_wheel state machine (per-frame condition, no latch).
+    # When the driver naturally releases (override < 0.9), the
+    # clamp lifts and the standard VM rate-limited transition
+    # takes over.
     if self.angle_passive_active or override_factor >= 0.9:
       self.apply_angle_last = float(np.clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,

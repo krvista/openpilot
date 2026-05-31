@@ -3,7 +3,7 @@
 
 Checks EVERYTHING: canValid, accFaulted, cruiseState, carEvents,
 controlsState, sendcan inventory, raw TCS ACCEnable, LKAS_ALT payloads
-at transition points, panda faults, and HOD bypass activity.
+at transition points, panda faults.
 """
 import glob
 import sys
@@ -35,8 +35,6 @@ def main():
   # panda faults
   panda_faults = 0
   fault_types = Counter()
-  # HOD bypass (0x208)
-  hod_count = 0
   # controlsState
   prev_ctrl = {}
   # carEvents
@@ -95,8 +93,6 @@ def main():
           tx_addrs[key] += 1
           if key not in tx_first_t:
             tx_first_t[key] = rel
-          if c.address == 0x208:
-            hod_count += 1
           if c.address == 0x110:
             lkas_all.append((rel, bytes(c.dat)))
 
@@ -123,7 +119,6 @@ def main():
   print(f"\n{'='*70}")
   print(f"=== SUMMARY ===")
   print(f"{'='*70}")
-  print(f"HOD bypass (0x208) TX count: {hod_count}")
   print(f"Panda faults: {panda_faults}  types: {dict(fault_types)}")
   print(f"carEvents: {len(events)}")
   for t, n, *_ in events[:20]:

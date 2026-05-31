@@ -110,13 +110,19 @@ steering_active = lat_active AND aci_active AND speed_blend > 0.1
 - 블링커 중: 권한 0.2배로 자동 후퇴 (차선변경 간섭 최소화)
 - Phase 5 override snap: 95% 임계에서 60ms snap, release 후 500ms grace
 
-### HOD bypass (0x208)
+### HOD bypass (제거됨, 역사 기록)
 
-HDA2-ALT에서 `HOD_Dir_Status`가 버스 1의 `0x208` 바이트 10에 있어서
-panda로 원본을 막을 수 없다. 현재는:
-- op가 0x208을 **자체 송신**(10 Hz, CC.latActive 시만 GRIP_STRONG=0x04)
-- 현대 CAN-FD checksum + 카운터 (byte[2] bits 1..7) 생성
-- passive 구간에서는 송신 OFF → 팩토리 HOD 감지가 정상 동작
+이전 빌드에서 `create_hod_bypass()` 함수와 panda 0x208 TX whitelist 가
+존재했으나 commit `c9a1ed6` 에서 제거됨. 사유:
+- 드라이브로그 실측 결과 nag escalation = 0 (KEEP_HANDS_ON_RED 와
+  GRASP_NOT_DETECTED 모두 0건)
+- carcontroller 에서 `create_hod_bypass()` 를 호출하는 코드 경로가 없었음
+  (HOD_BYPASS env var 도 어디서도 읽지 않음)
+- sunnypilot 도 HKG angle steering 어느 브랜치에서도 HOD sensor spoof
+  를 하지 않음
+- panda whitelist 만 열려 있어 잠재적 노출 면적이었음
+
+상세 분석은 `tools/IONIQ6N_STEERING_MASTERPLAN.md` Appendix H 참고.
 
 ### suppress_lfa (0x362)
 
