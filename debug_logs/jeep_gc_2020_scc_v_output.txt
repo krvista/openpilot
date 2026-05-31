@@ -1,0 +1,78 @@
+==================================================================================================================================
+SCC-V state durations per route (seconds)
+==================================================================================================================================
+route                                             segs  dur_min  vEgo_avg  vEgo_max   engaged    disabled    enabled   entering    turning    leaving overriding
+0fb02cc3a5abcc2f_00000000--2a33888425               16    136.0      15.5      64.2      2589       924.2        0.0        0.0        0.0        0.0        0.0
+0fb02cc3a5abcc2f_00000001--898f28ebec               33    561.3      16.1      68.9         0      1938.8        0.0        0.0        0.0        0.0        0.0
+0fb02cc3a5abcc2f_00000005--c1e7eb6f64               38    741.2      23.6      87.9     33839      1891.9      298.4       10.6        3.0        0.3       25.7
+0fb02cc3a5abcc2f_00000006--25b05cbab7               39    780.8      46.9      78.7     99499      1331.6      934.8        7.9       11.7        5.0       34.6
+
+==================================================================================================================================
+SCC-V entering trigger pattern per route
+==================================================================================================================================
+route                                              entering   ->turning   ->aborted  conv_rate  pred_max  cur_max
+0fb02cc3a5abcc2f_00000000--2a33888425                     0           0           0       0.0%      0.68     0.63
+0fb02cc3a5abcc2f_00000001--898f28ebec                     0           0           0       0.0%      0.00     0.00
+0fb02cc3a5abcc2f_00000005--c1e7eb6f64                    11           3           8      27.3%      2.25     2.36
+0fb02cc3a5abcc2f_00000006--25b05cbab7                    18           6          12      33.3%      2.17     2.26
+
+==================================================================================================================================
+Plan source occupancy per route
+==================================================================================================================================
+  0fb02cc3a5abcc2f_00000000--2a33888425: cruise: 100.00%, sccVision: 0.00%, sccMap: 0.00%, speedLimitAssist: 0.00%
+  0fb02cc3a5abcc2f_00000001--898f28ebec: cruise: 100.00%, sccVision: 0.00%, sccMap: 0.00%, speedLimitAssist: 0.00%
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64: cruise: 99.93%, sccVision: 0.07%, sccMap: 0.00%, speedLimitAssist: 0.00%
+  0fb02cc3a5abcc2f_00000006--25b05cbab7: cruise: 99.98%, sccVision: 0.02%, sccMap: 0.00%, speedLimitAssist: 0.00%
+
+==================================================================================================================================
+FLEET aggregate (4 routes, 126 segments)
+==================================================================================================================================
+Total duration: 2219.3 min (36.99 hr)
+engaged_samples (selfdriveState.enabled): 135927
+SCC-V state durations (s):
+  disabled    :     6086.5 s  (  4.57% of total drive time)
+  enabled     :     1233.3 s  (  0.93% of total drive time)
+  entering    :       18.5 s  (  0.01% of total drive time)
+  turning     :       14.7 s  (  0.01% of total drive time)
+  leaving     :        5.4 s  (  0.00% of total drive time)
+  overriding  :       60.2 s  (  0.05% of total drive time)
+  -- active (e+t+l): 38.6 s (0.029%)
+Entering triggers: 29  -> turning: 9  -> aborted: 20  conv_rate=31.0%
+Per-hour entering rate: 0.78
+
+==================================================================================================================================
+Fleet top events (rising-edge count, NOT samples)
+==================================================================================================================================
+  steerOverride                      8897
+  belowSteerSpeed                    6382
+  gasPressedOverride                 2244
+  preEnableStandstill                 880
+  wrongGear                           470
+  calibrationIncomplete               438
+  seatbeltNotLatched                  405
+  laneTurnLeft                        292
+  laneTurnRight                       273
+  silentWrongGear                     125
+  laneChange                          111
+  reverseGear                         104
+  doorOpen                             98
+  silentSeatbeltNotLatched             63
+  silentDoorOpen                       49
+  commIssue                            43
+  silentReverseGear                    31
+  selfdriveInitializing                28
+  locationdTemporaryError              23
+  e2eChime                             23
+  posenetInvalid                       20
+  paramsdTemporaryError                15
+  preLaneChangeRight                   10
+  preLaneChangeLeft                     8
+  manualLongitudinalRequired            7
+
+immediateDisable: {}
+softDisable: {'wrongGear': 470, 'doorOpen': 98, 'seatbeltNotLatched': 405, 'calibrationIncomplete': 438, 'commIssue': 43, 'posenetInvalid': 20, 'locationdTemporaryError': 23, 'commIssueAvgFreq': 4, 'paramsdTemporaryError': 15}
+
+*** FIX TARGETS (Fix A/B/C trigger events) ***
+  accFaulted                  0   [OK]
+  controlsMismatch            0   [OK]
+  processNotRunning           0   [OK]

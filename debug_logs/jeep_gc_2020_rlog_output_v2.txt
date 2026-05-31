@@ -1,0 +1,104 @@
+==================================================================================================================================
+T2-B  CRUISE_BUTTONS tx (0x23B) per route — rlog full-rate sample (CORRECTED bit positions)
+==================================================================================================================================
+route                                       segs   tx_total  boot_<10s   rx_total  cancel  resume   accel   decel  d_dec  d_inc  crOnOff  accOnOff
+  0fb02cc3a5abcc2f_00000000--2a33888425       16          1          0      46999       1       0       0       0      0      0        0         0
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33          0          0      97725       0       0       0       0      0      0        0         0
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38        279          0     112264       1       0      76     202      0      0        0         0
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39        127          0     117068       9       0      53      65      0      0        0         0
+  TOTAL                                        4        407          0     374056      11       0     129     267      0      0        0         0
+
+==============================================================================================================
+T2-B  CRUISE_BUTTONS COUNTER delta histogram (fleet aggregate)
+==============================================================================================================
+  delta value = (next_counter - prev_counter) mod 16
+  ICBM icbm.py:43 says button_counter_offset = [1, 1, 0, None] -> with
+  CS.button_counter cycling +1 per RX (50Hz stock), expect TX deltas:
+    +1 (offset 1 -> offset 1 between sends) ~33%
+    +0 (offset 1 -> offset 0)               ~33%
+    +3 (offset 0 -> skip -> offset 1)       ~33%
+    others ~0%
+     delta       count       pct
+         0         124    31.88%
+         1         127    32.65%
+         2           1     0.26%
+         3         118    30.33%
+         4           5     1.29%
+         5           3     0.77%
+         6           3     0.77%
+         8           1     0.26%
+        11           2     0.51%
+        12           1     0.26%
+        14           2     0.51%
+        15           2     0.51%
+     TOTAL         389
+
+==============================================================================================================
+T2-B  COUNTER sequence sample (segment with most cb_tx_total)
+==============================================================================================================
+  segment: 0fb02cc3a5abcc2f_00000005--c1e7eb6f64 seg 14  tx_total=91
+  first 80: [15, 2, 3, 3, 6, 7, 7, 10, 11, 11, 14, 15, 15, 2, 3, 3, 6, 7, 7, 10, 11, 11, 14, 15, 15, 2, 3, 3, 6, 7, 7, 10, 11, 11, 14, 15, 15, 2, 3, 3, 6, 7, 7, 10, 11, 11, 14, 15, 15, 2, 3, 3, 6, 7, 7, 10, 11, 11, 14, 15, 15, 11, 12, 12, 15, 0, 0, 3, 4, 4, 7, 8, 8, 11, 12, 12, 2, 3, 3, 6]
+
+==============================================================================================================
+T3-C  RX-check freshness per route (chrysler_rx_checks non-RAM)
+==============================================================================================================
+
+--- ESP_1  (addr=0x140=320, expected 50 Hz, threshold = 3/Hz = 60.0 ms)
+  route                                       segs  recv_total  avg_p99_ms  max_gap_ms   max_gap_seg   >100ms   >500ms    >3/Hz
+  0fb02cc3a5abcc2f_00000000--2a33888425       16       47025       29.09       44.41             0        0        0        0
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33       97775       28.95       45.51             0        0        0        0
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38      112319       29.41       42.56             0        0        0        0
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39      117126       29.42       44.61             0        0        0        0
+
+--- DAS_3  (addr=0x1f4=500, expected 50 Hz, threshold = 3/Hz = 60.0 ms)
+  route                                       segs  recv_total  avg_p99_ms  max_gap_ms   max_gap_seg   >100ms   >500ms    >3/Hz
+  0fb02cc3a5abcc2f_00000000--2a33888425       16       46999       26.07       44.41             0        0        0        0
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33       97721       27.14       44.77             0        0        0        0
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38      112261       26.14       42.56             0        0        0        0
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39      117071       28.23       54.53             0        0        0        0
+
+--- 0x202  (addr=0x202=514, expected 100 Hz, threshold = 3/Hz = 30.0 ms)
+  route                                       segs  recv_total  avg_p99_ms  max_gap_ms   max_gap_seg   >100ms   >500ms    >3/Hz
+  0fb02cc3a5abcc2f_00000000--2a33888425       16       94050       19.94       37.17             0        0        0        1
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33      195553       19.94       35.72             0        0        0        2
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38      224638       19.65       31.63             0        0        0        2
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39      234255       19.88       44.61             0        0        0        2
+
+--- EPS_2  (addr=0x220=544, expected 100 Hz, threshold = 3/Hz = 30.0 ms)
+  route                                       segs  recv_total  avg_p99_ms  max_gap_ms   max_gap_seg   >100ms   >500ms    >3/Hz
+  0fb02cc3a5abcc2f_00000000--2a33888425       16       93998       14.98       37.17             0        0        0        1
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33      195448       18.75       35.72             0        0        0        2
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38      224518       17.36       33.43             0        0        0        3
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39      234129       17.36       44.61             0        0        0        2
+
+--- ECM_5  (addr=0x22f=559, expected 50 Hz, threshold = 3/Hz = 60.0 ms)
+  route                                       segs  recv_total  avg_p99_ms  max_gap_ms   max_gap_seg   >100ms   >500ms    >3/Hz
+  0fb02cc3a5abcc2f_00000000--2a33888425       16       46997       26.51       44.41             0        0        0        0
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33       97720       27.61       45.35             0        0        0        0
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38      112256       26.75       41.58             0        0        0        0
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39      117061       27.28       54.53             0        0        0        0
+
+--- TRACTION_BUTTON  (addr=0x330=816, expected 1 Hz, threshold = 3/Hz = 3000.0 ms)
+  route                                       segs  recv_total  avg_p99_ms  max_gap_ms   max_gap_seg   >100ms   >500ms    >3/Hz
+  0fb02cc3a5abcc2f_00000000--2a33888425       16         940        0.00     1030.12            13      924      924        0
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33        1956        0.00     1020.83             2     1923     1922        0
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38        2245        0.00     1010.97             0     2207     2207        0
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39        2342        0.00     1011.29            17     2303     2302        0
+
+==============================================================================================================
+T3-C  First RX timestamp per route segment 0 (boot grace window check)
+==============================================================================================================
+  route                                            ESP_1       DAS_3       0x202       EPS_2       ECM_5  TRACTION_B  safety_inv  first_inv_t
+  0fb02cc3a5abcc2f_00000000--2a33888425         -0.047      -0.047      -0.047      -0.047      -0.027       0.512           0            -
+  0fb02cc3a5abcc2f_00000001--898f28ebec         -0.025      -0.025      -0.035      -0.035      -0.025       0.046           1        9.859
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64         -0.043      -0.033      -0.043      -0.043      -0.033       0.308           0            -
+  0fb02cc3a5abcc2f_00000006--25b05cbab7         -0.027      -0.038      -0.038      -0.038      -0.038       0.755           0            -
+
+==============================================================================================================
+T3-C  safetyRxChecksInvalid summary per route
+==============================================================================================================
+  route                                       segs  total_rise   total_true_samples  max_per_seg
+  0fb02cc3a5abcc2f_00000000--2a33888425       16           0                    0            0
+  0fb02cc3a5abcc2f_00000001--898f28ebec       33           1                   10            1
+  0fb02cc3a5abcc2f_00000005--c1e7eb6f64       38           0                    0            0
+  0fb02cc3a5abcc2f_00000006--25b05cbab7       39           0                    0            0

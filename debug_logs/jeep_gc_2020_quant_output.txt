@@ -1,0 +1,71 @@
+==========================================================================================
+T3-B  Boot-time ACC state across route segment 0
+==========================================================================================
+route                                          first_avail first_active active_<5s
+  0fb02cc3a5abcc2f_00000006--18c869842f                 -            -      False
+  0fb02cc3a5abcc2f_00000007--68a154dddb                 -            -      False
+  0fb02cc3a5abcc2f_00000008--593595d4bf             3.01s            -      False
+  0fb02cc3a5abcc2f_0000000a--ed922053ea                 -            -      False
+  0fb02cc3a5abcc2f_0000000b--99d3e5258c                 -            -      False
+  0fb02cc3a5abcc2f_0000000c--27e1d4ffe8                 -            -      False
+  0fb02cc3a5abcc2f_0000000d--6176d9347c                 -            -      False
+  0fb02cc3a5abcc2f_0000000e--7aaf09a16a                 -            -      False
+  0fb02cc3a5abcc2f_0000000f--96ca4457dd                 -            -      False
+  0fb02cc3a5abcc2f_00000012--dc2d76e6ee                 -            -      False
+  0fb02cc3a5abcc2f_00000013--62fe1f4d62             3.83s        3.83s       True
+  0fb02cc3a5abcc2f_00000014--3cf17b4a99             3.92s            -      False
+  0fb02cc3a5abcc2f_00000015--27445fa8d4            50.80s            -      False
+
+==========================================================================================
+T1-B  LKAS fault frequency per route
+==========================================================================================
+route                                           segs  temp_rise  perm_rise  temp_true_samples  perm_true_samples
+  0fb02cc3a5abcc2f_00000006--18c869842f           34          0          0                  0                  0
+  0fb02cc3a5abcc2f_00000007--68a154dddb           37          0          0                  0                  0
+  0fb02cc3a5abcc2f_00000008--593595d4bf           19          0          0                  0                  0
+  0fb02cc3a5abcc2f_0000000a--ed922053ea           49          0          0                  0                  0
+  0fb02cc3a5abcc2f_0000000b--99d3e5258c           39          0          0                  0                  0
+  0fb02cc3a5abcc2f_0000000c--27e1d4ffe8           28          0          0                  0                  0
+  0fb02cc3a5abcc2f_0000000d--6176d9347c           87          0          0                  0                  0
+  0fb02cc3a5abcc2f_0000000e--7aaf09a16a           87          0          0                  0                  0
+  0fb02cc3a5abcc2f_0000000f--96ca4457dd          119          0          0                  0                  0
+  0fb02cc3a5abcc2f_00000012--dc2d76e6ee           16          0          0                  0                  0
+  0fb02cc3a5abcc2f_00000013--62fe1f4d62            3          0          0                  0                  0
+  0fb02cc3a5abcc2f_00000014--3cf17b4a99           17          0          0                  0                  0
+  0fb02cc3a5abcc2f_00000015--27445fa8d4           15          0          0                  0                  0
+
+==========================================================================================
+T2-B  CRUISE_BUTTONS tx byte0 distribution (qlog sample-based, sparse)
+==========================================================================================
+route                                            total_tx top_byte0_hist (hex:count)
+  0fb02cc3a5abcc2f_00000006--18c869842f                12  08:10, 04:2
+  0fb02cc3a5abcc2f_00000007--68a154dddb                 2  01:2
+  0fb02cc3a5abcc2f_00000008--593595d4bf                 2  08:2
+  0fb02cc3a5abcc2f_0000000a--ed922053ea                10  04:6, 08:4
+  0fb02cc3a5abcc2f_0000000b--99d3e5258c                 3  04:2, 08:1
+  0fb02cc3a5abcc2f_0000000c--27e1d4ffe8                 0  
+  0fb02cc3a5abcc2f_0000000d--6176d9347c                 3  08:2, 04:1
+  0fb02cc3a5abcc2f_0000000e--7aaf09a16a                 0  
+  0fb02cc3a5abcc2f_0000000f--96ca4457dd                 2  01:1, 08:1
+  0fb02cc3a5abcc2f_00000012--dc2d76e6ee                 1  04:1
+  0fb02cc3a5abcc2f_00000013--62fe1f4d62                 0  
+  0fb02cc3a5abcc2f_00000014--3cf17b4a99                 0  
+  0fb02cc3a5abcc2f_00000015--27445fa8d4                 0  
+
+==========================================================================================
+T3-C  Max carState gap per route (qlog sample lower-bound, ms)
+==========================================================================================
+route                                           segs   max_gap_seg   max_gap_ms
+  0fb02cc3a5abcc2f_00000006--18c869842f           34             0        106.0
+  0fb02cc3a5abcc2f_00000007--68a154dddb           37             0        106.4
+  0fb02cc3a5abcc2f_00000008--593595d4bf           19             0        107.4
+  0fb02cc3a5abcc2f_0000000a--ed922053ea           49             0        111.9
+  0fb02cc3a5abcc2f_0000000b--99d3e5258c           39             0        114.6
+  0fb02cc3a5abcc2f_0000000c--27e1d4ffe8           28             0        124.1
+  0fb02cc3a5abcc2f_0000000d--6176d9347c           87             0        115.6
+  0fb02cc3a5abcc2f_0000000e--7aaf09a16a           87             0        119.0
+  0fb02cc3a5abcc2f_0000000f--96ca4457dd          119             0        104.5
+  0fb02cc3a5abcc2f_00000012--dc2d76e6ee           16             0        124.7
+  0fb02cc3a5abcc2f_00000013--62fe1f4d62            3             0        105.8
+  0fb02cc3a5abcc2f_00000014--3cf17b4a99           17            11        129.3
+  0fb02cc3a5abcc2f_00000015--27445fa8d4           15             0        119.6

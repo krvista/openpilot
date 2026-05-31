@@ -1,0 +1,66 @@
+==============================================================================================================
+Rising-edge counts per event (boot vs mid-drive; seg=0 vs seg>=1)
+==============================================================================================================
+event                         total  boot<10s  mid>=10s  seg=0  seg>=1
+commIssue                        43         5        38     43       0
+commIssueAvgFreq                  4         0         4      4       0
+locationdTemporaryError          23         5        18     23       0
+paramsdTemporaryError            15         3        12     15       0
+posenetInvalid                   20         5        15     20       0
+
+==============================================================================================================
+Per-segment distribution (top 5 segs per event)
+==============================================================================================================
+  commIssue                    [(0, 43)]
+  commIssueAvgFreq             [(0, 4)]
+  locationdTemporaryError      [(0, 23)]
+  paramsdTemporaryError        [(0, 15)]
+  posenetInvalid               [(0, 20)]
+
+==============================================================================================================
+Rise-time histogram inside seg=0 (seconds since seg start)
+==============================================================================================================
+     event         <5        <10        <15        <20        <25        <30        <40        <50        <60        <90       <120       <200
+ commIssue          0          5         21         17          0          0          0          0          0          0          0          0
+commIssueAvgFreq          0          0          0          4          0          0          0          0          0          0          0          0
+locationdTemporaryError          0          5         18          0          0          0          0          0          0          0          0          0
+paramsdTemporaryError          0          3         12          0          0          0          0          0          0          0          0          0
+posenetInvalid          0          5         15          0          0          0          0          0          0          0          0          0
+
+==============================================================================================================
+Rise-time percentiles in seg=0
+==============================================================================================================
+  commIssue                    n= 43  min=9.1s  p25=11.7s  median=14.1s  p75=17.1s  max=19.5s
+  commIssueAvgFreq             n=  4  min=18.3s  p25=18.3s  median=18.3s  p75=18.3s  max=19.2s
+  locationdTemporaryError      n= 23  min=9.1s  p25=10.6s  median=12.1s  p75=13.1s  max=14.8s
+  paramsdTemporaryError        n= 15  min=9.1s  p25=10.6s  median=11.7s  p75=12.9s  max=13.8s
+  posenetInvalid               n= 20  min=9.1s  p25=10.5s  median=11.7s  p75=12.9s  max=14.1s
+
+==============================================================================================================
+Cooccurrence (>=2 target events rising in same frame)
+==============================================================================================================
+  ['commIssue', 'locationdTemporaryError', 'paramsdTemporaryError', 'posenetInvalid']: 14
+  ['commIssue', 'locationdTemporaryError', 'posenetInvalid']: 6
+  ['commIssue', 'locationdTemporaryError']: 2
+  ['commIssue', 'locationdTemporaryError', 'paramsdTemporaryError']: 1
+
+==============================================================================================================
+Publisher validity sample counts (per route)
+==============================================================================================================
+  livePose.posenetOK=False: (none)
+  livePose.inputsOK=False:
+    route 00000000: total=20  boot=0  mid=20  seg0=20
+    route 00000001: total=17  boot=0  mid=17  seg0=17
+    route 00000005: total=17  boot=0  mid=17  seg0=17
+    route 00000006: total=15  boot=0  mid=15  seg0=15
+  liveParameters.valid=False: (none)
+
+==============================================================================================================
+Fix D acceptance check (post-build re-sweep)
+==============================================================================================================
+  Total target rising-edges:       105
+  Of which in seg=0:               105
+  PUBLISHER_WARMUP_GRACE = 20.0s   (selfdrived.py near line 50)
+  Pass after fix: seg=0 count drops to 0;  seg>=1 count unchanged.
+line 50)
+  Pass after fix: seg=0 count drops to 0;  seg>=1 count unchanged.
