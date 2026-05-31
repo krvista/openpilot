@@ -19,29 +19,62 @@ VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
 ACTIVE_STATES = (VisionState.entering, VisionState.turning, VisionState.leaving)
 ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
-_ENTERING_PRED_LAT_ACC_TH = 1.3  # Predicted Lat Acc threshold to trigger entering turn state.
-_ABORT_ENTERING_PRED_LAT_ACC_TH = 1.1  # Predicted Lat Acc threshold to abort entering state if speed drops.
+# modelV2 trajectory time indices: 33 steps non-uniform over [0, 10s]
+# (matches ModelConstants.T_IDXS — duplicated locally to avoid hardware-stack import).
+_T_IDXS = np.array([10.0 * (i / 32.0) ** 2 for i in range(33)])
+# Boolean mask for the 3-5s anticipation window (idx ~17..22, t≈2.82..4.73s).
+_ANTICIPATE_MASK = (_T_IDXS >= 3.0) & (_T_IDXS <= 5.0)
 
-_TURNING_LAT_ACC_TH = 1.6  # Lat Acc threshold to trigger turning state.
+_ENTERING_PRED_LAT_ACC_TH = 2.0  # Predicted Lat Acc threshold to trigger entering turn state.
+_ABORT_ENTERING_PRED_LAT_ACC_TH = 1.6  # Predicted Lat Acc threshold to abort entering state if speed drops.
 
-_LEAVING_LAT_ACC_TH = 1.3  # Lat Acc threshold to trigger leaving turn state.
-_FINISH_LAT_ACC_TH = 1.1  # Lat Acc threshold to trigger the end of the turn cycle.
+# 3-5s lookahead anticipation. Trigger entering early with a gentle drop when
+# the modelV2 trajectory shows non-trivial lat acc in the 3..5s window.
+# Raised 1.3 -> 1.8 from wk2 drivelog analysis (2020 Jeep GC, dongle 0fb02cc3a5abcc2f,
+# build v6 644e7f06): on genuinely straight highway the 3-5s window lat-acc reaches p99
+# ~1.4 with momentary peaks ~2.4, so a 1.3 threshold fired repeatedly on straight road
+# and caused unwanted slow-downs (some escalating to driver ACC cancel). 1.8 sits above
+# the straight p99 while genuine curves still cross it. Abort raised to keep hysteresis.
+_ANTICIPATE_PRED_LAT_ACC_TH = 1.8        # 3-5s window peak threshold to start anticipating
+_ANTICIPATE_ABORT_LAT_ACC_TH = 1.4       # drop back to enabled when window falls below this
 
-_A_LAT_REG_MAX = 2.  # Maximum lateral acceleration
+# Consecutive-frame debounce for enabled->entering. The modelV2 predicted lat-acc has brief
+# single-frame spikes on straight road (peaks ~2.4 even when straight); requiring the entry
+# condition to hold for a few frames rejects those while genuine curves (which sustain the
+# signal for ~0.5-2.5 s) still trigger.
+_ENTERING_DEBOUNCE_FRAMES = 3            # require >3 i.e. 4 consecutive frames (~0.2 s at DT_MDL 20 Hz)
+
+_TURNING_LAT_ACC_TH = 2.0  # Lat Acc threshold to trigger turning state.
+
+_LEAVING_PRED_LAT_ACC_TH = 1.4  # Predicted Lat Acc threshold to anticipate curve straightening and switch to leaving early.
+_LEAVING_LAT_ACC_TH = 1.5  # Lat Acc threshold to trigger leaving turn state.
+_FINISH_LAT_ACC_TH = 1.3  # Lat Acc threshold to trigger the end of the turn cycle.
+
+_A_LAT_REG_MAX = 2.8  # Maximum lateral acceleration (was 2.0; raised to 0.29g for Jeep GC on highway curves)
 
 _NO_OVERSHOOT_TIME_HORIZON = 4.  # s. Time to use for velocity desired based on a_target when not overshooting.
 
-# Lookup table for the minimum smooth deceleration during the ENTERING state
-# depending on the actual maximum absolute lateral acceleration predicted on the turn ahead.
-_ENTERING_SMOOTH_DECEL_V = [-0.2, -1.]  # min decel value allowed on ENTERING state
-_ENTERING_SMOOTH_DECEL_BP = [1.3, 3.]  # absolute value of lat acc ahead
+# User-tuned ENTERING-state cruise drop curve.
+# Map max_pred_lat_acc -> desired cruise speed drop (kph). The actual drop is
+# delivered by a_target = -drop_ms / _NO_OVERSHOOT_TIME_HORIZON applied while
+# v_target = v_ego, so output_v_target = v_ego - drop_ms. Capped at 10 kph
+# per user intent: even strong highway curves should not drop more than 10 kph
+# while v_ego <= ~120 kph. For deeper curves the lateral safety considerations
+# in the rest of the long plan remain in effect.
+_PRED_DROP_BP    = [1.6, 2.0, 3.0]    # max_pred_lat_acc breakpoints (m/s²)
+_PRED_DROP_KPH_V = [0.0, 5.0, 10.0]   # desired cruise drop (kph)
+
+# Gentle anticipatory drop curve for the 3-5s lookahead window.
+# Max 2.5 kph drop while only the far horizon sees the curve — user wanted "살짝".
+_ANTICIPATE_DROP_BP    = [1.3, 1.5, 2.0]
+_ANTICIPATE_DROP_KPH_V = [0.0, 1.0, 2.5]
 
 # Lookup table for the acceleration for the TURNING state
 # depending on the current lateral acceleration of the vehicle.
 _TURNING_ACC_V = [0.5, 0., -0.4]  # acc value
 _TURNING_ACC_BP = [1.5, 2.3, 3.]  # absolute value of current lat acc
 
-_LEAVING_ACC = 0.5  # Conformable acceleration to regain speed while leaving a turn.
+_LEAVING_ACC = 0.3  # Comfortable acceleration to regain speed while leaving a turn (gentle: 5 kph drop recovers in ~5s, 10 kph in ~9s).
 
 
 class SmartCruiseControlVision:
@@ -65,6 +98,8 @@ class SmartCruiseControlVision:
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
     self.max_pred_lat_acc = 0.
+    self.anticipated_lat_acc = 0.  # peak of predicted lat acc in the 3-5s lookahead window
+    self.entering_candidate_frames = 0  # consecutive frames the entry condition has held
 
   def get_a_target_from_control(self) -> float:
     return self.a_target
@@ -92,12 +127,14 @@ class SmartCruiseControlVision:
       predicted_lat_accels = rate_plan * vel_plan
       self.max_pred_lat_acc = np.percentile(predicted_lat_accels, 97)
 
-      # get the maximum curve based on the current velocity
-      v_ego = max(self.v_ego, 0.1)  # ensure a value greater than 0 for calculations
-      max_curve = self.max_pred_lat_acc / (v_ego**2)
+      # 3-5s lookahead: peak lat acc in the window. Used to trigger gentle anticipation
+      # before the near-horizon p97 crosses _ENTERING_PRED_LAT_ACC_TH.
+      n = min(len(predicted_lat_accels), len(_ANTICIPATE_MASK))
+      self.anticipated_lat_acc = float(predicted_lat_accels[:n][_ANTICIPATE_MASK[:n]].max()) if n else 0.
 
-      # Get the target velocity for the maximum curve
-      self.v_target = (_A_LAT_REG_MAX / max_curve) ** 0.5
+      # v_target anchors the "now" velocity; a_target (computed later for ENTERING)
+      # drives the actual cruise drop via output_v_target = v_target + a_target * _NO_OVERSHOOT_TIME_HORIZON.
+      self.v_target = max(self.v_ego, MIN_V)
 
   def _update_state_machine(self) -> tuple[bool, bool]:
     # ENABLED, ENTERING, TURNING, LEAVING, OVERRIDING
@@ -113,10 +150,19 @@ class SmartCruiseControlVision:
         if self.state == VisionState.enabled:
           # Do not enter a turn control cycle if the speed is low.
           if self.v_ego <= MIN_V:
-            pass
-          # If significant lateral acceleration is predicted ahead, then move to Entering turn state.
-          elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
-            self.state = VisionState.entering
+            self.entering_candidate_frames = 0
+          # Enter on either the near-horizon trigger (curve ~1s away) OR the 3-5s
+          # anticipation trigger (early gentle drop). a_target picks the larger drop.
+          # Require the condition to hold for _ENTERING_DEBOUNCE_FRAMES consecutive frames
+          # so single-frame predicted-lat-acc spikes on straight road don't trip it.
+          elif (self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH or
+                self.anticipated_lat_acc >= _ANTICIPATE_PRED_LAT_ACC_TH):
+            self.entering_candidate_frames += 1
+            if self.entering_candidate_frames > _ENTERING_DEBOUNCE_FRAMES:
+              self.state = VisionState.entering
+              self.entering_candidate_frames = 0
+          else:
+            self.entering_candidate_frames = 0
 
         # OVERRIDING
         elif self.state == VisionState.overriding:
@@ -128,14 +174,20 @@ class SmartCruiseControlVision:
           # Transition to Turning if current lateral acceleration is over the threshold.
           if self.current_lat_acc >= _TURNING_LAT_ACC_TH:
             self.state = VisionState.turning
-          # Abort if the predicted lateral acceleration drops
-          elif self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH:
+          # Abort only when BOTH horizons drop below their abort thresholds —
+          # otherwise we'd flap back to enabled while still anticipating.
+          elif (self.max_pred_lat_acc < _ABORT_ENTERING_PRED_LAT_ACC_TH and
+                self.anticipated_lat_acc < _ANTICIPATE_ABORT_LAT_ACC_TH):
             self.state = VisionState.enabled
 
         # TURNING
         elif self.state == VisionState.turning:
-          # Transition to Leaving if current lateral acceleration drops below a threshold.
-          if self.current_lat_acc <= _LEAVING_LAT_ACC_TH:
+          # Anticipate curve straightening: if the model predicts the curve ending ahead
+          # (max_pred drops), switch to leaving before current lat_acc actually falls so
+          # v_target recovers sooner. Fall back to measured lat_acc otherwise.
+          if self.max_pred_lat_acc <= _LEAVING_PRED_LAT_ACC_TH:
+            self.state = VisionState.leaving
+          elif self.current_lat_acc <= _LEAVING_LAT_ACC_TH:
             self.state = VisionState.leaving
 
         # LEAVING
@@ -168,8 +220,15 @@ class SmartCruiseControlVision:
       a_target = self.a_ego
     # ENTERING
     elif self.state == VisionState.entering:
-      # when not overshooting, target a smooth deceleration in preparation for a sharp turn to come.
-      a_target = np.interp(self.max_pred_lat_acc, _ENTERING_SMOOTH_DECEL_BP, _ENTERING_SMOOTH_DECEL_V)
+      # Two-horizon drop blend:
+      #   near (p97 of 0..10s trajectory): user-tuned 0..10 kph as the curve closes in
+      #   far  (peak in 3..5s window)    : gentle 0..2.5 kph for early anticipation
+      # Use the larger of the two so anticipation kicks in first and gracefully ramps
+      # up to the full near-horizon drop as the curve approaches.
+      drop_near = float(np.interp(self.max_pred_lat_acc, _PRED_DROP_BP, _PRED_DROP_KPH_V))
+      drop_far  = float(np.interp(self.anticipated_lat_acc, _ANTICIPATE_DROP_BP, _ANTICIPATE_DROP_KPH_V))
+      desired_drop_ms = max(drop_near, drop_far) / 3.6
+      a_target = -desired_drop_ms / _NO_OVERSHOOT_TIME_HORIZON
     # TURNING
     elif self.state == VisionState.turning:
       # When turning, we provide a target acceleration that is comfortable for the lateral acceleration felt.
