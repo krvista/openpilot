@@ -95,3 +95,6 @@ SKILL.md
 !.idea/customTargets.xml
 !.idea/tools/*
 !.run/*
+
+# wk2 SCC analysis scratch JSON (local-only)
+wk2_*.json
