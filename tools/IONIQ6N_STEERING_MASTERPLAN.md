@@ -369,6 +369,17 @@ HYUNDAI_CANFD_LKA_STEERING_ALT_CCNC` returns exactly one symbol.
 
 ## Appendix H: Hands-on-detection (HOD) suppression feasibility
 
+> **STATUS: HISTORICAL.** The HOD bypass scaffold (`create_hod_bypass()`
+> in `hyundaicanfd.py` and the `{0x208, e_can, 16}` panda TX whitelist
+> entry) was removed in commit `c9a1ed6` after drivelog 0x2d/0x2e
+> confirmed nag escalation = 0 (cluster shows ~1.4 s of soft
+> `KEEP_HANDS_ON` per commute, zero `GRASP_NOT_DETECTED` speed-limit
+> events). sunnypilot carries no HOD sensor spoof on any HKG branch
+> either. The probe / decode / verify tools referenced below
+> (`ioniq6n_find_hod.py`, `ioniq6n_hod_*.py`, `ioniq6n_verify_0x208_crc.py`)
+> are also deleted; the analysis below is preserved as the historical
+> record of why the feature was investigated and why it was not shipped.
+
 Goal explored: make MADS (openpilot lateral) drive without ever
 triggering the "please hold wheel" warning, mirroring Tesla's behaviour.
 

@@ -2,15 +2,13 @@
 """Offline simulation: replay drivelogs through the current carcontroller
 logic and verify no dangerous sendcan patterns emerge.
 
-Checks across ALL available routes (30-34):
+Checks:
   1. 0x1A0 (SCC_CONTROL) TX count must be 0 on ccnc_lka_alt
   2. 0x110 (LKAS_ALT) must stay in passthrough when ACC is off
-  3. 0x208 (HOD) must only TX when latActive=True
-  4. No other E-CAN (bus 1) addresses that overlap with factory ECUs
+  3. No E-CAN (bus 1) addresses that overlap with factory ECUs
 
 This doesn't run the full carcontroller — it replays the ACTUAL sendcan
-from the logs (which reflect what the code DID generate). For routes
-32-34 this shows the bugs; for route 30-31 it shows pre-fix behavior.
+from the logs (which reflect what the code DID generate).
 """
 import glob
 import sys
@@ -37,7 +35,6 @@ FACTORY_ECAN_CRITICAL = {
 # Addresses openpilot is ALLOWED to TX on bus 1
 ALLOWED_ECAN = {
     0x1CF,  # CRUISE_BUTTON
-    0x208,  # HOD bypass (opt-in)
 }
 
 # Addresses on bus 0 (ACAN) that openpilot sends
@@ -62,10 +59,7 @@ def analyze_route(route_id):
   violations = []
   lkas_active_while_acc_off = 0
   lkas_passthrough_count = 0
-  hod_while_not_lat = 0
-  hod_total = 0
   acc_enabled = False
-  lat_active = False
 
   for p in segs:
     lr = LogReader(p)
@@ -81,12 +75,6 @@ def analyze_route(route_id):
       if w == 'carState':
         cs = m.carState
         acc_enabled = cs.cruiseState.enabled
-
-      if w == 'controlsState':
-        try:
-          lat_active = m.controlsState.active
-        except:
-          pass
 
       elif w == 'sendcan':
         for c in m.sendcan:
@@ -113,12 +101,6 @@ def analyze_route(route_id):
               else:
                 lkas_passthrough_count += 1
 
-          # Check 4: HOD TX while not latActive?
-          if addr == 0x208:
-            hod_total += 1
-            if not lat_active:
-              hod_while_not_lat += 1
-
   # Report
   print(f"\nSendcan inventory:")
   for (bus, addr), cnt in sorted(tx_by_bus_addr.items(), key=lambda x: -x[1]):
@@ -137,7 +119,6 @@ def analyze_route(route_id):
 
   print(f"\nLKAS_ALT (0x110): active-while-ACC-off = {lkas_active_while_acc_off}, "
         f"passthrough = {lkas_passthrough_count}")
-  print(f"HOD (0x208): total={hod_total}, while-not-latActive={hod_while_not_lat}")
 
   ok = len(violations) == 0 and lkas_active_while_acc_off == 0
   print(f"\n{'✅ PASS' if ok else '❌ FAIL'}")

@@ -141,9 +141,12 @@ fashion; no existing field was renumbered.
 4. **Counter monotonicity.** `create_suppress_lfa` owns its own monotonic
    COUNTER because the panda relay blocks the camera's original 0x362/0x2a4
    on A-CAN — ADAS DRV only sees our TX stream, and any +1 gap is flagged.
-5. **HOD bypass (0x208) is gated** behind `HOD_BYPASS=1` env var and not
-   shipped enabled. See Appendix H of `IONIQ6N_STEERING_MASTERPLAN.md` for
-   bus-off risk analysis.
+5. **HOD bypass removed** (commit `c9a1ed6`). The dormant 0x208 scaffold
+   in carcontroller and the panda TX whitelist entry were deleted after
+   verifying drivelog 0x2d/0x2e showed nag escalation = 0 and sunnypilot
+   carries no HOD sensor spoof either. See Appendix H of
+   `IONIQ6N_STEERING_MASTERPLAN.md` for the historical feasibility
+   analysis.
 
 ---
 
@@ -178,9 +181,6 @@ fashion; no existing field was renumbered.
 8. Panda safety `MAX_LATERAL_ACCEL = 3.6 m/s^2` is fixed in panda firmware.
    On high-curvature corners saturation will occur; we now log it via the
    new `lateralAccelLimit` field but cannot exceed.
-9. HOD bypass default OFF is a deliberate safety choice. Some clusters
-   bus-off when 0x208 is spoofed at factory rate.
-
 ### P3 — explicitly deferred per user
 
 10. Lane Change Timer overhaul.
@@ -233,5 +233,6 @@ fashion; no existing field was renumbered.
 * `opendbc_repo/opendbc/car/hyundai/carstate.py` — `cam_stale`,
   `fault_lfa`, and gear-shifter parsing.
 * `cereal/log.capnp` — fields 99/100/101 for drivelog instrumentation.
-* `IONIQ6N_STEERING_MASTERPLAN.md` — long-form design notes including
-  Appendix H (HOD bypass risk analysis).
+* `IONIQ6N_STEERING_MASTERPLAN.md` — long-form design notes; Appendix H
+  preserves the HOD bypass feasibility analysis as historical record
+  (feature removed in commit `c9a1ed6`).
