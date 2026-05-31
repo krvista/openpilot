@@ -49,6 +49,14 @@ TurnDirection = custom.ModelDataV2SP.TurnDirection
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
+# Fix D: publisher-warmup grace for boot-time transient softDisable events
+# (commIssue, commIssueAvgFreq, posenetInvalid, locationdTemporaryError,
+#  paramsdTemporaryError). Drivelog evidence: 105/105 rising-edges in
+# t < 19.5s of seg-0 across 4 Jeep GC routes / 126 segments / 37 hr.
+# Kept separate from Fix B controlsMismatch boot_grace (10s) — different
+# event cluster (publisher cold-start vs panda RX-checks pulse).
+PUBLISHER_WARMUP_GRACE = 20.
+
 
 class SelfdriveD(CruiseHelper):
   def __init__(self, CP=None, CP_SP=None):
@@ -143,7 +151,16 @@ class SelfdriveD(CruiseHelper):
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
-    self.ignored_processes = {'mapd', }
+    # Processes whose exit must NOT raise EventName.processNotRunning (which is a
+    # SOFT_DISABLE — see selfdrive/selfdrived/events.py). Non-safety-critical
+    # daemons whose transient death must not drop cruise.
+    #
+    # Drivelog evidence (Jeep GC, 5 routes, 431 events): processNotRunning
+    # accounted for 37/128 disengages, triggered by micd hitting RetryError on
+    # PortAudio get_stream and exiting with code 1. micd is purely informational
+    # (ambient noise -> alert volume); soundd already falls back to a fixed
+    # volume when SoundPressure is missing.
+    self.ignored_processes = {'mapd', 'micd'}
 
     # Determine startup event
     is_remote = build_metadata.openpilot.comma_remote or build_metadata.openpilot.sunnypilot_remote
@@ -326,8 +343,21 @@ class SelfdriveD(CruiseHelper):
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
-      # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
-      if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
+      # All three triggers below cause an immediateDisable EventName.controlsMismatch.
+      # Each needs the same boot-grace window — without it any of them can fire
+      # during normal startup and drop cruise the moment the user engages.
+      #
+      # Drivelog evidence (5 Jeep GC routes on dongle 0fb02cc3a5abcc2f):
+      #   safetyRxChecksInvalid pulses True for a beat right after panda boot;
+      #   mismatch_counter races to 200 (= 2s @ 100 Hz) when sunnypilot's MADS
+      #   auto-engages lateral before panda's controlsAllowed arrives over a
+      #   separate socket.
+      #
+      # After the first 10 s, boot_grace is True for the rest of the drive,
+      # so a real mid-drive panda fault, RX-checks failure, or persistent
+      # controlsAllowed disagreement still disengages without delay.
+      boot_grace = self.sm.frame * DT_CTRL > 10.
+      if boot_grace and (safety_mismatch or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200):
         self.events.add(EventName.controlsMismatch)
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
@@ -369,13 +399,15 @@ class SelfdriveD(CruiseHelper):
     # generic catch-all. ideally, a more specific event should be added above instead
     has_disable_events = self.events.contains(ET.NO_ENTRY) and (self.events.contains(ET.SOFT_DISABLE) or self.events.contains(ET.IMMEDIATE_DISABLE))
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
+    publisher_warmup = self.sm.frame * DT_CTRL > PUBLISHER_WARMUP_GRACE
     if not self.sm.all_checks() and no_system_errors:
-      if not self.sm.all_alive():
-        self.events.add(EventName.commIssue)
-      elif not self.sm.all_freq_ok():
-        self.events.add(EventName.commIssueAvgFreq)
-      else:
-        self.events.add(EventName.commIssue)
+      if publisher_warmup:
+        if not self.sm.all_alive():
+          self.events.add(EventName.commIssue)
+        elif not self.sm.all_freq_ok():
+          self.events.add(EventName.commIssueAvgFreq)
+        else:
+          self.events.add(EventName.commIssue)
 
       logs = {
         'invalid': [s for s, valid in self.sm.valid.items() if not valid],
@@ -388,7 +420,7 @@ class SelfdriveD(CruiseHelper):
     else:
       self.logged_comm_issue = None
 
-    if not self.CP.notCar:
+    if not self.CP.notCar and publisher_warmup:
       if not self.sm['livePose'].posenetOK:
         self.events.add(EventName.posenetInvalid)
       if not self.sm['livePose'].inputsOK:
