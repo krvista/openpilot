@@ -76,6 +76,25 @@ TRAFFIC_FOLLOW_FAR_M  = 5.0
 # angle-passive latch as an additional false-reason on the same chain.
 VM_REJECT_FORCE_PASSIVE_FRAMES = 5
 
+# Parking-mode latch — layered on top of the <20 km/h low_speed_cam_latched
+# passthrough. The low-speed latch hands the wheel back for caster self-
+# centering whenever speed is low; this stickier latch additionally keeps op
+# passive up to ~30 km/h once a clear parking signature is seen, so the driver
+# retains full manual control through lot ramps / tight maneuvers without op
+# fighting the wheel. Entry requires BOTH a sustained low-speed window AND at
+# least one large-wheel event during it; exit needs a sustained higher speed
+# (hysteresis above the 30 km/h entry) so a 30 km/h crawl does not chatter the
+# latch on/off. ENTER_WHEEL_DEG = 270° ≈ 18° road wheel ≈ 9 m turn radius
+# (steerRatio 14.96): clearly tighter than city-intersection turns (~180°) so
+# the latch is specific to parking-lot maneuvers. ccnc-drivelog route 0x39
+# parking sections measured 180-360° on 48% of frames, so 270° is reliably
+# crossed at least once on a multi-floor spiral ramp.
+PARKING_MODE_ENTER_MS             = 30.0 / 3.6   # ≤30 km/h sustained to arm
+PARKING_MODE_ENTER_SUSTAIN_FRAMES = 300          # 3 s @ 100 Hz
+PARKING_MODE_ENTER_WHEEL_DEG      = 270.0        # ≈9 m radius parking turn
+PARKING_MODE_EXIT_MS              = 33.0 / 3.6   # exit hysteresis above entry
+PARKING_MODE_EXIT_SUSTAIN_FRAMES  = 200          # 2 s @ 100 Hz
+
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False):
@@ -243,6 +262,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # angle_passive entry. Resets whenever the entry conjunction
     # becomes false or lat_active goes false.
     self.angle_passive_enter_frames = 0
+    # Parking-mode latch (see PARKING_MODE_* constants). Arms on a sustained
+    # ≤30 km/h window that contains a ≥270° wheel event; holds op passive
+    # until a sustained >33 km/h release, then re-arms clean.
+    self.parking_low_speed_frames = 0
+    self.parking_sharp_turn_seen = False
+    self.parking_mode_active = False
+    self.parking_exit_frames = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -481,6 +507,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.traffic_following = False
     in_passthrough = self.low_speed_cam_latched and not self.traffic_following
 
+    # Parking-mode latch (layered on low_speed_cam_latched). A sustained
+    # ≤30 km/h window that contains a ≥270° wheel event = clear parking
+    # signature → hold op passive up to ~30 km/h (driver keeps full manual
+    # control in lot ramps/maneuvers). Exits only on a sustained >33 km/h,
+    # then re-arms clean so a later low-speed stretch without a sharp turn
+    # does not re-trip on a stale sharp-turn flag.
+    if v_ego_safe <= PARKING_MODE_ENTER_MS:
+      self.parking_low_speed_frames = min(self.parking_low_speed_frames + 1,
+                                          PARKING_MODE_ENTER_SUSTAIN_FRAMES)
+      if abs(steer_angle_safe) >= PARKING_MODE_ENTER_WHEEL_DEG:
+        self.parking_sharp_turn_seen = True
+    else:
+      self.parking_low_speed_frames = 0
+    if (self.parking_low_speed_frames >= PARKING_MODE_ENTER_SUSTAIN_FRAMES
+        and self.parking_sharp_turn_seen):
+      self.parking_mode_active = True
+    if v_ego_safe > PARKING_MODE_EXIT_MS:
+      self.parking_exit_frames = min(self.parking_exit_frames + 1,
+                                     PARKING_MODE_EXIT_SUSTAIN_FRAMES)
+    else:
+      self.parking_exit_frames = 0
+    if self.parking_mode_active and self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
+      self.parking_mode_active = False
+      self.parking_sharp_turn_seen = False
+      self.parking_low_speed_frames = 0
+
     # CCNC angle-control: reference sp_smooth_angle EMA, then BASELINE_VM
     # double-limited apply_steer_angle_limits_vm. Mirrors the sunnypilot
     # reference flow.
@@ -658,7 +710,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # When the driver naturally releases (override < 0.9), the
     # clamp lifts and the standard VM rate-limited transition
     # takes over.
-    if self.angle_passive_active or override_factor >= 0.9:
+    # parking_mode_active is included so apply_angle_last tracks the wheel
+    # while op is held passive (CC.latActive may still be True), giving a
+    # bump-free resume when the latch releases above 33 km/h.
+    if self.angle_passive_active or override_factor >= 0.9 or self.parking_mode_active:
       self.apply_angle_last = float(np.clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
@@ -673,7 +728,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                               and not self.was_in_reverse and not in_passthrough
                               and not cam_stale_tripped and not fault_lfa_bool
                               and not vm_reject_persistent
-                              and not self.angle_passive_active)
+                              and not self.angle_passive_active
+                              and not self.parking_mode_active)
     else:
       effective_lat_active = bool(apply_steer_req)
 
