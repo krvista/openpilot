@@ -263,10 +263,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # becomes false or lat_active goes false.
     self.angle_passive_enter_frames = 0
     # Parking-mode latch (see PARKING_MODE_* constants). Arms on a sustained
-    # ≤30 km/h window that contains a ≥270° wheel event; holds op passive
-    # until a sustained >33 km/h release, then re-arms clean.
+    # ≤30 km/h window that contains a parking signature (≥270° wheel event OR
+    # a reverse-gear event); holds op passive until a sustained >33 km/h
+    # release, then re-arms clean.
     self.parking_low_speed_frames = 0
-    self.parking_sharp_turn_seen = False
+    self.parking_signature_seen = False
     self.parking_mode_active = False
     self.parking_exit_frames = 0
 
@@ -508,20 +509,26 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     in_passthrough = self.low_speed_cam_latched and not self.traffic_following
 
     # Parking-mode latch (layered on low_speed_cam_latched). A sustained
-    # ≤30 km/h window that contains a ≥270° wheel event = clear parking
-    # signature → hold op passive up to ~30 km/h (driver keeps full manual
-    # control in lot ramps/maneuvers). Exits only on a sustained >33 km/h,
-    # then re-arms clean so a later low-speed stretch without a sharp turn
-    # does not re-trip on a stale sharp-turn flag.
+    # ≤30 km/h window containing a clear parking signature — a ≥270° (≈9 m
+    # radius) wheel event OR a reverse-gear event — holds op passive up to
+    # ~30 km/h so the driver keeps full manual control through lot ramps /
+    # multi-point maneuvers. Reverse is included because it never happens in
+    # normal forward road driving and the Ioniq 6 N's large turning circle
+    # routinely needs a reverse to clear tight lot turns; arming on it also
+    # bridges the slow forward crawl right after R→D (was_in_reverse clears
+    # the instant a forward gear is selected). Exits only on a sustained
+    # >33 km/h, then re-arms clean so a later low-speed stretch without a
+    # parking signature does not re-trip on a stale flag.
     if v_ego_safe <= PARKING_MODE_ENTER_MS:
       self.parking_low_speed_frames = min(self.parking_low_speed_frames + 1,
                                           PARKING_MODE_ENTER_SUSTAIN_FRAMES)
-      if abs(steer_angle_safe) >= PARKING_MODE_ENTER_WHEEL_DEG:
-        self.parking_sharp_turn_seen = True
+      if (abs(steer_angle_safe) >= PARKING_MODE_ENTER_WHEEL_DEG
+          or CS.out.gearShifter == structs.CarState.GearShifter.reverse):
+        self.parking_signature_seen = True
     else:
       self.parking_low_speed_frames = 0
     if (self.parking_low_speed_frames >= PARKING_MODE_ENTER_SUSTAIN_FRAMES
-        and self.parking_sharp_turn_seen):
+        and self.parking_signature_seen):
       self.parking_mode_active = True
     if v_ego_safe > PARKING_MODE_EXIT_MS:
       self.parking_exit_frames = min(self.parking_exit_frames + 1,
@@ -530,7 +537,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.parking_exit_frames = 0
     if self.parking_mode_active and self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
       self.parking_mode_active = False
-      self.parking_sharp_turn_seen = False
+      self.parking_signature_seen = False
       self.parking_low_speed_frames = 0
 
     # CCNC angle-control: reference sp_smooth_angle EMA, then BASELINE_VM
