@@ -126,8 +126,19 @@ class Controls(ControlsExt):
     abs_curv = abs(fallback)
     if abs_curv < 0.001:
       return fallback
-    base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8], [0.08, 0.10, 0.13]))
-    boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.12]))
+    # Phase 6f-5 lane-tracking responsiveness:
+    #   base_s: extend the high-speed shelf to 140 km/h (38.9 m/s) -> 0.18 s so
+    #     highway cruise (frequent Gyeongbu expressway runs to Yongin) sees an
+    #     earlier preview of lane drift. The 0.13 s shelf at 100 km/h is kept
+    #     as the third node so anything <=100 km/h is unchanged.
+    #   boost_s: raise the corner peak from 0.12 -> 0.20 s while keeping the
+    #     entry threshold (|curv|>=0.001) intact, so straight-line 4-5 Hz
+    #     wobble (the band Phase 6f-4 just cut) is not amplified. ccnc-drivelog
+    #     0x3a-0x3f cross-correlation showed the existing pipeline gives op a
+    #     ~+87 ms duration-weighted lead over the wheel; this widens that lead
+    #     in shallow-to-medium corners (where it matters most for entry feel).
+    base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
+    boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.20]))
     t_ahead = min(base_s + boost_s + LAT_CMD_LOOKAHEAD_EXTRA_S, 0.25 + LAT_CMD_LOOKAHEAD_EXTRA_S)
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
