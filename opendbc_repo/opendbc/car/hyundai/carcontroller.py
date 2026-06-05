@@ -688,8 +688,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.angle_passive_active = False
         self.angle_passive_enter_frames = 0
     else:
-      if (abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
-          and abs(steer_torque_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_TORQUE_NM):
+      # Phase 6f-3 OR-arm: low-speed sign-disagreement also arms entry
+      # even when |wheel| stays below the 40° geometry gate. The driver
+      # pushes ≥30 Nm in the opposite direction of op's last-frame
+      # apply_angle_last (≥5° off the wheel) at ≤30 km/h — the cluster
+      # signature measured on ccnc-drivelog 0x3c-0x3f. Reuses the 5-frame
+      # sustain and torque-only exit.
+      low_intent_disagree = (
+        v_ego_safe <= CarControllerParams.INTENT_DISAGREE_VEGO_MS
+        and abs(steer_torque_safe) >= CarControllerParams.INTENT_DISAGREE_TQ_MIN_NM
+        and abs(self.apply_angle_last - steer_angle_safe) >= CarControllerParams.INTENT_DISAGREE_DELTA_DEG
+        and (np.sign(steer_torque_safe)
+             * np.sign(self.apply_angle_last - steer_angle_safe)) < 0
+      )
+      if ((abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
+           and abs(steer_torque_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_TORQUE_NM)
+          or low_intent_disagree):
         self.angle_passive_enter_frames = min(self.angle_passive_enter_frames + 1,
                                               CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES)
         if self.angle_passive_enter_frames >= CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES:

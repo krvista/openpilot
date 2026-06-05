@@ -127,6 +127,16 @@ class CarControllerParams:
   ANGLE_PASSIVE_ENTER_WHEEL_DEG = 40.0
   ANGLE_PASSIVE_ENTER_TORQUE_NM = 60.0
   ANGLE_PASSIVE_EXIT_TORQUE_NM  = 30.0
+  # Phase 6f-3 low-speed intent-disagreement OR-arm. The 6d-1 wheel-angle
+  # gate (>= 40°) misses the case where the driver pushes hard while the
+  # wheel is still near-straight and op commands the opposite direction.
+  # ccnc-drivelog routes 0x3c-0x3f (9899a611, 152 min): 137 sign-disagree
+  # clusters over 13,285 frames covering 16-28% of low-speed op-active
+  # time, with ~55% of clusters at |wheel|<10°. OR-arm catches them while
+  # reusing the existing 5-frame sustain and torque-only exit.
+  INTENT_DISAGREE_VEGO_MS    = 30.0 / 3.6   # ≤30 km/h
+  INTENT_DISAGREE_TQ_MIN_NM  = 30.0          # matches ANGLE_PASSIVE_EXIT_TORQUE_NM
+  INTENT_DISAGREE_DELTA_DEG  = 5.0           # |apply_angle_last - wheel|
   # Phase 6e-1 transient-blip filter. The Phase 6d entry conjunction
   # is met by sub-50 ms wheel spikes (road bumps, sensor noise) when
   # combined with a driver's reactive grip — once latched, the
