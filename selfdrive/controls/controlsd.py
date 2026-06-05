@@ -50,8 +50,19 @@ PRED_RATIO_TAU = 0.3
 # (s) on the commanded curvature; LAT_CMD_LOOKAHEAD_EXTRA_S adds phase lead (extra
 # lookahead time) to cancel the low-pass lag. BOTH DEFAULT 0.0 => identical to current
 # behavior. Tune on-device watching the existing osc/min + lateral-jerk logging.
-LAT_CMD_SMOOTH_TAU = 0.06          # try 0.05-0.10 s
-LAT_CMD_LOOKAHEAD_EXTRA_S = 0.06   # try ~= tau to keep net phase ~0
+# Phase 6f-4 city wobble suppression: ccnc-drivelog routes 0x3c-0x3f measured
+# a hands-off ~4.76 Hz wobble (313 clusters, 0.30% of route, amp 1-3°, mostly
+# <1 s) in city cruise at 20-50 km/h on straight or shallow-curve segments.
+# MDPS/VM rate-limiting already filters ~90% of it from the wheel, but the
+# residue is felt at the hands. Root cause = model_v2 lane-detection jitter
+# in city visual conditions (worn paint, shadows, crosswalk markings); the
+# 0.06 s LP cut-off at ~2.65 Hz left the 4-5 Hz peak only ~-6 dB attenuated.
+# Bump both TAU and LEAD to 0.10 s -> cut-off 1.59 Hz, ~-7 dB additional
+# attenuation at 4-5 Hz (amp roughly 1/2-1/3), phase still cancelled by the
+# matched lookahead so net delay stays near zero. clip_curvature (ISO jerk/
+# accel bound) is unchanged; setting TAU=0.0 disables the filter entirely.
+LAT_CMD_SMOOTH_TAU = 0.10          # 1.59 Hz cut-off (was 0.06 / 2.65 Hz)
+LAT_CMD_LOOKAHEAD_EXTRA_S = 0.10   # match TAU to keep net phase ~0
 
 
 class Controls(ControlsExt):
