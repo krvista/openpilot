@@ -25,8 +25,16 @@ _T_IDXS = np.array([10.0 * (i / 32.0) ** 2 for i in range(33)])
 # Boolean mask for the 3-5s anticipation window (idx ~17..22, t≈2.82..4.73s).
 _ANTICIPATE_MASK = (_T_IDXS >= 3.0) & (_T_IDXS <= 5.0)
 
-_ENTERING_PRED_LAT_ACC_TH = 2.0  # Predicted Lat Acc threshold to trigger entering turn state.
-_ABORT_ENTERING_PRED_LAT_ACC_TH = 1.6  # Predicted Lat Acc threshold to abort entering state if speed drops.
+# Near-horizon trigger raised 2.0 -> 2.2 so SCC-V does not slow down within the
+# driver's own comfortable cornering range. wk2 v7 drivelog (Jeep GC, dongle
+# 0fb02cc3a5abcc2f, 5 routes / 37.8k moving frames >29 kph) shows measured lateral g
+# distribution: p95=0.85, p99=1.75, p99.5=1.98, max=2.70 m/s². Per-speed-band max is
+# already <=1.21 above 70 kph, so the v² term naturally pushes the predicted lat-acc
+# above 2.2 only when the corner is sharper or the speed higher than the driver's
+# own habit — i.e. exactly when help is wanted. Abort threshold scaled to keep the
+# original 0.4 m/s² hysteresis.
+_ENTERING_PRED_LAT_ACC_TH = 2.2  # Predicted Lat Acc threshold to trigger entering turn state.
+_ABORT_ENTERING_PRED_LAT_ACC_TH = 1.8  # Predicted Lat Acc threshold to abort entering state if speed drops.
 
 # 3-5s lookahead anticipation. Trigger entering early with a gentle drop when
 # the modelV2 trajectory shows non-trivial lat acc in the 3..5s window.
@@ -54,20 +62,20 @@ _A_LAT_REG_MAX = 2.8  # Maximum lateral acceleration (was 2.0; raised to 0.29g f
 
 _NO_OVERSHOOT_TIME_HORIZON = 4.  # s. Time to use for velocity desired based on a_target when not overshooting.
 
-# User-tuned ENTERING-state cruise drop curve.
-# Map max_pred_lat_acc -> desired cruise speed drop (kph). The actual drop is
-# delivered by a_target = -drop_ms / _NO_OVERSHOOT_TIME_HORIZON applied while
-# v_target = v_ego, so output_v_target = v_ego - drop_ms. Capped at 10 kph
-# per user intent: even strong highway curves should not drop more than 10 kph
-# while v_ego <= ~120 kph. For deeper curves the lateral safety considerations
-# in the rest of the long plan remain in effect.
-_PRED_DROP_BP    = [1.6, 2.0, 3.0]    # max_pred_lat_acc breakpoints (m/s²)
-_PRED_DROP_KPH_V = [0.0, 5.0, 10.0]   # desired cruise drop (kph)
+# ENTERING-state cruise drop curve. Map max_pred_lat_acc -> desired cruise speed
+# drop (kph). Drop starts at the new entering threshold (2.2) so we never slow
+# below what the driver themselves would have done, and caps at 5 kph total —
+# per user request the system must not subtract more than 5 kph from cruise.
+# The actual drop is delivered by a_target = -drop_ms / _NO_OVERSHOOT_TIME_HORIZON
+# applied while v_target = v_ego, so output_v_target = v_ego - drop_ms.
+_PRED_DROP_BP    = [2.2, 2.6, 3.0]    # max_pred_lat_acc breakpoints (m/s²)
+_PRED_DROP_KPH_V = [0.0, 2.5, 5.0]    # desired cruise drop (kph), capped at 5
 
 # Gentle anticipatory drop curve for the 3-5s lookahead window.
-# Max 2.5 kph drop while only the far horizon sees the curve — user wanted "살짝".
-_ANTICIPATE_DROP_BP    = [1.3, 1.5, 2.0]
-_ANTICIPATE_DROP_KPH_V = [0.0, 1.0, 2.5]
+# Capped at 1.5 kph so the combined two-horizon drop stays well under the 5 kph
+# overall ceiling and the early anticipation is barely perceptible.
+_ANTICIPATE_DROP_BP    = [1.8, 2.0, 2.4]
+_ANTICIPATE_DROP_KPH_V = [0.0, 0.8, 1.5]
 
 # Lookup table for the acceleration for the TURNING state
 # depending on the current lateral acceleration of the vehicle.
