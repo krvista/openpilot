@@ -64,6 +64,15 @@ PRED_RATIO_TAU = 0.3
 LAT_CMD_SMOOTH_TAU = 0.10          # 1.59 Hz cut-off (was 0.06 / 2.65 Hz)
 LAT_CMD_LOOKAHEAD_EXTRA_S = 0.10   # match TAU to keep net phase ~0
 
+# Phase 6g-1: floor on the model-confidence damping below. The damping blends the
+# command toward the PREVIOUS (straighter) curvature when lane/position confidence
+# drops, which on corner entry right after an intersection (low lane confidence as
+# lines reconnect) froze op near-straight and the car ran wide to the outside line
+# (ccnc-drivelog 0x40 seg9 ~10 min, left line 0.53 m; seg5 right line 0.77 m w/ driver
+# takeover). Floor confidence so a low-confidence transition can still pull at most
+# (1 - CONF_FLOOR) toward the stale command. Kill switch: CONF_FLOOR = 0.0 (pre-6g-1).
+LAT_CONF_FLOOR = 0.5
+
 
 class Controls(ControlsExt):
   def __init__(self) -> None:
@@ -285,7 +294,9 @@ class Controls(ControlsExt):
       lane_min = min(float(lane_probs[1]), float(lane_probs[2])) if len(lane_probs) >= 4 else 1.0
       conf_y = float(np.interp(y_std,    [0.05, 0.30], [1.0, 0.0]))
       conf_l = float(np.interp(lane_min, [0.05, 0.30], [0.0, 1.0]))
-      confidence = min(conf_y, conf_l)
+      # Phase 6g-1: floor the damping so a low-confidence corner-entry transition
+      # cannot freeze op near-straight (it ran the car wide to the outside line).
+      confidence = max(min(conf_y, conf_l), LAT_CONF_FLOOR)
       if confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
 

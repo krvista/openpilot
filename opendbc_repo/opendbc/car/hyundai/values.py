@@ -42,6 +42,18 @@ class CarControllerParams:
   # so the jitter source was the commanded angle, not MDPS gain).
   SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.05, 0.15, 0.4, 1]
   SMOOTHING_ANGLE_MAX_VEGO = SMOOTHING_ANGLE_VEGO_MATRIX[-1]
+  # Phase 6g-1: make the EMA slew/maneuver-aware so it suppresses jitter WITHOUT
+  # eating corner-entry response. ccnc-drivelog 0x40 seg5 (KST 07:27:43-49, ~40 km/h)
+  # showed op going near-straight (commanded ~0.002 1/m vs lane ~0.0038) into a
+  # left bend, running wide to the right line (clearance 1.4 m -> 0.77 m) until the
+  # driver grabbed (+40°, ~1500 Nm). Root cause: this EMA (alpha 0.05-0.16 at city
+  # speed) lags a building corner command with no lead compensation.
+  # Fix: release the EMA toward alpha=1 as the gap |desired - apply_last| grows past
+  # a jitter floor, so small (<=LO) oscillations keep the heavy low-speed smoothing
+  # (저속 떨림 absorption preserved) while a real corner (>=HI) passes through.
+  # Kill switch: set SMOOTHING_ANGLE_RELEASE_HI_DEG huge -> pure speed-EMA (pre-6g-1).
+  SMOOTHING_ANGLE_RELEASE_LO_DEG = 1.0   # |gap| at/below this = jitter, keep speed-alpha
+  SMOOTHING_ANGLE_RELEASE_HI_DEG = 4.0   # |gap| at/above this = real maneuver, alpha->1
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°

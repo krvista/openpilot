@@ -28,6 +28,8 @@ predate Phase 6f and are excluded.
 | **0x2c** (`275bbb3299`) | **`5479ecc` Phase 6f-2** | 51 | **analyzed (chunk 2)** |
 | **0x2d** (`075acf9f7e`) | **`d83c3b5` Phase 6F2-A** (post-fix) | 37 | **analyzed (chunk 3, 출근 morning commute)** |
 | **0x2e** (`4d0b891f77`) | **`d83c3b5` Phase 6F2-A** (post-fix) | 22 | **analyzed (chunk 3, 퇴근 evening commute)** |
+| **0x40** (`eb2be2a919`) | **`abd7ca6` Phase 6f-5** | 44 | **analyzed (chunk 4 §1.D, 출근 morning commute, 2026-06-08)** |
+| **0x41** (`3e9e6dbdb8`) | **`abd7ca6` Phase 6f-5** | 37 | **analyzed (chunk 4 §1.D, 퇴근 evening commute, 2026-06-08)** |
 
 Phase 6f-2 합계 = ~290 rlog segments (8 라우트). Phase 6F2-A 추가 = 59 segs (2 라우트, 2026-05-28).
 보고서는 4 routes (0x25 + 0x2c + 0x2d + 0x2e, 147 segs) chunk 까지 반영.
@@ -221,6 +223,77 @@ passthrough 중 driver wheel-release → LKAS_ANGLE_ACTIVE=2 까지 latency:
 | Sweep + ACI safety regression | **clean 확인** ✅ (이 단계가 의미 있는 P0 검증이었음) |
 
 **HOD cleanup (`c9a1ed6`) 후 회귀 없음 + 6F2-A floor 유지 + highway 데이터 일부 확보**. 추가 코드 변경 권장 없음.
+
+## 1.D. Phase 6f-5 빌드 (`abd7ca6`) chunk — 출퇴근 왕복 2 routes (2026-06-08 push)
+
+빌드 검증: 두 route 첫 세그먼트 `initData.gitCommit = abd7ca682dcb...` (Phase 6f-5),
+`dirty=False`, `branch=i6n`, `version 2026.001.000`, `carFingerprint=HYUNDAI_IONIQ_6_N`.
+0x40 (eb2be2a919) = 출근 44 seg / 43.4 min / 13.5 km, 0x41 (3e9e6dbdb8) = 퇴근 37 seg / 36.5 min / 11.6 km.
+**사용자 보고 증상 2건 검증 목적** (저속 떨림 / 차선 침범).
+
+### A. 속도 분포 + latActive 활성 곡선 — **op 측방은 ~20 km/h 부터**
+
+| 버킷 | 0x40 출근 | 0x41 퇴근 |
+|---|---:|---:|
+| stop / 1-20 / 20-50 / 50-80 / 80+ km/h | 34% / 26% / 32% / 7% / 0.5% | 38% / 30% / 20% / 9% / 4% |
+
+latActive % by speed bin (양 route 동일 패턴):
+`0-5/5-10/10-15/15-20 = 0%` → `20-25 = 74-93%` → `25 km/h↑ = ~100%`.
+→ **20 km/h 미만에서 op 측방제어 0% (카메라/MDPS 패스스루).**
+
+### B. 저속 떨림 — 6f-4 는 성공, 사용자 체감분은 op 제어 영역 밖
+
+핸즈오프·완만곡선 band-limited deg-RMS (휠):
+
+| 구간 | 0.5-1.5 Hz | 1.5-3 Hz | **3-5 Hz** | 5-8 Hz | 우세주파수 |
+|---|---:|---:|---:|---:|---:|
+| 20-35 km/h | 0.59° | 0.15° | **0.05°** | 0.02° | **0.7 Hz** |
+| 35-60 km/h | 0.42° | 0.12° | **0.06°** | 0.02° | 0.6 Hz |
+
+→ 6f-4 가 노린 4-5 Hz 시내 떨림 **제거 확인** (`desiredCurvature` 3-7 Hz RMS ~2e-5, LP 동작).
+사용자 체감 "저속 떨림" 은 <20 km/h (op 비활성) → **현 파이프라인 밖 = 구조적**. 6f-3/6f-4/6f-5 무관.
+
+### C. **🔴 신규 발견 — 코너 진입 미추종 → 차선 침범 (운전자 개입)**
+
+op-active + 블링커 off near lane-crossing 스캔 (clearance = |laneLine.y[0]|, narrow ~2.8 m 차선 보정 감안):
+
+| route·seg | KST/시점 | 최저 clearance | 속도 | 비고 |
+|---|---|---:|---:|---|
+| 0x40 **seg5** | **07:27:43-49** (GPS 확정) | **0.77 m** (우측선) | 40-47 km/h | **운전자 +40°·~1500 Nm 개입 복구** |
+| 0x40 seg9 | ~10 min, 차선 끊김→재연결 | 0.53 m (좌측선) | 28 km/h | op 활성 직후 저신뢰 |
+| 0x41 seg22 | 22 min | 0.33 m (좌측선) | 112 km/h | 고속 |
+| 0x40 seg38 | ~38 min | 0.04 m | 44 km/h | 모델 차선 재라벨 동반(주의) |
+
+**seg5 단별 정합** (KST 07:27:43-49): 전방 차선중심@50m −4.8 m (좌굽), **op 경로@50m −1.6 m**
+(요구의 ~1/3), `desiredCurvature` ~−0.002 vs 차선 요구 ~0.0038 1/m, 휠 +0.7~+3° (거의 직진).
+우측선 clearance 1.4→**0.77 m** (타이어 선 위) → 07:27:49.0 운전자 `steeringPressed=1`·토크 +700~+1550 으로
++40° 잡아챔. **op 자가복구 아님.** `laneDeparture` 이벤트는 전 구간 0건 (LDW 미발화).
+
+근본 원인: 모델 곡률→적용 각도 사이 **보상 없는 평활 단 직렬 누적** —
+신뢰도 댐핑(`controlsd.py:281-290`) + 6f-4 LP + `sp_smooth_angle` EMA(`carcontroller.py:156`,
+40 km/h α0.16 / 30 km/h α0.05). 코너 대역(curv ~0.0038, ~40 km/h)이 6f-5 boost_s 타깃인데도 발생
+→ lookahead 확대로는 미해결. **병목은 명령 곡률 크기/추종.**
+
+### D. 계측 불일치 (문서 vs 구현)
+
+- `lateralAccelLimit/steerAngleLimit/cameraDataStale` 는 plan §1.5 가 controlsState Float32 @99/100/101
+  이라 적었으나 **실제 스키마는 OnroadEvent EventName 플래그**. 횡가속 3.6 m/s² 초과 프레임 출근 147 개
+  (0.056%) 있었는데 `lateralAccelLimit` 이벤트 **0건** → 미배선(dead) 의심.
+- `cameraDataStale` 0건 = **정상** (cam_stale 게이트 false-positive 0, plan P0 #1 충족).
+- onroadEvents 양호: controlsMismatch / steerTempUnavailable / laneDeparture **0건**.
+
+### E. heavy-override TX 추적 — floor 유지 (회귀 없음)
+
+|drvTq|≥90 프레임 |op-wheel| : p50 0.08-0.09° (CAN 양자화 바닥, 종전과 동등).
+p95~1.1°·tail 은 운전자 실제 발산(override)이지 제어 결함 아님. highway >90 km/h op-active
+추적오차 p95 0.8-1.0°, max 1.5-2.2° (135 km/h 도달 = 6f-5 140 km/h base_s 노드 영역, 안정).
+
+### F. 조치 — **Phase 6g-1 (코너 미추종 fix)** 적용
+
+§C 가 plan §5 의 "concrete on-vehicle symptom" 조건 충족 (운전자 개입 실측) → 코드 수정 진행:
+- **6g-1a** `sp_smooth_angle` slew/maneuver-aware (gap≥HI 면 α→1, jitter 는 저-α 유지).
+- **6g-1b** 신뢰도 댐핑 floor (`LAT_CONF_FLOOR=0.5`).
+- 안전 envelope(clip_curvature)/panda/cereal 불변, kill switch 有, **온차량 실증 TODO**. (§8 punch list 참조)
 
 ## 1.B. A/B 비교 결론
 
@@ -460,6 +533,11 @@ speed bucket 분포:
 
 | ID | Pri | Item | 근거 / 변경 위치 |
 |---|---|---|---|
+| **6g-1a** | **P0 ✅ DONE** | **코너 미추종 fix — `sp_smooth_angle` slew/maneuver-aware**: gap `|desired-apply_last|` ≥ `SMOOTHING_ANGLE_RELEASE_HI_DEG(4°)` 면 α→1, ≤`LO(1°)` jitter 는 저-α 유지. 저속 떨림 흡수 보존 + 코너 응답 복원(단위 데모: 15° 램프 95% 도달 24→15 frame). kill switch=HI 거대화. | `carcontroller.py:156`, `values.py:43` / §1.D.C |
+| **6g-1b** | **P0 ✅ DONE** | **신뢰도 댐핑 floor** — `confidence=max(min(conf_y,conf_l), LAT_CONF_FLOOR=0.5)`. 저신뢰 코너진입(교차로 직후 차선 재연결)에서 명령을 직진으로 얼리지 않게. kill switch=`LAT_CONF_FLOOR=0.0`. | `controlsd.py:286` / §1.D.C |
+| **6g-2 (신규)** | **P0** | **6g-1 온차량 실증** — 다음 출퇴근 로그에서 seg5/seg9/seg22 동일 코너 clearance ≥ 안전여유, 운전자 고토크 개입 0, 저속 3-6 Hz 떨림 불변 확인. 미충족 시 `dist_ahead` cap(B2) 보조 검토. | §1.D.C, §1.D.F |
+| **6g-3 (신규)** | P1 | **계측 배선** — `lateralAccelLimit/steerAngleLimit` EventName 이 실제 publish 되는지 확인·수정 (147 saturate frame 에 0 event). 또는 plan §1.5 문서 정정. | §1.D.D |
+| **6g-4 (신규)** | P1 | **LDW 미발화** — seg5/seg9/seg22 차선 침범에 `laneDeparture` 0건. driverAssistance/LDW 게이트 점검. | §1.D.C |
 | **6F2-A** | **P0 ✅ DONE** | **Pre-frame anchor**: `carcontroller.py:491` 직전에 동일 clamp 추가. 빌드 `d83c3b5` 로 deployed. 0x2d 의 exit-transition p95 == baseline (smooth resume), 0x2e 에서 1.5x spike — 추가 sample 필요. | §1.A.B |
 | **6F2-I (신규)** | **P0** | **저속 hand-off lag** — driver 가 wheel 놓아도 op 가 take-over 안 함 (p50 0.2-1.5 s, p95 6-15 s). state machine 은 1 frame 안에 전환되지만 다른 게이트 (CC.latActive / apply_steer_req / vm_reject_persistent / MADS auto-disengage) 가 막고 있음. 다음 chunk 에서 게이트별 frame-by-frame 분류 후 fix 결정. | §1.A.E |
 | **6F2-J (신규)** | **P0** | **동일 route A/B baseline**: 다음 commute 1 회는 이전 빌드 (`5479ecc`) 로 같은 출/퇴근길 찍어 6F2-A 의 동일 조건 before/after 비교 가능하게 함. | §1.A |

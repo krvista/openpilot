@@ -154,14 +154,25 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
 
 
 def sp_smooth_angle(v_ego_raw: float, apply_angle: float, apply_angle_last: float) -> float:
-  """Speed-dependent EMA on the commanded steering angle (sunnypilot reference).
+  """Speed-dependent, slew/maneuver-aware EMA on the commanded steering angle.
 
-  Heavy smoothing at low speed (alpha=0.05) suppresses parking-lot jitter
-  while alpha=1 at/above SMOOTHING_ANGLE_MAX_VEGO disables smoothing entirely.
+  Heavy smoothing at low speed (alpha=0.05) suppresses parking-lot / model-jitter
+  micro-oscillations while alpha=1 at/above SMOOTHING_ANGLE_MAX_VEGO disables it.
+
+  Phase 6g-1: the speed-alpha alone lagged corner-entry commands (no lead comp),
+  so a real bend ran wide before op caught up (see SMOOTHING_ANGLE_RELEASE_* note in
+  values.py). Release the EMA toward alpha=1 as the command gap grows past a jitter
+  floor: small |gap| (oscillation) keeps the heavy speed-alpha (저속 떨림 absorption),
+  a sustained/large |gap| (real maneuver) passes through with little to no lag.
   """
   adjusted_alpha = np.interp(v_ego_raw, CarControllerParams.SMOOTHING_ANGLE_VEGO_MATRIX,
                               CarControllerParams.SMOOTHING_ANGLE_ALPHA_MATRIX)
-  adjusted_alpha_limited = float(min(float(adjusted_alpha), 1.))
+  adjusted_alpha = float(min(float(adjusted_alpha), 1.))
+  # Maneuver release: scale alpha up with |desired - last| between LO and HI degrees.
+  gap = abs(apply_angle - apply_angle_last)
+  release = float(np.interp(gap, [CarControllerParams.SMOOTHING_ANGLE_RELEASE_LO_DEG,
+                                  CarControllerParams.SMOOTHING_ANGLE_RELEASE_HI_DEG], [0.0, 1.0]))
+  adjusted_alpha_limited = adjusted_alpha + (1.0 - adjusted_alpha) * release
   return (apply_angle * adjusted_alpha_limited) + (apply_angle_last * (1 - adjusted_alpha_limited))
 
 
