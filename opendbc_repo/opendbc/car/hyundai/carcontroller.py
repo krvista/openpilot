@@ -160,19 +160,30 @@ def sp_smooth_angle(v_ego_raw: float, apply_angle: float, apply_angle_last: floa
   micro-oscillations while alpha=1 at/above SMOOTHING_ANGLE_MAX_VEGO disables it.
 
   Phase 6g-1: the speed-alpha alone lagged corner-entry commands (no lead comp),
-  so a real bend ran wide before op caught up (see SMOOTHING_ANGLE_RELEASE_* note in
-  values.py). Release the EMA toward alpha=1 as the command gap grows past a jitter
-  floor: small |gap| (oscillation) keeps the heavy speed-alpha (저속 떨림 absorption),
-  a sustained/large |gap| (real maneuver) passes through with little to no lag.
+  so a real bend ran wide before op caught up. Release the EMA as the command gap
+  grows past a jitter floor: small |gap| (oscillation) keeps the heavy speed-alpha
+  (저속 떨림 absorption), a sustained/large |gap| (real maneuver) passes through.
+
+  Phase 6g-2: (a) cap the released alpha at SMOOTHING_ANGLE_RELEASE_MAX so a command
+  overshoot is not slammed to the wheel ("휙"); (b) a low-speed micro-deadband holds
+  the angle for sub-perceptible command changes, killing the ~25 km/h 5-7 Hz dither.
   """
+  gap_signed = apply_angle - apply_angle_last
+  gap = abs(gap_signed)
+  # (6g-2c) low-speed micro-jitter deadband: ignore sub-threshold dither.
+  if (v_ego_raw < CarControllerParams.SMOOTHING_ANGLE_DEADBAND_MAX_VEGO
+      and gap < CarControllerParams.SMOOTHING_ANGLE_DEADBAND_DEG):
+    return apply_angle_last
   adjusted_alpha = np.interp(v_ego_raw, CarControllerParams.SMOOTHING_ANGLE_VEGO_MATRIX,
                               CarControllerParams.SMOOTHING_ANGLE_ALPHA_MATRIX)
   adjusted_alpha = float(min(float(adjusted_alpha), 1.))
-  # Maneuver release: scale alpha up with |desired - last| between LO and HI degrees.
-  gap = abs(apply_angle - apply_angle_last)
+  # Maneuver release: scale alpha up with |gap| between LO and HI degrees, but only
+  # up to RELEASE_MAX (6g-2a) so a fast catch-up keeps ~30% damping. If the speed
+  # alpha already exceeds RELEASE_MAX (high speed) the release adds nothing.
   release = float(np.interp(gap, [CarControllerParams.SMOOTHING_ANGLE_RELEASE_LO_DEG,
                                   CarControllerParams.SMOOTHING_ANGLE_RELEASE_HI_DEG], [0.0, 1.0]))
-  adjusted_alpha_limited = adjusted_alpha + (1.0 - adjusted_alpha) * release
+  headroom = max(CarControllerParams.SMOOTHING_ANGLE_RELEASE_MAX - adjusted_alpha, 0.0)
+  adjusted_alpha_limited = adjusted_alpha + headroom * release
   return (apply_angle * adjusted_alpha_limited) + (apply_angle_last * (1 - adjusted_alpha_limited))
 
 

@@ -53,7 +53,19 @@ class CarControllerParams:
   # (저속 떨림 absorption preserved) while a real corner (>=HI) passes through.
   # Kill switch: set SMOOTHING_ANGLE_RELEASE_HI_DEG huge -> pure speed-EMA (pre-6g-1).
   SMOOTHING_ANGLE_RELEASE_LO_DEG = 1.0   # |gap| at/below this = jitter, keep speed-alpha
-  SMOOTHING_ANGLE_RELEASE_HI_DEG = 4.0   # |gap| at/above this = real maneuver, alpha->1
+  SMOOTHING_ANGLE_RELEASE_HI_DEG = 4.0   # |gap| at/above this = real maneuver, release
+  # Phase 6g-2: the 6g-1 release went all the way to alpha=1, so a command overshoot
+  # (0x42 seg4 S-curve: desiredCurvature spiked 2.6x, wheel slammed to -35°, driver
+  # grabbed) hit the wheel undamped. Cap the released alpha so a fast catch-up keeps
+  # ~30% damping (firm, not a "휙"). Kill switch: RELEASE_MAX = 1.0 (= 6g-1).
+  SMOOTHING_ANGLE_RELEASE_MAX = 0.7
+  # Phase 6g-2: low-speed micro-jitter deadband. ~25 km/h drivelogs show the model
+  # curvature dithering at 5-7 Hz; after the EMA the wheel still oscillates ~0.13°
+  # at ~3 Hz (felt as 떨림). Hold the last angle when the command change is below a
+  # sub-perceptible threshold at low speed — independent of the corner release.
+  # Kill switch: DEADBAND_DEG = 0.0.
+  SMOOTHING_ANGLE_DEADBAND_DEG = 0.4
+  SMOOTHING_ANGLE_DEADBAND_MAX_VEGO = 11.0  # m/s (~40 km/h); deadband only below this
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°

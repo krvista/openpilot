@@ -40,11 +40,14 @@ from openpilot.tools.lib.logreader import LogReader  # noqa: E402
 DRIVELOG_DIR = '/home/user/openpilot/drivelog'
 DONGLE = '99b215d21bbf8735'
 
-# Named regression fixtures (route_id, seg, label) — POST_6F2_AUDIT §1.D.C
+# Named regression fixtures (route_id, seg, label) — POST_6F2_AUDIT §1.D.C / §1.E.B
+# Same GPS spot (37.5568, 126.96898): 0x40 seg5 (6f-5, under-response) vs 0x42 seg4
+# (6g-1, over-response). A good fix lands both near 1.0x op/required, no driver grab.
 FIXTURES = [
-  ('00000040--eb2be2a919', 5,  '출근 seg5  KST 07:27:43-49  좌굽 미추종→우측선 0.77m, 운전자 개입'),
-  ('00000040--eb2be2a919', 9,  '출근 seg9  ~10min  차선 끊김→재연결, 좌측선 0.53m'),
-  ('00000041--3e9e6dbdb8', 22, '퇴근 seg22 ~22min  112 km/h, 좌측선 0.33m'),
+  ('00000040--eb2be2a919', 5,  '6f-5 출근 seg5  KST 07:27:43-49  좌굽 미추종(0.5x)→우측선 0.77m, 운전자 개입'),
+  ('00000040--eb2be2a919', 9,  '6f-5 출근 seg9  ~10min  차선 끊김→재연결, 좌측선 0.53m'),
+  ('00000041--3e9e6dbdb8', 22, '6f-5 퇴근 seg22 ~22min  112 km/h, 좌측선 0.33m'),
+  ('00000042--8c1f634610', 4,  '6g-1 출근 seg4  KST 07:25:22-25  S역곡선 과조향(2.6x)→좌측선 0.96m, 운전자 -1166Nm 개입'),
 ]
 
 NEAR_CROSS_CLEARANCE_M = 0.80   # |laneLine.y[0]| below this with prob>0.4 = near crossing

@@ -72,6 +72,15 @@ LAT_CMD_LOOKAHEAD_EXTRA_S = 0.10   # match TAU to keep net phase ~0
 # takeover). Floor confidence so a low-confidence transition can still pull at most
 # (1 - CONF_FLOOR) toward the stale command. Kill switch: CONF_FLOOR = 0.0 (pre-6g-1).
 LAT_CONF_FLOOR = 0.5
+# Phase 6g-2: taper the floor to 0 at a TRUE lane dropout. ccnc-drivelog 0x42 seg4
+# (KST 07:25:24, S-curve reversal) showed the flat floor letting a low-confidence
+# _lookahead_curvature spike (~0.024 1/m) through while lane probs collapsed to
+# 0.07: op over-commanded desiredCurvature 2.6x and swung the wheel to -35° until
+# the driver grabbed (-1166 Nm). Below CONF_FLOOR_LANE_LO the floor is removed so
+# confidence falls toward 0 and the command freezes (pre-6g-1 behaviour = spike
+# blocked); the reconnection band [LO, HI] keeps the floor that fixed seg9/seg5.
+CONF_FLOOR_LANE_LO = 0.20
+CONF_FLOOR_LANE_HI = 0.30
 
 
 class Controls(ControlsExt):
@@ -294,9 +303,13 @@ class Controls(ControlsExt):
       lane_min = min(float(lane_probs[1]), float(lane_probs[2])) if len(lane_probs) >= 4 else 1.0
       conf_y = float(np.interp(y_std,    [0.05, 0.30], [1.0, 0.0]))
       conf_l = float(np.interp(lane_min, [0.05, 0.30], [0.0, 1.0]))
-      # Phase 6g-1: floor the damping so a low-confidence corner-entry transition
-      # cannot freeze op near-straight (it ran the car wide to the outside line).
-      confidence = max(min(conf_y, conf_l), LAT_CONF_FLOOR)
+      # Phase 6g-1/6g-2: floor the damping so a low-confidence corner-entry
+      # transition cannot freeze op near-straight (it ran the car wide to the
+      # outside line) — but TAPER the floor to 0 at a true dropout so a spiking
+      # low-confidence command is frozen out instead of half-passed (6g-2).
+      floor_eff = LAT_CONF_FLOOR * float(np.clip(
+        (lane_min - CONF_FLOOR_LANE_LO) / (CONF_FLOOR_LANE_HI - CONF_FLOOR_LANE_LO), 0.0, 1.0))
+      confidence = max(min(conf_y, conf_l), floor_eff)
       if confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
 
