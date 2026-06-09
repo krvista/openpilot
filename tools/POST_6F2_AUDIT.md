@@ -305,13 +305,15 @@ p95~1.1°·tail 은 운전자 실제 발산(override)이지 제어 결함 아님
 - 그 코너: op 경로@50m −6.1 vs 차선@50m −6.0 (어제 1/3 → 오늘 **~1:1**). 집계: corner under(<0.6)
   16%→10%(출근), near-line frame 303→70(출근). **"오늘 괜찮았는데" 일치 = 미추종 fix 작동.**
 
-### B. 🔴 신규 = 저신뢰 역곡선 과조향 (운전자 개입), 원인 = 6g-1 `conf_floor`
-- 같은 구간 직후 **S자 역곡선**(route42 seg4 KST 07:25:22–25, ~38 km/h): 차선@50m +7.3 m
-  (요구 curv ~0.0058)인데 op `desiredCurvature` **+0.0156 (~2.6×)**, ao **−35°**, 좌측선 clearance
-  **0.96 m**, 운전자 −1166 Nm 개입(pressed=1). op가 먼저(−21°@핸즈오프) 휙 친 뒤 개입.
-- **원인 확정**: apex 에서 lane prob 0.07–0.4 붕괴. 6f-5 원본 confidence≈0.08 → freeze(스파이크 차단),
-  그러나 `LAT_CONF_FLOOR=0.5`(6g-1)가 `_lookahead_curvature` 폴리핏 스파이크(~0.024)의 절반을 통과.
-  sp_smooth release(α→1)는 그 큰 명령을 휠에 즉시 전달. → **6g-1 이 0.5×(미달)을 2.6×(과다)로 뒤집음.**
+### B. 🔴 신규 = 역곡선 과조향 (운전자 개입)
+- 같은 구간 직후 **S자 역곡선**(route42 seg4 KST 07:25:22–25, ~38 km/h): op `desiredCurvature`
+  **+0.0156**, ao **−35°**, 좌측선 clearance **0.96 m**, 운전자 −1166 Nm 개입(pressed=1). op가
+  먼저(−21°@핸즈오프) 휙 친 뒤 개입.
+- **원인 (lookahead/fallback 재계산으로 정정, §E 참조)**: 곡률은 폴리핏 스파이크도 conf_floor 탓도
+  아님. **모델 자신(`action.desiredCurvature`)이 +0.0133까지 직접 계획**, `_lookahead_curvature`는
+  그 위 **1.2–1.5×**만 얹음(finalDC ≈ lookahead). 그 구간 **lane_min 0.3–0.8(고신뢰)** → conf 댐핑
+  사실상 미작동. 즉 **6g-1 의 차이는 conf_floor 가 아니라 sp_smooth release(α→1)가 모델이 계획한
+  큰 곡률을 휠에 빠르게 전달**한 것 → "휙". (이전 본 절의 "conf_floor 가 스파이크 통과" 귀속은 정정됨.)
 
 ### C. 25 km/h 떨림 = 6g-1 무관 (여전, 악화 아님)
 20–30 km/h op-active hands-off 2–8 Hz 휠 RMS: 6f-5(40/41) 0.13–0.15° vs 6g-1(42/43) 0.12–0.19°,
@@ -324,6 +326,24 @@ p95~1.1°·tail 은 운전자 실제 발산(override)이지 제어 결함 아님
 - **6g-2c** 저속 미세 데드밴드 `SMOOTHING_ANGLE_DEADBAND_DEG=0.4`(< `DEADBAND_MAX_VEGO=11 m/s`) → 25 km/h dither 제거.
 - 단위검증: 데드밴드 0.3°→hold/2°→pass, release cap 코너 95%@frame15 유지, conf taper lane_min0.07→conf0.08(freeze).
 - 안전 envelope/panda/cereal 불변, kill switch 有, **온차량 실증 TODO**.
+- **레버 정정(§E)**: 이 역곡선 과조향의 핵심 레버는 **6g-2b(release 상한)** — 모델이 계획한 곡률의
+  휠 전달 속도를 감쇠. 6g-2a(conf taper)는 이 이벤트엔 거의 무관(고신뢰)하나 seg9류 저신뢰
+  재연결엔 유효 → harmless 유지. 6g-2c 는 25 km/h dither 전용(별개).
+
+### E. geometry clamp(6g-2d) 타당성 측정 — **기각**
+
+과조향을 "도로 기하/모델 곡률에 묶어" 막는 두 형태를 캐시 로그로 정량:
+
+1. **차선기하 비율 clamp** (`k_lane` = 차선중심 2nd-diff @0/25/50 m): 고신뢰 코너에서도 op/k_lane
+   p95 2.4–2.9·p99 3.2–3.8 로 과조향(~2.6×)과 **겹침**. `k_lane` 노이즈 std 0.00125 ≈ 약-코너 크기.
+   세기별로 보면 중코너(0.004–0.008)는 p99 1.9 로 양호하나 약코너는 꼬리가 큼(분모 노이즈). 결정적으로
+   **과조향 순간 lane_min=0.07 → clamp 는 꺼져 있어야 하는 영역** → 못 잡음. F≤1.5 면 정상 코너 25–45% 깎임.
+2. **lookahead/fallback 밴드 clamp**: lookahead/fallback p50 1.0·p90 1.6–1.8·p99 6–7×(직선부에서 폭발).
+   **과조향 순간 비는 1.2–1.5×**(곡률이 fallback 자체) → HI=1.6× 밴드는 못 자르고 정상 코너 12% 깎음.
+
+→ **두 형태 모두 이 과조향을 못 잡고 정상 주행만 손상** → **6g-2d 도입 안 함**. 실집행 레버(6g-2b release
+감쇠)가 정답. 부족 시 후속: (a) RELEASE_MAX 0.7→0.5, (b) clip_curvature 곡률-증가방향 jerk 비대칭 강화.
+도구: `tools/ioniq6n_lane_tracking_audit.py`(+ lookahead/fallback 재계산은 `action.desiredCurvature` 추출 필요).
 
 ## 1.B. A/B 비교 결론
 
@@ -568,7 +588,8 @@ speed bucket 분포:
 | **6g-2a** | **P0 ✅ DONE** | **과조향 보정 — conf_floor taper**: `confidence=max(min(conf_y,conf_l), LAT_CONF_FLOOR*clip((lane_min-LO)/(HI-LO)))`, `LO=0.20/HI=0.30`. apex 붕괴(lane_min<0.20)에서 floor→0 freeze(스파이크 차단), 재연결대 유지. kill=`LAT_CONF_FLOOR=0`. | `controlsd.py` / §1.E.B,D |
 | **6g-2b** | **P0 ✅ DONE** | **release 상한** `SMOOTHING_ANGLE_RELEASE_MAX=0.7` — 코너 catch-up 에 ~30% 댐핑 잔존("휙" 완화). kill=1.0. | `carcontroller.py:156`, `values.py` / §1.E.D |
 | **6g-2c** | **P0 ✅ DONE** | **저속 미세 데드밴드** `SMOOTHING_ANGLE_DEADBAND_DEG=0.4`(<`DEADBAND_MAX_VEGO=11m/s`) — 25 km/h 5-7 Hz dither 제거. kill=0. | `carcontroller.py:156`, `values.py` / §1.E.C |
-| **6g-2v (신규)** | **P0** | **6g-2 온차량 실증** — route42 seg4 S역곡선 overshoot 2.6×→~1.2×·운전자개입 0, 어제 미추종 스폿(seg5) 유지, 25 km/h 떨림 감소 확인. 미충족 시 6g-2d(desiredCurvature를 차선기하 1.3× clamp) 검토. | §1.E.B,C,D |
+| **6g-2v (신규)** | **P0** | **6g-2 온차량 실증** — route42 seg4 S역곡선 "휙" 완화(운전자개입 0)·어제 미추종 스폿(seg5) 유지·25 km/h 떨림 감소 확인. release 상한값을 다음 로그로 확정. | §1.E.B,D |
+| **6g-2d** | **❌ 기각(측정)** | **geometry clamp** — 차선기하 비율/lookahead-fallback 밴드 둘 다 과조향(곡률이 모델 fallback 자체·저신뢰 구간)을 못 잡고 정상 코너만 손상. 실집행 레버(6g-2b)가 정답. 후속: RELEASE_MAX 0.7→0.5, clip_curvature jerk 비대칭. | §1.E.E |
 | **6g-3 (신규)** | P1 | **계측 배선** — `lateralAccelLimit/steerAngleLimit` EventName 이 실제 publish 되는지 확인·수정 (147 saturate frame 에 0 event). 또는 plan §1.5 문서 정정. | §1.D.D |
 | **6g-4 (신규)** | P1 | **LDW 미발화** — seg5/seg9/seg22 차선 침범에 `laneDeparture` 0건. driverAssistance/LDW 게이트 점검. | §1.D.C |
 | **6F2-A** | **P0 ✅ DONE** | **Pre-frame anchor**: `carcontroller.py:491` 직전에 동일 clamp 추가. 빌드 `d83c3b5` 로 deployed. 0x2d 의 exit-transition p95 == baseline (smooth resume), 0x2e 에서 1.5x spike — 추가 sample 필요. | §1.A.B |
