@@ -79,6 +79,12 @@ The **camera's `ADAS_StrAnglReqVal` advisory is 3–10× more accurate than
 what op transmits**, across every speed bucket, on the same frames.
 This is the Stage 4 rationale — *numerically verified*.
 
+> **⚠️ 정정 (2026-06-10 선검증):** 위 "3–10× 정확" 표는 **동어반복**이다.
+> op-active 중 `ADAS_StrAnglReqVal` 은 실측 휠 각도의 echo (잔차 mean −0.11°,
+> xcorr lag 0 ms, cc 0.993–0.999) — "advisory 가 휠에 가깝다"는 곧 "휠이 휠에
+> 가깝다"였다. 정확도의 외부 기준은 **corner deficit(차선중심 기하) /
+> clearance** 로 교체한다. Stage 4 절의 STATUS 참조.
+
 ### Alerts (CCNC_0x161, DBC-decoded)
 
 | Route | commit  | op ALERTS_2{1,2}% | op ALERTS_3{11,12}% |
@@ -178,6 +184,10 @@ Expected: direction-change Hz 37 → < 5; 60–90 km/h op MAE 0.42° → ≤ 0.1
 
 ### **Stage 2b — ACIGain camera-match   *(1 week, code, **NEW**)*
 
+> **STATUS: 미구현 (2026-06-10 확인).** hyundaicanfd.py 에 주석만 존재하고
+> 코드는 carcontroller 의 `compute_torque_reduction_gain` 출력(hands-off
+> ceiling 0.4–1.0)을 그대로 전달 중. Phase 6h COMMIT 4 의 ceiling 인하로 대체.
+
 Remove the op-forced ACIGain in `hyundaicanfd.py`; mirror the camera's
 actual value (≈ 0 always) with a small authority floor (e.g., 0.1) when
 op is actively steering. Expected: low-speed MDPS tension reduced;
@@ -191,6 +201,12 @@ Switch from fixed speed table to `apply_steer_angle_limits_vm`:
 `MAX_ANGLE_RATE = 4.0 °/20 ms`. Parking clip 11.2 % → < 2 % expected.
 
 ### **Stage 4 — Camera-referenced feedforward   *(3 weeks, code + data + online)*
+
+> **STATUS: 기각 (2026-06-10 선검증).** op-active 중 `ADAS_StrAnglReqVal` ≡ wheel
+> (잔차 mean −0.11°/p95 0.62°, xcorr lag 0 ms cc 0.993–0.999; seg5 미추종 11 s
+> 동안 카메라는 좌측 보정 지시 없음, corr(잔차, 차선중심 오프셋) = −0.166 역방향)
+> — DBC 주석 "tracks MDPS→STEERING_ANGLE when not engaged" 그대로 **wheel echo**.
+> "cam advisory 3–10× 정확" 표는 동어반복. feedforward·잔차 가드(v1 6h-6) 모두 불가.
 
 Use the camera's own `ADAS_StrAnglReqVal` (cam_MAE 0.20–0.31°) as the
 primary reference instead of curvature-derived angles.
@@ -234,6 +250,9 @@ Re-run Stage 0 analyzer, blind subjective A/B, freeze parameters.
 ---
 
 ## Target performance (post Stage 4)
+
+> **⚠️ (2026-06-10)** "Camera advisory MAE" 컬럼은 wheel-echo 동어반복으로
+> 무효 (Stage 4 STATUS 참조). 외부 정확도 기준은 corner deficit / clearance 로 교체.
 
 | Bucket  | Current op MAE | Camera advisory MAE | Target | Gap vs Tesla ~0.07° |
 |---------|----------------|---------------------|--------|---------------------|

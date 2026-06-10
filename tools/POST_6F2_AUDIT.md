@@ -388,6 +388,11 @@ commIssue 는 PR #11 audit 과 동일하게 부팅 직후 transient 추정 (LOW)
 
 ## 3. ACI consistency mismatch — 일관된 결함 신호 (P0 후보)
 
+> **⚠️ 신뢰 불가 (2026-06-10, Phase 6h COMMIT 0):** 본 절의 "15,775 frames TYPE B"
+> 통계는 `ioniq6n_full_drivelog_sweep.py`의 **구 디코드(byte4-6 / gain÷255)** 산출물.
+> §1.A 에서 sim 도구의 디코드만 고치고 sweep 도구는 누락됐었음 — COMMIT 0 에서
+> byte10-11 / gain×0.004 로 수정 완료. **재측정 전까지 본 절 수치 인용 금지.**
+
 대표 샘플 (Route 0x25, 0x2c — 모든 7개 라우트에서 동일 패턴):
 
 ```

@@ -88,16 +88,17 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
 
     if lkas_alt_cam_msg is not None:
       # Mirror camera values, override ADAS_StrAnglReqVal + activation signals.
-      # Stage 2b: ADAS_ACIAnglTqRedcGainVal reduces MDPS's own torque blending
-      # so higher = pure-angle following (ADAS authoritative), lower = MDPS
-      # contributes its natural assistance/smoothing. Stage 0 DBC decode on
-      # 1.24M frames showed the camera itself ALWAYS commands gain = 0.000;
-      # with cam = 0, the old `max(cam, authority*0.6)` collapsed to op-forced
-      # 0.6-1.0 — MDPS in a more authoritative state than stock LFA ever uses,
-      # a plausible contributor to the residual low-speed tick and the
-      # op-vs-LFA accuracy gap. Mirror the camera's behaviour with a small
-      # authority floor (0.15) so MDPS still recognises openpilot as the
-      # reference source while doing its own smoothing.
+      # ADAS_ACIAnglTqRedcGainVal reduces MDPS's own torque blending: higher =
+      # pure-angle following (ADAS authoritative), lower = MDPS contributes its
+      # natural assistance/smoothing. Stage 0 DBC decode on 1.24M frames showed
+      # the factory camera itself ALWAYS commands gain = 0.000.
+      # ACTUAL behaviour here (Phase 6h COMMIT 0 comment fix — the previous
+      # "mirror camera with a 0.15 floor" text described an unimplemented
+      # Stage 2b design): carcontroller's compute_torque_reduction_gain output
+      # is forwarded as-is via effective_aci_gain — a speed-dependent hands-off
+      # ceiling, torque-yield to 0.19 under driver grip, 0.0 when inactive.
+      # The hands-off ceiling level itself is tuned in carcontroller
+      # (Phase 6h-4 lowers it toward the stock operating point).
       cam_aci_gain = lkas_alt_cam_msg["ADAS_ACIAnglTqRedcGainVal"]
       # Gain pre-computed by carcontroller (with rate limit + quantization).
       # The CCNC carcontroller always passes a non-None effective_aci_gain

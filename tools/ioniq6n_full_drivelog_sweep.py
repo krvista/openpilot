@@ -32,15 +32,23 @@ ALLOWED_ACAN = {0x110, 0x362}
 
 
 def decode_lkas_alt(dat):
-  if len(dat) < 32:
+  # Phase 6h COMMIT 0: the byte4-6 / gain÷255 layout was disproved in
+  # POST_6F2_AUDIT §1.A for the sim tools, but this sweep tool was missed.
+  # DBC-correct decode:
+  #   ADAS_StrAnglReqVal        82|14@1-  -> bytes 10-11 >> 2, signed 14-bit, 0.1 deg
+  #   ADAS_ACIAnglTqRedcGainVal 96|8@1+   -> byte 12 * 0.004
+  #   LKAS_ANGLE_ACTIVE         77|2@0+   -> (byte 9 >> 4) & 0x3
+  # NOTE: all §3 ACI-mismatch stats produced before this fix used the old
+  # decode and are unreliable until re-run (see POST_6F2_AUDIT §3 note).
+  if len(dat) < 14:
     return None
-  raw = int.from_bytes(dat[4:6], 'little') & 0x3fff
+  raw = (int.from_bytes(dat[10:12], 'little') >> 2) & 0x3FFF
   if raw >= 0x2000:
     raw -= 0x4000
   return {
     'angle': raw * 0.1,
-    'gain': dat[12] / 255.0,
-    'lkas_angle_active': (dat[6] >> 6) & 0x3,
+    'gain': dat[12] * 0.004,
+    'lkas_angle_active': (dat[9] >> 4) & 0x3,
     'lka_assist': dat[3] & 0x7,
     'byte7': dat[7],
     'byte13': dat[13],
