@@ -36,11 +36,15 @@ class CarControllerParams:
   # alpha is interpolated from v_ego_raw. Strong smoothing at low speed
   # (alpha=0.05), no smoothing at/above 18 m/s. Mirrors sunnypilot reference.
   SMOOTHING_ANGLE_VEGO_MATRIX = [0, 8.5, 11, 13.8, 18]
-  # Phase 6c-3: stronger EMA in 30-50 kph (8.5-13.8 m/s) absorbs model
-  # curvature jitter that drivelog 0000001f showed as 2.0-2.5°/frame
-  # |Δapply| at low speed (ACIGain authority was already low at p50=0.4,
-  # so the jitter source was the commanded angle, not MDPS gain).
-  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.05, 0.15, 0.4, 1]
+  # Phase 6h-1: jitter absorption moved upstream into controlsd's speed-dependent
+  # LP (+matched lead). The angle-domain EMA shrinks to a light linear filter:
+  # re-sim on real 6g-1 desired-angle streams (0x40/0x42, op-active <40 km/h)
+  # measured |out-in| p95 0.748->0.302 deg (-60%), |bias| 0.081->0.029 (-64%),
+  # at only +4% 2-8 Hz RMS (recovered 3.2x upstream). Kill switch: restore
+  # [0.05, 0.05, 0.15, 0.4, 1] / 0.4 / 1.0(LO)/4.0(HI).
+  # (history: Phase 6c-3 heavy matrix [0.05, 0.05, 0.15, 0.4, 1] absorbed model
+  # curvature jitter measured on drivelog 0000001f at 2.0-2.5 deg/frame.)
+  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.3, 0.3, 0.5, 0.7, 1]
   SMOOTHING_ANGLE_MAX_VEGO = SMOOTHING_ANGLE_VEGO_MATRIX[-1]
   # Phase 6g-1: make the EMA slew/maneuver-aware so it suppresses jitter WITHOUT
   # eating corner-entry response. ccnc-drivelog 0x40 seg5 (KST 07:27:43-49, ~40 km/h)
@@ -53,18 +57,22 @@ class CarControllerParams:
   # (저속 떨림 absorption preserved) while a real corner (>=HI) passes through.
   # Kill switch: set SMOOTHING_ANGLE_RELEASE_HI_DEG huge -> pure speed-EMA (pre-6g-1).
   SMOOTHING_ANGLE_RELEASE_LO_DEG = 1.0   # |gap| at/below this = jitter, keep speed-alpha
-  SMOOTHING_ANGLE_RELEASE_HI_DEG = 4.0   # |gap| at/above this = real maneuver, release
+  SMOOTHING_ANGLE_RELEASE_HI_DEG = 1.0e6  # Phase 6h-1: release OFF. With alpha>=0.3
+                                          # linear, the gap-release nonlinearity (the
+                                          # alpha 0.05->1, ~14x gain jump that was the
+                                          # transfer mechanism of the 0x42 seg4 "휙")
+                                          # is obsolete. Re-enable: 4.0 (= 6g-2).
   # Phase 6g-2: the 6g-1 release went all the way to alpha=1, so a command overshoot
   # (0x42 seg4 S-curve: desiredCurvature spiked 2.6x, wheel slammed to -35°, driver
   # grabbed) hit the wheel undamped. Cap the released alpha so a fast catch-up keeps
   # ~30% damping (firm, not a "휙"). Kill switch: RELEASE_MAX = 1.0 (= 6g-1).
   SMOOTHING_ANGLE_RELEASE_MAX = 0.7
-  # Phase 6g-2: low-speed micro-jitter deadband. ~25 km/h drivelogs show the model
-  # curvature dithering at 5-7 Hz; after the EMA the wheel still oscillates ~0.13°
-  # at ~3 Hz (felt as 떨림). Hold the last angle when the command change is below a
-  # sub-perceptible threshold at low speed — independent of the corner release.
-  # Kill switch: DEADBAND_DEG = 0.0.
-  SMOOTHING_ANGLE_DEADBAND_DEG = 0.4
+  # Phase 6g-2 introduced a low-speed micro-jitter deadband at 0.4 deg.
+  # Phase 6h-1: re-sim on the deployed 6g-1 streams measured the 0.4 deg deadband
+  # at +11% p95 tracking error / +44% bias for ZERO smoothness gain (2-8 Hz RMS
+  # unchanged) — the dither absorption now lives upstream in controlsd tau(v).
+  # Shrink to the CAN LSB (0.1 deg). Kill switch: 0.0 (off) / 0.4 (= 6g-2).
+  SMOOTHING_ANGLE_DEADBAND_DEG = 0.1
   SMOOTHING_ANGLE_DEADBAND_MAX_VEGO = 11.0  # m/s (~40 km/h); deadband only below this
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.

@@ -167,6 +167,12 @@ def sp_smooth_angle(v_ego_raw: float, apply_angle: float, apply_angle_last: floa
   Phase 6g-2: (a) cap the released alpha at SMOOTHING_ANGLE_RELEASE_MAX so a command
   overshoot is not slammed to the wheel ("휙"); (b) a low-speed micro-deadband holds
   the angle for sub-perceptible command changes, killing the ~25 km/h 5-7 Hz dither.
+
+  Phase 6h-1: jitter absorption moved upstream into controlsd's speed-dependent
+  curvature LP with matched lead. This EMA is now a light linear filter
+  (alpha >= 0.3) plus a CAN-LSB deadband (0.1 deg); the gap-release path is
+  disabled via SMOOTHING_ANGLE_RELEASE_HI_DEG = 1e6 (constants-only switch —
+  the code path is kept for rollback).
   """
   gap_signed = apply_angle - apply_angle_last
   gap = abs(gap_signed)

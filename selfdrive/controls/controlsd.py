@@ -46,23 +46,15 @@ PRED_RATIO_TAU = 0.3
 # --- Lateral command temporal smoothing (jerk reduction with lead compensation) ---
 # From the comma controls-challenge result: tracking a jittery target in full pays its
 # jerk; a FORWARD-LOOKING (lead) low-pass cuts jerk WITHOUT net lag because openpilot
-# already knows the future path. LAT_CMD_SMOOTH_TAU is a 1st-order low-pass time constant
-# (s) on the commanded curvature; LAT_CMD_LOOKAHEAD_EXTRA_S adds phase lead (extra
-# lookahead time) to cancel the low-pass lag. BOTH DEFAULT 0.0 => identical to current
-# behavior. Tune on-device watching the existing osc/min + lateral-jerk logging.
-# Phase 6f-4 city wobble suppression: ccnc-drivelog routes 0x3c-0x3f measured
-# a hands-off ~4.76 Hz wobble (313 clusters, 0.30% of route, amp 1-3°, mostly
-# <1 s) in city cruise at 20-50 km/h on straight or shallow-curve segments.
-# MDPS/VM rate-limiting already filters ~90% of it from the wheel, but the
-# residue is felt at the hands. Root cause = model_v2 lane-detection jitter
-# in city visual conditions (worn paint, shadows, crosswalk markings); the
-# 0.06 s LP cut-off at ~2.65 Hz left the 4-5 Hz peak only ~-6 dB attenuated.
-# Bump both TAU and LEAD to 0.10 s -> cut-off 1.59 Hz, ~-7 dB additional
-# attenuation at 4-5 Hz (amp roughly 1/2-1/3), phase still cancelled by the
-# matched lookahead so net delay stays near zero. clip_curvature (ISO jerk/
-# accel bound) is unchanged; setting TAU=0.0 disables the filter entirely.
-LAT_CMD_SMOOTH_TAU = 0.10          # 1.59 Hz cut-off (was 0.06 / 2.65 Hz)
-LAT_CMD_LOOKAHEAD_EXTRA_S = 0.10   # match TAU to keep net phase ~0
+# already knows the future path (Phase 6f-4 history: constant TAU/LEAD 0.06 -> 0.10).
+# Phase 6h-1: speed-dependent command low-pass with MATCHED lead, replacing the
+# heavy low-speed angle-domain EMA. Offline pre-validation (ccnc-drivelog 0x40/0x42,
+# 8 segs): total tau 0.10->0.20 cuts <30 km/h 3-7 Hz desiredCurvature RMS 3.2x
+# (1.80e-4 -> 5.62e-5 1/m); tau 0.30 adds nothing. Lead is matched per-speed so
+# net phase stays ~0 (same principle as 6f-4). Kill switch: TAU_V = [0.10]*3,
+# i.e. constant 0.10 == pre-6h-1.
+LAT_CMD_SMOOTH_TAU_BP = [8.0, 13.0, 18.0]   # m/s
+LAT_CMD_SMOOTH_TAU_V  = [0.20, 0.12, 0.08]
 
 # Phase 6g-1: floor on the model-confidence damping below. The damping blends the
 # command toward the PREVIOUS (straighter) curvature when lane/position confidence
@@ -105,7 +97,7 @@ class Controls(ControlsExt):
     self.curvature = 0.0
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
-    self._lat_cmd_lp = 0.0  # state for LAT_CMD_SMOOTH_TAU low-pass
+    self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -130,8 +122,11 @@ class Controls(ControlsExt):
       device_pose = Pose.from_live_pose(self.sm['livePose'])
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
 
-  def _lookahead_curvature(self, model_v2, v_ego):
-    """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance."""
+  def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
+    """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
+
+    Phase 6h-1: lookahead_extra_s is the caller's LP time constant tau(v) so the
+    phase lead always matches the smoothing lag (was a fixed 0.10 s constant)."""
     fallback = model_v2.action.desiredCurvature
 
     # capnp _DynamicListReader does not support slicing, so use np.fromiter
@@ -157,7 +152,7 @@ class Controls(ControlsExt):
     #     in shallow-to-medium corners (where it matters most for entry feel).
     base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
     boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.20]))
-    t_ahead = min(base_s + boost_s + LAT_CMD_LOOKAHEAD_EXTRA_S, 0.25 + LAT_CMD_LOOKAHEAD_EXTRA_S)
+    t_ahead = min(base_s + boost_s + lookahead_extra_s, 0.25 + lookahead_extra_s)
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
     if dist_ahead < 0.3:
@@ -285,7 +280,9 @@ class Controls(ControlsExt):
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo) if CC.latActive else self.curvature
+    # Phase 6h-1 order: tau(v) first, so the lookahead lead matches the LP lag below.
+    lat_smooth_tau = float(np.interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
+    new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
 
     # Model uncertainty damping: when the model is unsure about lane position
     # (e.g. lead car occluding lane lines, ambiguous lane split), blend toward
@@ -331,8 +328,10 @@ class Controls(ControlsExt):
     # Temporal command smoothing w/ lead compensation (see constants). Applied AFTER
     # confidence damping / lane-departure and BEFORE clip_curvature, so ISO lateral
     # jerk/accel safety limits still bound the result. tau=0 disables (no-op).
-    if LAT_CMD_SMOOTH_TAU > 0.0 and CC.latActive:
-      alpha = DT_CTRL / (LAT_CMD_SMOOTH_TAU + DT_CTRL)
+    # Phase 6h-1: tau is speed-dependent (lat_smooth_tau, computed above so the
+    # lookahead lead matches); the angle-domain EMA downstream is now light.
+    if lat_smooth_tau > 0.0 and CC.latActive:
+      alpha = DT_CTRL / (lat_smooth_tau + DT_CTRL)
       self._lat_cmd_lp = alpha * new_desired_curvature + (1.0 - alpha) * self._lat_cmd_lp
       new_desired_curvature = self._lat_cmd_lp
     else:
