@@ -109,7 +109,17 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
   #                       the error_mult boost so grip-induced error
   #                       does not amplify the ceiling against the driver.
   if lat_active:
-    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.4, 0.62, 0.85, 1.0])
+    # Phase 6h-4: lower the hands-off MDPS authority ceiling toward the stock
+    # operating point. Stage 0 (1.24M frames): the factory camera ALWAYS runs
+    # ACIGain == 0 — low authority is this MDPS's normal regime ("3-10x more
+    # accurate" claim retired as tautological, but the gain==0 operating point
+    # stands). Lower stiffness = less command-dither/road-texture transmission.
+    # Combined-build decision (X3): deployed at the HALF-STEP rung because this
+    # build also changes command shaping (6h-1/2) and a tracking regression
+    # could not be attributed at the full step. Ladder:
+    # [0.4,0.62,0.85,1.0] (pre / kill switch) -> [0.32,0.5,0.75,0.95] (this) ->
+    # [0.25,0.35,0.65,0.9] (full step, only after the W4 on-road gate passes).
+    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.32, 0.5, 0.75, 0.95])
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
