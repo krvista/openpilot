@@ -376,7 +376,8 @@ yR +2.46→+0.52 **순간 점프**(합류부 재라벨), 0x44 seg17 t+27 s 도 �
 - **검증된 설계**: prob>0.5 지속 K=6프레임 + clr<0.7 m + 단조 접근(Δclr<0.02/frame, 누적 −0.10 m)
   + 재라벨 점프 배제(|Δclr|<0.3) + 블링커/laneChange off + v>30 → 0x44/0x48 재생 시
   **오발화 0, 진성 1건(0x48 seg15 t+47 s)만 포착**. 이 트리거를 ldw.py op-active 분기로 추가
-  (선검증 완료, 구현은 6h W1/W2 게이트 후 차기 커밋).
+  (선검증 완료 → **구현됨**: 6라우트 ~3.2 h 재생 오발화 0/진성 2, §8 6g-4 행 참조. 경보 위주라
+  6h W1/W2 조향 측정을 오염시키지 않아 같은 빌드에 탑재).
 
 ### E. 판정
 6g-2c(deadband 0.4)는 **순비용 회귀로 확정** → 6h-1 이 제거(이미 i6n `85f3f80` 푸시).
@@ -631,7 +632,9 @@ speed bucket 분포:
 | **6g-2b** | **P0 ✅ DONE** | **release 상한** `SMOOTHING_ANGLE_RELEASE_MAX=0.7` — 코너 catch-up 에 ~30% 댐핑 잔존("휙" 완화). kill=1.0. | `carcontroller.py:156`, `values.py` / §1.E.D |
 | **6g-2c** | **P0 ✅ DONE** | **저속 미세 데드밴드** `SMOOTHING_ANGLE_DEADBAND_DEG=0.4`(<`DEADBAND_MAX_VEGO=11m/s`) — 25 km/h 5-7 Hz dither 제거. kill=0. | `carcontroller.py:156`, `values.py` / §1.E.C |
 | **6g-2v** | **P0 ✅ DONE(W0)** | **6g-2 온차량 실증** — §1.F: deadband staircase 실차 확인(hold 46-58%, 사용자 체감 악화 보고), 진입 lag 분해(under 35-41% 진입 집중), 센터링 우수(0.07-0.09 m). 6h-1 정당화 완료. | §1.F |
-| **6g-4 (구체화)** | **P1** | **op-active LDW** — `ldw.py` `not CC.latActive` 게이트로 MADS 중 상시 OFF + desirePrediction 트리거는 op-active 에서 무효(실측 0.000). 연속-접근 검출기(prob>0.5×6f + clr<0.7 + 단조접근 + 점프배제)로 0x44/0x48 재생: 오발화 0·진성 1건 — 설계 선검증 완료. 6h W1/W2 후 구현. controlsd 억제 블록도 같은 플래그라 op-active 중 죽은 코드였음을 함께 해소. | §1.F.D |
+| **6g-4** | **P1 ✅ DONE** | **op-active LDW 구현** — `ldw.py`에 연속-접근 검출기 분기(prob>0.5×7f, clr<0.7 m, 단조접근 ≥0.10 m, 재라벨 점프 배제, laneChangeState=off, v>50 km/h). **6라우트(0x40–44/48, ~3.2 h) 재생: 오발화 0 / 진성 2건만 포착**(0x41 seg22 113 km/h 좌측 0.65 m, 0x48 seg15 72 km/h 우측 0.70 m — 둘 다 기지 near-line 사건). 부수효과: controlsd 차선이탈 억제 블록이 op-active 중 처음으로 유효해짐(차선 쪽 추가 조향만 동결, 발화율 ~0.6회/h 전수 검사). kill switch `OP_LDW_CLR_M=0`. 수동주행 경로 불변. | §1.F.D |
+| **U-3296** | **검토 후 비반영** | upstream opendbc#3296 (CANFD BCW 1→2bit) — i6n 은 CCNC `_ALT` 비트(138/141)를 읽으며, 4라우트 원시 0x1BA 스캔: 같은쪽 블링커+감지(=점멸조건) 731프레임 전부 인디케이터 비트 1 유지, 2-bit state-2 패턴 출현 0회(우리 `LEFT_MB`/`MORE_LEFT_PROB` 30/32비트도 동일). **버그 시그니처가 이 플랫폼에 부재** — 수정 불요. | raw CAN 검증 |
+| **U-3305** | **검토 후 비반영** | upstream opendbc#3305 (SCC cancel 버튼 100 ms 지연) — PR 자체가 `CANFD_ALT_BUTTONS` 제외 + i6n CCNC-ALT 경로는 cancel 시 **아무것도 TX 안 함**(`if not ccnc_lka_alt:` 가드, 팩토리 SCC 자체관리). 이중 비해당. | carcontroller.py:870 |
 | **6g-2d** | **❌ 기각(측정)** | **geometry clamp** — 차선기하 비율/lookahead-fallback 밴드 둘 다 과조향(곡률이 모델 fallback 자체·저신뢰 구간)을 못 잡고 정상 코너만 손상. 실집행 레버(6g-2b)가 정답. 후속: RELEASE_MAX 0.7→0.5, clip_curvature jerk 비대칭. | §1.E.E |
 | **6g-3 (신규)** | P1 | **계측 배선** — `lateralAccelLimit/steerAngleLimit` EventName 이 실제 publish 되는지 확인·수정 (147 saturate frame 에 0 event). 또는 plan §1.5 문서 정정. | §1.D.D |
 | **6g-4 (신규)** | P1 | **LDW 미발화** — seg5/seg9/seg22 차선 침범에 `laneDeparture` 0건. driverAssistance/LDW 게이트 점검. | §1.D.C |
