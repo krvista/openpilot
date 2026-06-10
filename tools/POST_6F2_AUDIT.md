@@ -345,6 +345,43 @@ p95~1.1°·tail 은 운전자 실제 발산(override)이지 제어 결함 아님
 감쇠)가 정답. 부족 시 후속: (a) RELEASE_MAX 0.7→0.5, (b) clip_curvature 곡률-증가방향 jerk 비대칭 강화.
 도구: `tools/ioniq6n_lane_tracking_audit.py`(+ lookahead/fallback 재계산은 `action.desiredCurvature` 추출 필요).
 
+## 1.F. 6g-2 빌드 (`441e665`) 온차량 실측 — W0 게이트 (2026-06-10 출퇴근, 0x44/0x48)
+
+빌드 검증 (라우트별 initData 확인): **0x44**(`2ebc2f3a4e`, 37seg, 07:44–08:15 KST 출근)·
+**0x48**(`3c01135925`, 30seg, 21:11–21:36 KST 퇴근) 모두 `gitCommit=441e665` = **6g-2**,
+branch i6n, dirty=False. 0x45(2seg)=주차장, 제외. 디바이스는 6h(`85f3f80`) 푸시 전 상태였음.
+
+### A. 🔴 W0 핵심: 6g-2c 데드밴드 staircase **실차 확인** (사용자 "35kph 떨림 악화" 보고와 일치)
+33–38 km/h op-active hands-off: apply-angle **hold(Δ=0) 46–58%**, 움직일 때 스텝 p90 0.42–0.68°,
+휠 2–8 Hz RMS 0.094–0.158°. 연속 미세떨림이 **stick-slip 계단 틱**으로 바뀜 → 손끝 체감 악화.
+핸드오프 §5의 "staircase 미확인" 리스크가 이 데이터로 **확인**됨. **6h-1(deadband 0.4→0.1 +
+상류 τ(v) 연속 평활)이 정조준 — 6h 플랜 유효성 실증 1.**
+
+### B. 코너 부정확은 "진입 lag"에 집중 (6h-1 lead 정조준 — 실증 2)
+고신뢰 코너 op/k_lane: **진입(0–1 s) p50 0.83–0.93, under<0.6 = 35–41%** vs **지속 p50 1.21–1.59,
+under 8–29%**. 직선 센터링은 이미 우수(차선중심 오프셋 p50 0.07–0.09 m, p90 0.19–0.23 m)
+→ 오프셋 피드백 불필요, 병목은 진입 타이밍. 지속·고속 초과(48 sustained 1.59)는 6h-2 대상.
+
+### C. 고속 near-line 다수는 차선 재라벨 아티팩트 (정직성 기록)
+near-line(clr<0.8 m) 44=19건/48=27건 중 최악 사례 직독 결과: 0x48 seg15 t+29 s (R 0.26 m @84)는
+yR +2.46→+0.52 **순간 점프**(합류부 재라벨), 0x44 seg17 t+27 s 도 저신뢰(prob 0.07) 구간 —
+실제 드리프트 아님. 단 0x48 seg15 t+47 s (R 0.70 m @72, 지속 접근)는 진성.
+
+### D. 6g-4 (op-active LDW) 설계 확정 — desirePrediction 만으론 불가
+- `ldw.py`의 `ldw_allowed = ... and not CC.latActive` → **op 조향 중 LDW 구조적 OFF** (MADS 에선
+  사실상 상시 OFF). 부작용: controlsd 의 lane-departure 억제 블록도 같은 플래그 소비 →
+  **op-active 중 죽은 코드**였음 (`ldw` 이벤트 전 라우트 0건 확인).
+- 최소수정(`not latActive` 제거)은 **무효**: 두 near-line 사건에서 `desirePrediction` 내내 0.000
+  (op 가 차선유지 의도인 한 모델은 변경을 예측 안 함).
+- **검증된 설계**: prob>0.5 지속 K=6프레임 + clr<0.7 m + 단조 접근(Δclr<0.02/frame, 누적 −0.10 m)
+  + 재라벨 점프 배제(|Δclr|<0.3) + 블링커/laneChange off + v>30 → 0x44/0x48 재생 시
+  **오발화 0, 진성 1건(0x48 seg15 t+47 s)만 포착**. 이 트리거를 ldw.py op-active 분기로 추가
+  (선검증 완료, 구현은 6h W1/W2 게이트 후 차기 커밋).
+
+### E. 판정
+6g-2c(deadband 0.4)는 **순비용 회귀로 확정** → 6h-1 이 제거(이미 i6n `85f3f80` 푸시).
+6h 플랜 전 항목이 이번 실측과 정합 — **W1(6h-1)·W2(6h-2) 게이트를 0x44/0x48 을 baseline 으로 측정**.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
@@ -593,7 +630,8 @@ speed bucket 분포:
 | **6g-2a** | **P0 ✅ DONE** | **과조향 보정 — conf_floor taper**: `confidence=max(min(conf_y,conf_l), LAT_CONF_FLOOR*clip((lane_min-LO)/(HI-LO)))`, `LO=0.20/HI=0.30`. apex 붕괴(lane_min<0.20)에서 floor→0 freeze(스파이크 차단), 재연결대 유지. kill=`LAT_CONF_FLOOR=0`. | `controlsd.py` / §1.E.B,D |
 | **6g-2b** | **P0 ✅ DONE** | **release 상한** `SMOOTHING_ANGLE_RELEASE_MAX=0.7` — 코너 catch-up 에 ~30% 댐핑 잔존("휙" 완화). kill=1.0. | `carcontroller.py:156`, `values.py` / §1.E.D |
 | **6g-2c** | **P0 ✅ DONE** | **저속 미세 데드밴드** `SMOOTHING_ANGLE_DEADBAND_DEG=0.4`(<`DEADBAND_MAX_VEGO=11m/s`) — 25 km/h 5-7 Hz dither 제거. kill=0. | `carcontroller.py:156`, `values.py` / §1.E.C |
-| **6g-2v (신규)** | **P0** | **6g-2 온차량 실증** — route42 seg4 S역곡선 "휙" 완화(운전자개입 0)·어제 미추종 스폿(seg5) 유지·25 km/h 떨림 감소 확인. release 상한값을 다음 로그로 확정. | §1.E.B,D |
+| **6g-2v** | **P0 ✅ DONE(W0)** | **6g-2 온차량 실증** — §1.F: deadband staircase 실차 확인(hold 46-58%, 사용자 체감 악화 보고), 진입 lag 분해(under 35-41% 진입 집중), 센터링 우수(0.07-0.09 m). 6h-1 정당화 완료. | §1.F |
+| **6g-4 (구체화)** | **P1** | **op-active LDW** — `ldw.py` `not CC.latActive` 게이트로 MADS 중 상시 OFF + desirePrediction 트리거는 op-active 에서 무효(실측 0.000). 연속-접근 검출기(prob>0.5×6f + clr<0.7 + 단조접근 + 점프배제)로 0x44/0x48 재생: 오발화 0·진성 1건 — 설계 선검증 완료. 6h W1/W2 후 구현. controlsd 억제 블록도 같은 플래그라 op-active 중 죽은 코드였음을 함께 해소. | §1.F.D |
 | **6g-2d** | **❌ 기각(측정)** | **geometry clamp** — 차선기하 비율/lookahead-fallback 밴드 둘 다 과조향(곡률이 모델 fallback 자체·저신뢰 구간)을 못 잡고 정상 코너만 손상. 실집행 레버(6g-2b)가 정답. 후속: RELEASE_MAX 0.7→0.5, clip_curvature jerk 비대칭. | §1.E.E |
 | **6g-3 (신규)** | P1 | **계측 배선** — `lateralAccelLimit/steerAngleLimit` EventName 이 실제 publish 되는지 확인·수정 (147 saturate frame 에 0 event). 또는 plan §1.5 문서 정정. | §1.D.D |
 | **6g-4 (신규)** | P1 | **LDW 미발화** — seg5/seg9/seg22 차선 침범에 `laneDeparture` 0건. driverAssistance/LDW 게이트 점검. | §1.D.C |
