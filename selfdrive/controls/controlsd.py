@@ -56,6 +56,14 @@ PRED_RATIO_TAU = 0.3
 LAT_CMD_SMOOTH_TAU_BP = [8.0, 13.0, 18.0]   # m/s
 LAT_CMD_SMOOTH_TAU_V  = [0.20, 0.12, 0.08]
 
+# Phase 6h-2: the lookahead lead is ADDITIVE and BOUNDED on top of the model plan
+# instead of replacing it. The budget is the curvature equivalent of this much
+# lateral jerk over the lookahead horizon (dk_max = J * t_ahead / v^2), so it
+# scales with the 6h-1 matched lead: at low speed (tau 0.20) the budget is ~25%
+# larger than the standalone pre-validation numbers, by design (lead-horizon
+# proportional). Kill switch: 1e9 (= replace behaviour, pre-6h-2).
+LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
+
 # Phase 6g-1: floor on the model-confidence damping below. The damping blends the
 # command toward the PREVIOUS (straighter) curvature when lane/position confidence
 # drops, which on corner entry right after an intersection (low lane confidence as
@@ -137,7 +145,10 @@ class Controls(ControlsExt):
       return fallback
 
     abs_curv = abs(fallback)
-    if abs_curv < 0.001:
+    # Phase 6h-2: gate lowered 0.001 -> 0.0008 to match the continuous blend at
+    # the return (below 0.0008 the blend is 0, so behaviour is identical — this
+    # only removes the replace/fallback discontinuity at the old gate).
+    if abs_curv < 0.0008:
       return fallback
     # Phase 6f-5 lane-tracking responsiveness:
     #   base_s: extend the high-speed shelf to 140 km/h (38.9 m/s) -> 0.18 s so
@@ -171,7 +182,15 @@ class Controls(ControlsExt):
       return fallback
 
     curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
-    return float(curv) if np.isfinite(curv) else fallback
+    if not np.isfinite(curv):
+      return fallback
+    # Phase 6h-2: ADDITIVE, BOUNDED lead instead of replacement. Pre-validation:
+    # 0x42 seg4 spike: replace=0.0155 (model plan 0.0120 x1.30) -> bounded
+    # J=0.7 = 0.0141; straights (|fb|<0.0015, n=2668) injected-noise p99
+    # 0.00092->0.00058 (-37%); normal corners (n=1192) ratio p50/p90 unchanged.
+    dk_max = LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v_ego, 5.0) ** 2
+    blend = float(np.interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
+    return fallback + blend * float(np.clip(float(curv) - fallback, -dk_max, dk_max))
 
   def _predicted_lat_accel_excess(self, model_v2, v_ego, lookahead_s=1.5):
     """Predicted v²·κ at lookahead_s ahead, normalized by LAT_ACCEL_ENVELOPE.
