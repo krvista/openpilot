@@ -22,7 +22,11 @@ class LatControlAngle(LatControl):
       angle_steers_des = float(CS.steeringAngleDeg)
     else:
       angle_log.active = True
-      roll_gain = float(np.interp(CS.vEgo, [0.0, 5.0, 10.0], [0.0, 0.2, 0.5]))
+      # Phase 6h-5: restore full roll compensation above 15 m/s. The 0.5 cap at
+      # all speeds >=10 m/s systematically under-compensates banked/crowned
+      # roads (steady-state lateral offset); low-speed damping kept for noisy
+      # livePose roll. Kill switch: [0.0, 5.0, 10.0] / [0.0, 0.2, 0.5].
+      roll_gain = float(np.interp(CS.vEgo, [0.0, 5.0, 10.0, 15.0], [0.0, 0.2, 0.5, 1.0]))
       roll_damped = params.roll * roll_gain
       angle_steers_des = math.degrees(VM.get_steer_from_curvature(-desired_curvature, CS.vEgo, roll_damped))
       angle_steers_des += params.angleOffsetDeg
