@@ -272,7 +272,18 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEERING_ANGLE"]
     ret.steeringTorque = cp.vl["MDPS"]["STEERING_COL_TORQUE"]
     ret.steeringTorqueEps = cp.vl["MDPS"]["STEERING_OUT_TORQUE"]
-    ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > self.params.STEER_THRESHOLD, 5)
+    # R4 (2026-06-10 review): hysteresis on the pressed threshold for CCNC
+    # angle-control. The column-torque signal includes EPS reaction torque and
+    # rides near the (already-raised, 350) threshold under light grip: 0x44/0x48
+    # measured 38-56 steeringPressed flips/min op-active (steerOverride 670-730
+    # events / 30 min). Enter at STEER_THRESHOLD, exit at 80% of it. Control is
+    # unaffected (override blend is torque-proportional, not pressed-gated);
+    # this cleans the event stream and MADS yield chatter.
+    steer_threshold = self.params.STEER_THRESHOLD
+    if (self.CP.flags & HyundaiFlags.CCNC) and (self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT) \
+       and self.steering_pressed_cnt > 5:
+      steer_threshold *= 0.8
+    ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > steer_threshold, 5)
     ret.steerFaultTemporary = cp.vl["MDPS"]["LKA_FAULT"] != 0
 
     alt = ""

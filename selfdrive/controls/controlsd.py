@@ -162,7 +162,7 @@ class Controls(ControlsExt):
     #     ~+87 ms duration-weighted lead over the wheel; this widens that lead
     #     in shallow-to-medium corners (where it matters most for entry feel).
     base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
-    boost_s = float(np.interp(abs_curv, [0.001, 0.005], [0.0, 0.20]))
+    boost_s = float(np.interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
     t_ahead = min(base_s + boost_s + lookahead_extra_s, 0.25 + lookahead_extra_s)
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
@@ -242,6 +242,11 @@ class Controls(ControlsExt):
 
     steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
     self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
+
+    # R2: self.lat_delay was referenced in the torque branch below but never
+    # assigned (latent AttributeError on torque-tuned cars; angle cars like the
+    # Ioniq 6 N never took that branch). Assign it once here and reuse downstream.
+    self.lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     # Update Torque Params
     if self.CP.lateralTuning.which() == 'torque':
@@ -357,7 +362,7 @@ class Controls(ControlsExt):
       self._lat_cmd_lp = new_desired_curvature
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
-    lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    lat_delay = self.lat_delay  # R2: assigned once above
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,

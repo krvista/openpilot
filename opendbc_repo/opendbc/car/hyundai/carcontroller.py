@@ -259,6 +259,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # CarSpecs as a second, safety-baseline check after the i6n VM in
     # apply_steer_angle_limits_vm — both must accept the angle. Mirrors the
     # reference sunnypilot implementation and panda's hardcoded safety params.
+    # R3 (2026-06-10 review): the specs are NOT identical — Sportage HEV 2026
+    # (mass 1812, wb 2.756, sR 13.7) vs Ioniq 6 N (2175, 2.965, 14.96). For the
+    # same lateral-jerk budget the baseline converts to a ~15% LOWER angle rate
+    # (e.g. 77.7 vs 91.2 deg/s at 10 m/s), so the dual check's effective limit
+    # is the stricter Sportage one. Accepted: strictly conservative, mirrors
+    # panda's hardcoded baseline. If corner-entry rate budget ever needs the
+    # full i6n envelope, revisit ANGLE_SAFETY_BASELINE_MODEL together with the
+    # panda safety params (firmware) — not independently here.
     if is_ccnc_angle_platform(CP.flags):
       self.VM = VehicleModel(CP)
       self.BASELINE_VM = VehicleModel(get_baseline_safety_cp())
