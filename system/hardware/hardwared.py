@@ -40,15 +40,21 @@ HardwareState = namedtuple("HardwareState", ['network_type', 'network_info', 'ne
 
 # List of thermal bands. We will stay within this region as long as we are within the bounds.
 # When exiting the bounds, we'll jump to the lower or higher band. Bands are ordered in the dict.
+# Upstream release-mici port (#37891 "Raise mici thermal limits"): comma four (mici) has more
+# thermal headroom + an explicit cooling path, so the warning/engage-block limits are raised and
+# the old 4th (yellow/warm) band is dropped (3 bands: ok/overheated/critical). Mapped onto this
+# fork's green/red/danger enum (ok=green, overheated=red, critical=danger). Non-mici hardware
+# keeps the conservative 3X set. Hard protection still triggers at the danger band.
+_MICI = HARDWARE.get_device_type() == "mici"
 THERMAL_BANDS = OrderedDict({
-  ThermalStatus.green: ThermalBand(None, 85.0),
-  ThermalStatus.yellow: ThermalBand(75.0, 98.0),
-  ThermalStatus.red: ThermalBand(92.0, 107.),
-  ThermalStatus.danger: ThermalBand(94.0, None),
+  ThermalStatus.green:  ThermalBand(None, 100.0 if _MICI else 96.0),
+  ThermalStatus.red:    ThermalBand(92.0 if _MICI else 88.0, 107.),
+  ThermalStatus.danger: ThermalBand(98.0 if _MICI else 94.0, None),
 })
 
-# Override to highest thermal band when offroad and above this temp
-OFFROAD_DANGER_TEMP = 75
+# Override to highest thermal band when offroad and above this temp (mici: cool down earlier
+# before adding onroad load, with more headroom — 85 vs 75).
+OFFROAD_DANGER_TEMP = 85 if _MICI else 75
 
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
@@ -180,7 +186,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   started_ts: float | None = None
   started_seen = False
   startup_blocked_ts: float | None = None
-  thermal_status = ThermalStatus.yellow
+  thermal_status = ThermalStatus.green
 
   last_hw_state = HardwareState(
     network_type=NetworkType.none,
@@ -338,6 +344,11 @@ def hardware_thread(end_event, hw_queue) -> None:
     show_alert = (not onroad_conditions["device_temp_good"] or not startup_conditions["device_temp_engageable"]) and onroad_conditions["ignition"]
     set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text)
 
+    # Upstream #37804: when onroad is blocked by temperature, ignore the PI fan output
+    # and force the fan to 100% to recover engageability faster.
+    if show_alert:
+      msg.deviceState.fanSpeedPercentDesired = 100
+
     # Handle offroad/onroad transition
     should_start = all(onroad_conditions.values())
     if started_ts is None:
@@ -435,9 +446,10 @@ def hardware_thread(end_event, hw_queue) -> None:
     statlog.gauge("fan_speed_percent_desired", msg.deviceState.fanSpeedPercentDesired)
     statlog.gauge("screen_brightness_percent", msg.deviceState.screenBrightnessPercent)
 
-    # report to server once every 10 minutes
+    # report to server once every 10 minutes (every 1 s while temperature-blocked, #37804)
     rising_edge_started = should_start and not should_start_prev
-    if rising_edge_started or (count % int(600. / DT_HW)) == 0:
+    report_interval = 1. if show_alert else 600.
+    if rising_edge_started or (count % int(report_interval / DT_HW)) == 0:
       dat = {
         'count': count,
         'pandaStates': [strip_deprecated_keys(p.to_dict()) for p in pandaStates],
