@@ -39,6 +39,12 @@ LAT_FB_ERR_MAX = 15e-4      # 1/m; larger error = yield/clip, don't integrate
 LAT_FB_BLEED_FROZEN = 2.0   # s
 LAT_FB_BLEED_INACTIVE = 0.5 # s
 LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
+# Phase 7b: entry-scheduled gain. The base KI reaches the cap in ~0.5 s — half
+# the 1 s entry window. While the commanded curvature magnitude is RISING
+# (corner building) integrate faster so the trim arrives within ~0.2 s of
+# entry. Authority cap/freezes unchanged (same risk envelope as 7a).
+# Kill switch: LAT_FB_ENTRY_BOOST = 1.0.
+LAT_FB_ENTRY_BOOST = 2.5
 
 
 class LatControlAngle(LatControl):
@@ -49,6 +55,7 @@ class LatControlAngle(LatControl):
     self._roll_lp = 0.0
     self._roll_lp_init = False
     self._fb_integ = 0.0  # Phase 7a closed-loop curvature trim state
+    self._des_slow = 0.0  # Phase 7b rising-entry detector (EMA 0.5 s)
 
   def _filtered_roll(self, roll: float) -> float:
     if ROLL_LP_TAU <= 0.0:
@@ -75,7 +82,10 @@ class LatControlAngle(LatControl):
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_FROZEN, 0.0)
       else:
         cap = min(LAT_FB_CAP, LAT_FB_ACCEL_CAP / max(CS.vEgo, 5.0) ** 2)
-        self._fb_integ = float(np.clip(self._fb_integ + LAT_FB_KI * fb_err * self.dt, -cap, cap))
+        rising = abs(desired_curvature) > self._des_slow * 1.02
+        ki = LAT_FB_KI * (LAT_FB_ENTRY_BOOST if rising else 1.0)
+        self._fb_integ = float(np.clip(self._fb_integ + ki * fb_err * self.dt, -cap, cap))
+      self._des_slow += (self.dt / 0.5) * (abs(desired_curvature) - self._des_slow)
     else:
       self._fb_integ = 0.0
 

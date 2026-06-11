@@ -64,6 +64,23 @@ LAT_CMD_SMOOTH_TAU_V  = [0.20, 0.12, 0.08]
 # proportional). Kill switch: 1e9 (= replace behaviour, pre-6h-2).
 LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
 
+# Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
+# corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
+# under<0.6 32-41%) — invisible to the 7a feedback (desired-vs-achieved). When a
+# well-tracked (lane_min>0.6) medium+ corner (|k_lane|>0.003) is BUILDING
+# (|desired| rising) and the plan is short of the lane-implied curvature in the
+# SAME direction, add the bounded shortfall. Replay (0x49/0x4a/0x42 incl. the
+# seg4 S-reversal fixture): fires on 0.6-1.1% of op-active frames (entry only),
+# assist p50 6-10e-4 (cap-bound), 0 fires inside the seg4 reversal window (the
+# sign+rising gates stay silent through reversals). Applied BEFORE confidence
+# damping and the 6h-1 LP (ramped in smoothly) and bounded downstream by
+# clip_curvature/VM/panda as usual. Kill switch: ENTRY_ASSIST_CAP = 0.0.
+ENTRY_ASSIST_CAP = 1e-3       # 1/m absolute cap
+ENTRY_ASSIST_REL = 0.5        # ... and at most +50% of the plan
+ENTRY_ASSIST_KLANE_MIN = 0.003
+ENTRY_ASSIST_LANE_MIN = 0.6
+ENTRY_ASSIST_MIN_SPEED = 7.0  # m/s
+
 # Phase 6g-1: floor on the model-confidence damping below. The damping blends the
 # command toward the PREVIOUS (straighter) curvature when lane/position confidence
 # drops, which on corner entry right after an intersection (low lane confidence as
@@ -106,6 +123,8 @@ class Controls(ControlsExt):
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
     self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
+    self._klane_lp = 0.0     # Phase 7c lane-geometry curvature (EMA 0.3 s)
+    self._absdc_slow = 0.0   # Phase 7c rising-entry detector state
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -307,6 +326,33 @@ class Controls(ControlsExt):
     # Phase 6h-1 order: tau(v) first, so the lookahead lead matches the LP lag below.
     lat_smooth_tau = float(np.interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
+
+    # Phase 7c geometry entry assist (constants above).
+    if ENTRY_ASSIST_CAP > 0.0 and CC.latActive:
+      try:
+        lls = model_v2.laneLines
+        probs = model_v2.laneLineProbs
+        lane_min_p = min(float(probs[1]), float(probs[2])) if len(probs) >= 3 else 0.0
+        xl = np.fromiter((x for x in lls[1].x), dtype=np.float64)
+        yl = np.fromiter((y for y in lls[1].y), dtype=np.float64)
+        xr = np.fromiter((x for x in lls[2].x), dtype=np.float64)
+        yr = np.fromiter((y for y in lls[2].y), dtype=np.float64)
+        lc = lambda xq: 0.5 * (np.interp(xq, xl, yl) + np.interp(xq, xr, yr))
+        klane_raw = (lc(0.0) - 2.0 * lc(25.0) + lc(50.0)) / 625.0
+        a = DT_CTRL / (0.3 + DT_CTRL)
+        self._klane_lp += a * (float(klane_raw) - self._klane_lp)
+        self._absdc_slow += (DT_CTRL / 0.5) * (abs(new_desired_curvature) - self._absdc_slow)
+        rising = abs(new_desired_curvature) > self._absdc_slow * 1.02
+        if (CS.vEgo > ENTRY_ASSIST_MIN_SPEED and lane_min_p > ENTRY_ASSIST_LANE_MIN
+            and model_v2.meta.laneChangeState == log.LaneChangeState.off
+            and abs(self._klane_lp) > ENTRY_ASSIST_KLANE_MIN and rising
+            and np.sign(self._klane_lp) == np.sign(new_desired_curvature)
+            and abs(self._klane_lp) > abs(new_desired_curvature)):
+          shortfall = abs(self._klane_lp) - abs(new_desired_curvature)
+          assist = min(shortfall, ENTRY_ASSIST_CAP, ENTRY_ASSIST_REL * abs(new_desired_curvature))
+          new_desired_curvature = new_desired_curvature + float(np.sign(new_desired_curvature)) * assist
+      except (IndexError, ValueError):
+        pass
 
     # Model uncertainty damping: when the model is unsure about lane position
     # (e.g. lead car occluding lane lines, ambiguous lane split), blend toward
