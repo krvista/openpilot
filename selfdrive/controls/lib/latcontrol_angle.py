@@ -33,7 +33,14 @@ ROLL_LP_TAU = 0.6  # s
 # 2.6e-4. Does NOT address the model-plan entry deficit (that error is not
 # visible to desired-vs-achieved). Kill switch: LAT_FB_KI = 0.0 (bit-identical).
 LAT_FB_KI = 0.8             # 1/s
-LAT_FB_CAP = 4e-4           # 1/m
+LAT_FB_CAP = 8e-4           # 1/m (Phase 7a-2: 4e-4 -> 8e-4. 0x4b/0x4c showed the
+                            # corner curvature deficit p50 ~12e-4 with the old cap
+                            # saturating 28-31% of corner frames, while sustained
+                            # over-correction FELL to 19% (headroom). Doubling lets
+                            # 7a close most of the median deficit; the real safety
+                            # bound stays LAT_FB_ACCEL_CAP (0.5 m/s^2 of trim accel)
+                            # and the slow KI + bleed keep worst-case release ~1 deg.
+                            # Next rung 12e-4 only after a clean on-road log.)
 LAT_FB_ACCEL_CAP = 0.5      # m/s^2; speed-aware cap = ACCEL_CAP / v^2
 LAT_FB_ERR_MAX = 15e-4      # 1/m; larger error = yield/clip, don't integrate
 LAT_FB_BLEED_FROZEN = 2.0   # s
