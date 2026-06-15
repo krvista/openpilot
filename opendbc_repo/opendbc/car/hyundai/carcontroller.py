@@ -244,6 +244,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.accel_last = 0
     self.apply_torque_last = 0
     self.apply_angle_last = 0.0
+    # Phase 8: learned quasi-static column-torque bias (see values.py
+    # DRIVER_TORQUE_OFFSET_TAU). Subtracted from steeringTorque before the
+    # override deadzone so the grip-blend stops false-firing on the sensor
+    # offset during hands-off (low-speed 2-8 Hz wobble feedback).
+    self.steer_torque_offset = 0.0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
     # Low-speed camera passthrough latch (kept-feature #11): hands back the
@@ -533,7 +538,24 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                            [CarControllerParams.DRIVER_TORQUE_LOW_V_SPEED,
                                             CarControllerParams.DRIVER_TORQUE_HIGH_V_SPEED],
                                            [override_low_v, override_high_v]))
-    override_factor = float(np.clip((abs(steer_torque_safe) - DRIVER_TORQUE_DEADZONE) /
+    # Phase 8: subtract the quasi-static column-torque bias before the deadzone
+    # (see values.py DRIVER_TORQUE_OFFSET_TAU). Learn only when the driver is not
+    # pressing AND |torque| is below OFFSET_MAX, so a genuine large override yank
+    # is excluded while the bias still converges from 0 (the bias itself exceeds
+    # the deadzone, so a deadzone-width learn band would never start). The slow
+    # EMA + not-pressed gate keep seconds-long real grip from dragging it.
+    # Dynamic driver torque is preserved -> override yield authority unchanged.
+    steer_torque_eff = steer_torque_safe
+    if ccnc_lka_alt and CarControllerParams.DRIVER_TORQUE_OFFSET_TAU > 0.0:
+      if (not CS.out.steeringPressed and
+          abs(steer_torque_safe) < CarControllerParams.DRIVER_TORQUE_OFFSET_MAX):
+        a = DT_CTRL / (CarControllerParams.DRIVER_TORQUE_OFFSET_TAU + DT_CTRL)
+        self.steer_torque_offset += a * (steer_torque_safe - self.steer_torque_offset)
+        self.steer_torque_offset = float(np.clip(self.steer_torque_offset,
+                                                 -CarControllerParams.DRIVER_TORQUE_OFFSET_MAX,
+                                                  CarControllerParams.DRIVER_TORQUE_OFFSET_MAX))
+      steer_torque_eff = steer_torque_safe - self.steer_torque_offset
+    override_factor = float(np.clip((abs(steer_torque_eff) - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
 
     # Low-speed camera passthrough latch (kept-feature #11).

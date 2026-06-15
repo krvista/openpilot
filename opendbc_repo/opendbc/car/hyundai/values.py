@@ -141,6 +141,32 @@ class CarControllerParams:
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
 
+  # Phase 8: column-torque static-bias compensation for the override factor.
+  # ccnc-drivelog 0x4e/0x4f (build 36eedf2) 2-8 Hz residual decomposition showed
+  # the low-speed wheel wobble is COMMAND-generated (wheel~command R2 0.56-0.99;
+  # the EPS plant low-passes it ÷3) and that the carcontroller DOUBLES the 2-8 Hz
+  # from latcontrol output (0.176°) to the TX'd command (0.345°). Faithful
+  # offline replay traced the doubling to the Phase 5a heavy-grip yield blend:
+  # the CCNC-ALT column torque (STEERING_COL_TORQUE) carries a large quasi-static
+  # positive bias (+90..+180 Nm, signed-mean +92/+176 even on straight |wheel|<3°
+  # hands-off — a sensor offset, not corner reaction) that exceeds the 100 Nm
+  # deadzone 59-75% of hands-off frames, so the blend continuously mixes the
+  # NOISY measured wheel angle into the command -> the wheel's own 2-8 Hz noise
+  # is TX'd and partially re-tracked (positive feedback). Track the bias with a
+  # very slow EMA — gated on not-pressed AND |torque| < OFFSET_MAX (a genuine
+  # large override yank is excluded; the bias still converges from 0 since it is
+  # itself bigger than the deadzone) — and subtract it before the deadzone. The
+  # slow EMA + not-pressed gate keep seconds-long real grip from dragging it, so
+  # dynamic (real) driver torque is unaffected and override yield authority is
+  # preserved; only the static offset stops the false blend. Offline A/B on
+  # 0x4e seg10: override>0.1 frames 59->31%, TX 2-8Hz 0.341->0.295°; +320 Nm
+  # dynamic grip on top of the offset still yields (override_factor 1.0). Kill
+  # switch: DRIVER_TORQUE_OFFSET_TAU = 0.0 (offset frozen at 0 -> bit-identical
+  # to pre-Phase-8). Safety-neutral: override_factor is op-side comfort/yield
+  # only; panda enforces its own limits independently.
+  DRIVER_TORQUE_OFFSET_TAU = 45.0   # s, EMA time constant for the static bias
+  DRIVER_TORQUE_OFFSET_MAX = 250.0  # Nm, clamp on the learned bias magnitude
+
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
   # self-centering fight: at |wheel| 190-200° with 307-348 Nm grip,
