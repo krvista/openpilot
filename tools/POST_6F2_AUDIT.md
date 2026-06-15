@@ -439,6 +439,62 @@ raw roll 2–8 Hz 0.16 mrad 가 저속 1/u² 증폭으로 **0.138e-4/m**. roll �
 6h-6a(roll-LP)·6g-4(LDW)·7a/7b/7c 모두 **회귀 없이 의도대로**: 떨림 −20%, wide-run −45%, 과조향 −60%,
 센터링 유지. "아주 만족" 주관과 데이터 일치. 다음 사이클은 7a cap 미세상향 후보만 남음.
 
+## 1.I. 저속 떨림 잔차 분해 (`36eedf2`) — 명령측 근본원인 + Phase 8 (2026-06-15, 0x4e/0x4f)
+
+빌드 검증: **0x4e**(`1a6d2d26cf`, 출근)·**0x4f**(`059e8a2966`, 퇴근) 모두 `gitCommit=36eedf2`
+(= Phase 7a-2, cap 10e-4), branch i6n, dirty=False. 목적: roll-LP(6h-6) 이후 남은 저속 떨림 잔차를
+**op-controllable vs plant**로 분해. 이를 위해 소스 변경 없이 rlog만으로 신규 3채널 추출
+(`extract3.py`): EPS 토크(`steeringTorqueEps`), ACIGain(LKAS_ALT byte12 ×0.004), 실제 TX 조향각
+(`ADAS_StrAnglReqVal` bit82, 14b signed, ×0.1).
+
+### A. 🔴 떨림은 명령발이다 (기존 "구조적 플랜트 바닥" 결론 뒤집음)
+20–40 kph 핸즈오프 2–8 Hz 분해:
+
+| 단 | 2–8 Hz RMS | 비고 |
+|---|---|---|
+| carcontroller 입력 (`carControl.actuators` = latcontrol 출력) | **0.176°** | controlsState.angleState와 동일(확인) |
+| carcontroller 출력 (`carOutput` = 실제 CAN TX, ACIGain·각 디코드와 일치) | **0.345°** | **입력의 ~2×** |
+| 휠(달성, `steeringAngleDeg`) | ~0.11° | EPS 플랜트가 ÷3 저역통과 |
+
+- **휠–명령 상관 R² = 0.56–0.99** (여러 구간·빌드) → 휠 떨림은 노면/EPS가 만든 게 아니라 **명령에 이미 있고
+  EPS가 깎아서** 남는 것. 즉 플랜트는 떨림을 **줄여준다**.
+- EMA·rate-limiter는 정현파 RMS를 키울 수 없는데 출력>입력 → **자기생성 리미트사이클**(고정 ~2.4 Hz,
+  속도·빌드 무관, FB on/off 무관). 모델기여(geo, desiredCurvature→각) 0.05–0.17°, 나머지 ~0.16–0.23°는
+  carcontroller 하류 주입.
+
+### B. 🔴 근본원인 = 컬럼토크 DC 오프셋 → grip-blend 오발동 → 휠노이즈 되먹임 (오프라인 재생 확정)
+crcmod 없이 VehicleModel+lateral 단독 재생으로 carcontroller 각도 체인을 충실 복제:
+- `sp_smooth` EMA + 0.1° 데드밴드 + 이중 rate-limit만으로는 doubling **재현 안 됨**(출력≈입력 0.174).
+- **grip-blend(Phase 5a heavy-grip yield)를 넣으니 재현**: 입력 0.176 → 0.341 (실측 0.345와 일치).
+- 원인: CCNC-ALT 컬럼토크(`STEERING_COL_TORQUE`)가 **직진 핸즈오프에서도 +90~+180 Nm 양의 정적 바이어스**
+  (부호평균 seg10 +92 / seg12 +176, |wheel|<3°에서도 동일 → 코너 반력 아닌 센서 오프셋). 이게 100 Nm 데드존을
+  **핸즈오프 프레임의 59–75%** 초과 → 블렌드가 **노이즈 있는 측정 휠각을 명령에 섞음** → 휠 2–8 Hz 노이즈가
+  TX돼 EPS가 일부 재추종(부분 양의 되먹임). `apply_angle_last:=wheel` 리셋(override≥0.9)도 부수 주입.
+
+roll-LP(6h-6)와 합쳐 저속 떨림의 두 명령측 주입원(roll 보상 노이즈 / grip-blend 오프셋)이 모두 규명됨.
+
+### C. 조치 — **Phase 8** (오버라이드 토크 오프셋 보정, `5b512c3`)
+`carcontroller.py`: not-pressed AND `|tq|<OFFSET_MAX(250)`일 때 느린 EMA(τ45 s)로 정적 바이어스 추적 후
+override 데드존 **전에** 차감. `|tq|` 게이트는 0에서 수렴 가능(바이어스가 데드존보다 큼) + 큰 동적 yank 배제.
+동적(진짜) 운전자 토크는 그대로 → **오버라이드 yield 권한 불변**. 상수 `values.py`,
+kill switch `DRIVER_TORQUE_OFFSET_TAU=0`(bit-identical). 안전중립: override_factor는 op측 comfort/yield 전용,
+panda는 독립적으로 자체 한계 강제.
+
+| 검증(오프라인 A/B, 0x4e seg10) | OFF | ON |
+|---|---|---|
+| override>0.1 프레임 | 59% | **31%** |
+| TX 2–8 Hz | 0.341° | **0.295°** (−14%) |
+| **안전**: +150 오프셋 위 +320 Nm 동적 그립 | — | override_factor **1.0**(완전 yield 유지) |
+
+### 정직한 한계
+- 효과 **보수적**(seg10 −14%): 정적 오프셋만 제거, 동적 yield 보존 때문. 휠 비례 하락 + roll-LP와 합산 기대.
+- seg12류 **고곡률 = 모델 지터 지배** 구간(입력 0.485)은 grip 기여가 작아 평탄 → 보조 레버 P1
+  (controlsd τ(v) 저속단 ≤8 m/s τ 0.20→0.30–0.40) 후보로 보류.
+
+### 판정 / 차기 로그
+온차량 검증 항목(0x50~): ① 핸즈오프 20–40 kph 휠 2–8 Hz 하락, ② 오버라이드 이벤트 yield 무회귀,
+③ 오프셋 수렴값(예측 +80~+150 Nm). 약하면 P1 추가.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
