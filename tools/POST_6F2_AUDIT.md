@@ -495,6 +495,41 @@ panda는 독립적으로 자체 한계 강제.
 온차량 검증 항목(0x50~): ① 핸즈오프 20–40 kph 휠 2–8 Hz 하락, ② 오버라이드 이벤트 yield 무회귀,
 ③ 오프셋 수렴값(예측 +80~+150 Nm). 약하면 P1 추가.
 
+## 1.J. Phase 8 온차량 반증 + LDW 토글 회귀 (`43312af`) — 실제 CAN TX 검증 (2026-06-16, 0x50/0x51)
+
+빌드 검증: **0x50**(`0258ce1cd4`)·**0x51**(`6f31941a00`) 둘 다 `gitCommit=43312af`(=Phase 8 `5b512c3` 포함),
+branch i6n, dirty=False. 이번엔 **실제 송신 조향각**(원시 CAN `ADAS_StrAnglReqVal`, addr 272 bit82 14b signed
+×0.1)을 디코드해 §1.I의 replay 기반 주장을 ground-truth로 검증.
+
+### A. 🔴 Phase 8 무효 — §1.I "doubling/grip-blend" 가설 반증
+핸즈오프 20–40 kph, per-run 2–8 Hz RMS(노면 교란 줄이려 input 대비 gain으로 정규화):
+
+| 증거 | 값 | 함의 |
+|---|---|---|
+| replay TX vs **실제 CAN** TX | replay 0.54 / **실제 0.15** (≈3.6× 과대) | §1.I "0.176→0.345 doubling", A/B "0.341→0.295" = **replay/windowing 아티팩트** |
+| carcontroller 2–8 Hz gain (TX/input) | pre-P8 **1.32×** / P8 **1.44×** | Phase 8이 gain을 **못 낮춤**(오히려↑, 노이즈 범위) |
+| 🔴 gain @ grip-blend 거의 미발화 | 0x4e seg10: **1.37× at \|tq\|>100 단 23%** | 증폭원 = **rate-limiter/sp_smooth/이중 VM-limit 체인**, grip-blend 아님 |
+
+→ Phase 8은 **엉뚱한 메커니즘**(grip-blend)을 건드림. 증폭은 grip 발화와 무관하게 각도 리미팅/평활 체인에서
+발생. **조치: kill switch TAU=0으로 비활성화**(Phase 7 baseline과 bit-identical, 코드는 기록용 보존).
+교훈: 절대 2–8 Hz를 replay로 추정하지 말 것 — 반드시 실제 CAN TX로 검증. (R²·DC추종으로 디코드 타당성 확인:
+clean run corr 0.9–0.98.)
+
+### B. 떨림 현 위치 — carcontroller floor, 입력측 잔존
+- 실제 CAN: TX ≈ input × ~1.3, 휠 ≈ TX(EPS가 추가 저역통과). 즉 **2–8 Hz는 입력(controlsd 저속 모델-곡률
+  지터)이 지배**하고 carcontroller는 ~1.3× 통과. clean 저-input 구간 휠 2–8 Hz ~0.02–0.14°(Phase 7 만족
+  수준 유지). rough-input 구간은 입력 지터로 상승.
+- **판정**: carcontroller 측은 하한선 근접(grip-blend 추가 손질 무의미). 추가 여지는 **입력측**뿐 →
+  controlsd τ(v) 저속단(≤8 m/s) 0.20→0.30–0.40 (P1, §8). 단 절대값이 작고 Phase 7 "아주 만족"이라
+  **수익체감** — 측정 가능한 회귀 없으면 보류 권장.
+
+### C. 🔴 LDW 토글 회귀 수정 (Phase 6h-6 부작용)
+사용자 보고: IsLdwEnabled 토글 OFF인데 comma4 화면에 LDW 경보 표출. 원인 = `selfdrived.py` Phase 6h-6의
+`ldw_alert_allowed = is_ldw_enabled or latActive` — op 조향 중이면 토글 무시. 6h-6 당시 "0x4a에서 플래그는
+떴는데 이벤트 미출현"은 **그때 토글이 OFF였던 것**을 오진한 것(표시 경로는 `EventName.ldw` 단일 — mici UI에
+별도 lane-depart 렌더 없음). **수정: 토글 존중으로 복원**(`if self.is_ldw_enabled and ...`). controlsd의
+카메라-ECU lane-departure 조향억제는 별도 상시 안전동작이라 무영향.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |

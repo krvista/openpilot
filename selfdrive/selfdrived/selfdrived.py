@@ -296,13 +296,15 @@ class SelfdriveD(CruiseHelper):
         self.events.add(EventName.calibrationInvalid)
 
     # Lane departure warning
-    # Phase 6h-6: the op-active departure detector (ldw.py 6g-4, replay-validated
-    # at 0 false fires / 3.2 h) must not be silenced by the manual-driving
-    # IsLdwEnabled toggle — on ccnc-drivelog 0x4a seg31 the flags fired but no
-    # ldw event surfaced. Alert whenever lateral is active; keep the toggle
-    # for the manual-driving (desirePrediction) path.
-    ldw_alert_allowed = self.is_ldw_enabled or self.sm['carControl'].latActive
-    if ldw_alert_allowed and self.sm.valid['driverAssistance']:
+    # The IsLdwEnabled toggle gates the user-facing warning for BOTH the
+    # manual-driving (desirePrediction) and the op-active (ldw.py 6g-4) paths.
+    # Phase 6h-6 forced the alert on whenever lateral was active ("flags fired
+    # but no event on 0x4a seg31"), but that misdiagnosis bypassed the toggle:
+    # on a device with the toggle OFF the warning still surfaced during every
+    # op-active drift (confirmed on ccnc-drivelog 0x50/0x51). Respect the toggle
+    # here; the camera-ECU lane-departure steering suppression in controlsd
+    # (a separate, always-on safety behaviour) is unaffected.
+    if self.is_ldw_enabled and self.sm.valid['driverAssistance']:
       if self.sm['driverAssistance'].leftLaneDeparture or self.sm['driverAssistance'].rightLaneDeparture:
         self.events.add(EventName.ldw)
 
