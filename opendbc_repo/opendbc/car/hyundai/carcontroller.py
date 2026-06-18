@@ -249,6 +249,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # override deadzone so the grip-blend stops false-firing on the sensor
     # offset during hands-off (low-speed 2-8 Hz wobble feedback).
     self.steer_torque_offset = 0.0
+    # Phase 8b: low-pass state for the wheel-angle reference fed to the heavy-grip
+    # yield blend (see values.py DRIVER_GRIP_BLEND_WHEEL_LP_TAU). Tracks the wheel
+    # continuously so the blend yields toward the driver's <1 Hz position without
+    # injecting the wheel's 2-8 Hz noise. Seeded lazily on first use.
+    self.blend_wheel_lp = 0.0
+    self.blend_wheel_lp_init = False
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
     # Low-speed camera passthrough latch (kept-feature #11): hands back the
@@ -644,9 +650,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # stuck below full blend with the previous Phase 6a divisor 0.9 —
       # narrowing the divisor to 0.4 reaches full wheel-tracking at
       # typical two-hand grip torques (Phase 6c-1 commit 9d51e46).
+      # Phase 8b: low-pass the wheel reference so the blend yields toward the
+      # driver's <1 Hz position without injecting the wheel's 2-8 Hz noise (the
+      # sole input->TX amplifier — see values.py DRIVER_GRIP_BLEND_WHEEL_LP_TAU).
+      # Updated every frame so it stays fresh for whenever the blend fires.
+      blend_tau = CarControllerParams.DRIVER_GRIP_BLEND_WHEEL_LP_TAU
+      if blend_tau > 0.0:
+        if not self.blend_wheel_lp_init:
+          self.blend_wheel_lp = steer_angle_safe
+          self.blend_wheel_lp_init = True
+        self.blend_wheel_lp += (DT_CTRL / (blend_tau + DT_CTRL)) * (steer_angle_safe - self.blend_wheel_lp)
+        wheel_ref = self.blend_wheel_lp
+      else:
+        wheel_ref = steer_angle_safe
       if override_factor > 0.1:
         blend = min((override_factor - 0.1) / 0.4, 1.0)
-        desired_angle = (1.0 - blend) * desired_angle + blend * steer_angle_safe
+        desired_angle = (1.0 - blend) * desired_angle + blend * wheel_ref
 
       apply_angle = apply_steer_angle_limits_vm(
         desired_angle, self.apply_angle_last, v_ego_safe,

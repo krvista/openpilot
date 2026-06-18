@@ -530,6 +530,34 @@ clean run corr 0.9–0.98.)
 별도 lane-depart 렌더 없음). **수정: 토글 존중으로 복원**(`if self.is_ldw_enabled and ...`). controlsd의
 카메라-ECU lane-departure 조향억제는 별도 상시 안전동작이라 무영향.
 
+## 1.K. 2-8Hz 증폭원 정밀 국소화 + Phase 8b (`d81cf85`, 0x52/0x53)
+
+빌드 `d81cf85`(LDW 수정 + Phase 8 off) 첫 로그. 실제 CAN TX(`ADAS_StrAnglReqVal`)로 input→TX 체인을
+요소별 replay로 분해, 2-8Hz 증폭원(input→TX gain ~2×, coherence ~0.1)을 단 하나로 확정.
+
+### A. 국소화 — grip-blend가 유일한 증폭원 (데드밴드 가설 기각)
+EPS는 충실 통과(TX→wheel gain 1.0, coh 0.79–0.95). 증폭은 input→TX. replay 요소 토글(<11m/s 핸즈오프):
+
+| 체인 | 2-8Hz | |
+|---|---|---|
+| real input / real TX | 0.106 / **0.190** | 증폭 대상 |
+| EMA+데드밴드+양자화 | 0.094 | ❌ 증폭 안 함(데드밴드는 오히려 ↓) |
+| +VM rate-limiter | 0.094 | ❌ 안전요소 무죄 |
+| **+grip-blend** | **0.333** | 🔴 유일 증폭원 |
+
+근본: 컬럼토크 오프셋 → `override_factor>0.1`이 **핸즈오프 78%** 발화 → 블렌드가 노이즈 있는 측정 휠각을
+명령에 주입. 즉 §1.I의 첫 진단(grip-blend)이 옳았고, §1.J에서 의심한 sp_smooth 데드밴드/EMA·VM은 모두 무죄.
+Phase 8(오프셋 추정)이 겨눈 원인은 맞았으나 방식이 실CAN에서 무효였음.
+
+### B. 조치 — Phase 8b: 블렌드 참조 휠각 저역통과
+오프셋을 추정하는 대신(Phase 8 실패) 블렌드가 섞는 **휠각만 LP**(τ=0.15s): yield 위치추종(<1Hz)은 보존,
+2-8Hz 노이즈만 차단. 안전중립(VM-limit 前 참조만 평활, 권한·한계 불변). replay(절대 과대평가, 상대로 읽음):
+2-8Hz −22%, yield 0.2-1Hz −2~3%. 킬스위치 `DRIVER_GRIP_BLEND_WHEEL_LP_TAU=0`. 차기 로그에서 실CAN
+input→TX gain 하락으로 확정 예정(replay 불신, 실측 검증).
+
+### C. LDW (0x52/0x53)
+driverAssistance 이탈 플래그 0 / ldw 이벤트 0 → 오발화 없음 확인. 단 실이탈 부재로 토글 ON/OFF 동작 자체는 미검증.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |

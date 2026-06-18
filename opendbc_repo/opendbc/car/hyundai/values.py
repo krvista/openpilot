@@ -160,6 +160,23 @@ class CarControllerParams:
   DRIVER_TORQUE_OFFSET_TAU = 0.0    # s, EMA time constant (0 = disabled)
   DRIVER_TORQUE_OFFSET_MAX = 250.0  # Nm, clamp on the learned bias magnitude
 
+  # Phase 8b: low-pass the wheel-angle reference used by the heavy-grip yield
+  # blend. ccnc-drivelog 0x52/0x53 (build d81cf85) replay element-isolation
+  # localized the input->TX 2-8 Hz amplifier (gain ~2x, coherence ~0.1) to the
+  # grip blend ALONE — sp_smooth deadband/EMA and the dual-VM rate limiter add
+  # none. The CCNC-ALT column-torque offset makes override_factor>0.1 fire on
+  # ~78% of hands-off frames, so the blend mixes the NOISY measured wheel angle
+  # (steer_angle_safe) into the command and the wheel's own 2-8 Hz is re-TX'd.
+  # Blending toward a low-passed wheel keeps the yield position-tracking (<1 Hz,
+  # the actual driver-intent signal) while removing the 2-8 Hz noise before it
+  # enters the command. Unlike Phase 8 (offset estimation, ineffective on real
+  # CAN) this needs no offset model — it just stops the noise, regardless of why
+  # the blend fires. Safety-neutral: applied to the blend REFERENCE only, before
+  # apply_steer_angle_limits_vm; authority/limits unchanged. Replay (over-states
+  # absolute, read relative): 2-8 Hz -22%, yield 0.2-1 Hz -2~3% at tau=0.15.
+  # Kill switch: DRIVER_GRIP_BLEND_WHEEL_LP_TAU = 0.0 -> raw wheel, bit-identical.
+  DRIVER_GRIP_BLEND_WHEEL_LP_TAU = 0.15  # s
+
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
   # self-centering fight: at |wheel| 190-200° with 307-348 Nm grip,
