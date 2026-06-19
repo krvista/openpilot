@@ -177,6 +177,28 @@ class CarControllerParams:
   # Kill switch: DRIVER_GRIP_BLEND_WHEEL_LP_TAU = 0.0 -> raw wheel, bit-identical.
   DRIVER_GRIP_BLEND_WHEEL_LP_TAU = 0.15  # s
 
+  # Phase 9: yield-by-authority architecture (see carcontroller). Element-
+  # isolation (§1.K) proved the command-side grip-blend is the SOLE 2-8 Hz
+  # injector (it mixes the noisy measured wheel into the angle command). This
+  # shifts driver-yield off the command axis entirely and onto the ACIGain
+  # authority axis (reduce how hard MDPS follows op, not WHERE op points) — which
+  # is offset-robust: reduced authority injects nothing, it just lets the driver
+  # win. op keeps commanding its own clean trajectory, so the wheel's 2-8 Hz
+  # never enters the command. Master A/B switch: False = legacy grip-blend
+  # (bit-identical to Phase 8b); True = authority-only yield. Flip per build for a
+  # same-route controlled A/B. Safety-neutral: panda envelope (VM angle-limit +
+  # its own ACIGain bound) unchanged; this only reshapes the op-side ACIGain.
+  YIELD_BY_AUTHORITY = True
+  # New-mode authority reduction is gated on the DEBOUNCED steeringPressed flag
+  # (real grip), NOT on raw torque — so the column-torque offset (which trips
+  # torque>100 on ~78% of hands-off frames) never triggers it. Result: hands-off
+  # ACIGain is bit-identical to legacy (full authority + §5c drift-recovery
+  # intact); only when the driver is actually gripping does authority drop hard
+  # (to a low floor over [deadzone, GRIP_FULL]) to replace the removed command-
+  # blend's yield. These two numbers are the primary A/B tunables.
+  ACIGAIN_GRIP_FULL_NM = 260.0    # torque (when pressed) at which authority hits the floor
+  ACIGAIN_GRIP_FLOOR   = 0.10     # min ACIGain under real grip (legacy 0.19 @ 350 Nm)
+
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
   # self-centering fight: at |wheel| 190-200° with 307-348 Nm grip,

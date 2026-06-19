@@ -558,6 +558,35 @@ input→TX gain 하락으로 확정 예정(replay 불신, 실측 검증).
 ### C. LDW (0x52/0x53)
 driverAssistance 이탈 플래그 0 / ldw 이벤트 0 → 오발화 없음 확인. 단 실이탈 부재로 토글 ON/OFF 동작 자체는 미검증.
 
+## 1.L. Phase 9 — yield-by-authority 아키텍처 (설계+구현, A/B 대기)
+
+Phase 8b 실CAN 평가(0x54/0x55, §위)에서 코너 parasitic 초과분 −22%지만 input→TX gain 불변 → 점수정
+한계 확인. §1.K가 2-8Hz 유일 증폭원을 **명령측 grip-blend**(노이즈 휠을 명령에 섞음)로 확정했으므로,
+yield를 명령축에서 **ACIGain 권한축**으로 옮기는 구조 변경.
+
+### 핵심 통찰
+권한-기반 yield는 이미 존재(`compute_torque_reduction_gain`: 토크↑ → ACIGain↓ → MDPS가 op를 덜 추종).
+재설계 = 새 메커니즘이 아니라 **명령측 블렌드 제거 + 권한축으로 yield 흡수**. 권한 감소는 **오프셋 강건**
+(노이즈 주입 0, 그냥 덜 밀 뿐) — Phase 8/8b가 못 푼 오프셋 문제를 구조적으로 우회.
+
+### 구현 (`YIELD_BY_AUTHORITY` 마스터 스위치, A/B 토글)
+1. **명령측 블렌드 OFF** — op는 자기 깨끗한 궤적만 명령(2-8Hz 휠노이즈 주입 차단).
+2. **권한 yield, pressed 게이트** — ACIGain 감소를 **디바운스 steeringPressed**에 게이트(오프셋 토크가
+   아님). 핸즈오프 = **레거시와 bit-identical**(권한·드리프트복구 보존). 그립 시 [100,260]Nm에서 ceiling→
+   0.10으로 공격 강하(레거시 0.41@250 → 0.14). 블렌드 yield를 권한이 대체.
+3. **error-boost 억제** — 블렌드 없으면 grip 중 steering_error가 운전자 발산을 반영 → boost가 MDPS를
+   op각도로 밀어 싸움. pressed 시 boost OFF(핸즈오프 드리프트복구는 유지).
+4. resume 앵커(≥0.9)·angle_passive 래치 등 풀릴리스 경로는 그대로.
+
+오프라인 확인: 핸즈오프(오프셋 90-180Nm 포함) ACIGain 레거시와 동일, 그립 시만 변화. 안전중립(panda
+envelope·VM angle-limit 불변). 킬스위치 `YIELD_BY_AUTHORITY=False` → Phase 8b와 bit-identical.
+
+### A/B 검증 (대기) — 통제 토글
+같은 노선으로 `True`(신)/`False`(구) 빌드 비교. 관전 포인트: ① 코너 input→TX 2-8Hz gain이 실제로
+하락(구조적 제거 확인), ② **override 용이성**(그립 시 op가 덜 싸우나 — 핵심 리스크), ③ 핸즈오프 추종
+무회귀(설계상 bit-identical), ④ 저속 offset이 override≥0.9 앵커를 트립해 잔여 주입이 남는지(잔여 시
+앵커도 pressed 게이트로 후속). 1차 튜너블: `ACIGAIN_GRIP_FULL_NM=260`, `ACIGAIN_GRIP_FLOOR=0.10`.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |

@@ -97,7 +97,8 @@ PARKING_MODE_EXIT_SUSTAIN_FRAMES  = 200          # 2 s @ 100 Hz
 
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False):
+def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
+                                  grip_start=100.0, grip_full=350.0, grip_floor=0.19, suppress_error_boost=False):
   # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
   # augmented across Phase 5 and Phase 6 by stateless hooks that each
   # take a single per-frame signal as input:
@@ -135,7 +136,13 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # above 180 Nm there is no boost at all. The base_ceiling × 1 line
     # remains, so light-grip / hands-off recovery is unchanged.
     torque_suppress = np.interp(abs(steering_torque), [100, 180], [1.0, 0.0])
-    error_mult = 1.0 + (error_mult_raw - 1.0) * torque_suppress
+    # Phase 9: in yield-by-authority mode the command no longer tracks the wheel,
+    # so steering_error reflects the driver's own divergence during grip; boosting
+    # MDPS back to op's angle would then FIGHT the driver. The caller sets
+    # suppress_error_boost on real grip (debounced steeringPressed) to disable the
+    # boost — hands-off drift recovery (the boost's purpose) is kept because the
+    # caller leaves it enabled whenever the driver is not pressing.
+    error_mult = 1.0 if suppress_error_boost else (1.0 + (error_mult_raw - 1.0) * torque_suppress)
     dynamic_ceiling = min(1.0, base_ceiling * error_mult)
     # Phase 5d A2 (commit 4a4d29b): when the driver signals intent with
     # the blinker, force the MDPS ceiling down so a light-grip lane
@@ -146,7 +153,11 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # (B1 blend on lowered override) and authority-side yield.
     if blinker_on:
       dynamic_ceiling = min(dynamic_ceiling, 0.45)
-    target = np.interp(abs(steering_torque), [100, 350], [dynamic_ceiling, 0.19])
+    # Phase 9: authority reduction band is parameterized (legacy default
+    # [100,350]->[ceiling,0.19]). Under real grip the caller passes
+    # [100,260]->[ceiling,0.10] so authority drops harder to absorb the removed
+    # command-blend's yield; hands-off keeps the legacy band (bit-identical).
+    target = np.interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
   else:
     target = 0.0
   delta = target - last_gain
@@ -654,18 +665,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # driver's <1 Hz position without injecting the wheel's 2-8 Hz noise (the
       # sole input->TX amplifier — see values.py DRIVER_GRIP_BLEND_WHEEL_LP_TAU).
       # Updated every frame so it stays fresh for whenever the blend fires.
-      blend_tau = CarControllerParams.DRIVER_GRIP_BLEND_WHEEL_LP_TAU
-      if blend_tau > 0.0:
-        if not self.blend_wheel_lp_init:
-          self.blend_wheel_lp = steer_angle_safe
-          self.blend_wheel_lp_init = True
-        self.blend_wheel_lp += (DT_CTRL / (blend_tau + DT_CTRL)) * (steer_angle_safe - self.blend_wheel_lp)
-        wheel_ref = self.blend_wheel_lp
-      else:
-        wheel_ref = steer_angle_safe
-      if override_factor > 0.1:
-        blend = min((override_factor - 0.1) / 0.4, 1.0)
-        desired_angle = (1.0 - blend) * desired_angle + blend * wheel_ref
+      # Phase 9: in yield-by-authority mode the command-side blend is OFF — op
+      # keeps its own clean trajectory and the yield is done entirely on the
+      # ACIGain authority axis below, so the measured wheel's 2-8 Hz never enters
+      # the command. Legacy mode keeps the Phase 8b LP'd grip-blend (bit-identical).
+      if not CarControllerParams.YIELD_BY_AUTHORITY:
+        blend_tau = CarControllerParams.DRIVER_GRIP_BLEND_WHEEL_LP_TAU
+        if blend_tau > 0.0:
+          if not self.blend_wheel_lp_init:
+            self.blend_wheel_lp = steer_angle_safe
+            self.blend_wheel_lp_init = True
+          self.blend_wheel_lp += (DT_CTRL / (blend_tau + DT_CTRL)) * (steer_angle_safe - self.blend_wheel_lp)
+          wheel_ref = self.blend_wheel_lp
+        else:
+          wheel_ref = steer_angle_safe
+        if override_factor > 0.1:
+          blend = min((override_factor - 0.1) / 0.4, 1.0)
+          desired_angle = (1.0 - blend) * desired_angle + blend * wheel_ref
 
       apply_angle = apply_steer_angle_limits_vm(
         desired_angle, self.apply_angle_last, v_ego_safe,
@@ -845,10 +861,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     effective_aci_gain = None
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
       steering_error = self.apply_angle_last - steer_angle_safe
+      # Phase 9: yield-by-authority reshapes the ACIGain torque curve to drop
+      # harder on real grip (absorbing the removed command-blend) and suppresses
+      # the error boost so MDPS does not fight the driver's divergence. Gated on
+      # the DEBOUNCED steeringPressed flag (not the offset-corrupted torque/
+      # override_factor): hands-off therefore stays bit-identical to legacy
+      # (full authority + drift recovery), only real grip changes behaviour.
+      real_grip = CarControllerParams.YIELD_BY_AUTHORITY and bool(CS.out.steeringPressed)
       effective_aci_gain = compute_torque_reduction_gain(
         steer_torque_safe, v_ego_safe * CV.MS_TO_KPH,
         effective_lat_active, self.aci_gain_last, steering_error,
         blinker_on=blinker_on,
+        grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip else 350.0),
+        grip_floor=(CarControllerParams.ACIGAIN_GRIP_FLOOR if real_grip else 0.19),
+        suppress_error_boost=real_grip,
       )
       self.aci_gain_last = effective_aci_gain
 
