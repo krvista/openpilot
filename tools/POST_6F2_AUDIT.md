@@ -584,8 +584,15 @@ envelope·VM angle-limit 불변). 킬스위치 `YIELD_BY_AUTHORITY=False` → Ph
 ### A/B 검증 (대기) — 통제 토글
 같은 노선으로 `True`(신)/`False`(구) 빌드 비교. 관전 포인트: ① 코너 input→TX 2-8Hz gain이 실제로
 하락(구조적 제거 확인), ② **override 용이성**(그립 시 op가 덜 싸우나 — 핵심 리스크), ③ 핸즈오프 추종
-무회귀(설계상 bit-identical), ④ 저속 offset이 override≥0.9 앵커를 트립해 잔여 주입이 남는지(잔여 시
-앵커도 pressed 게이트로 후속). 1차 튜너블: `ACIGAIN_GRIP_FULL_NM=260`, `ACIGAIN_GRIP_FLOOR=0.10`.
+무회귀(설계상 bit-identical). 1차 튜너블: `ACIGAIN_GRIP_FULL_NM=260`, `ACIGAIN_GRIP_FLOOR=0.10`.
+
+### 코드 재검토 (2026-06-19) — 앵커 일관성 수정
+전체 재검토에서 유일한 결함: 저속 핸즈오프에서 오프셋이 `override_factor>=0.9`(저속 full_override 180 Nm)를
+트립해 **heavy-override 앵커**(`apply_angle_last := wheel`)가 발화 → 블렌드를 없앤 신 모드에서도 raw 휠
+2-8Hz가 거기서 재주입(저속 핸즈오프 ~2.7% 프레임). Phase 9 철학(그립 신호는 디바운스 pressed로 게이트)과
+불일치. **수정**: 앵커를 `heavy_grip_anchor`(신 모드 = override>=0.9 AND pressed)로 게이트 — 실제 heavy
+그립은 그대로 앵커(resume 보존), 오프셋-only 핸즈오프는 앵커 안 함(주입 제거). 레거시는 순수 override 게이트
+유지(bit-identical). 이로써 코드측은 완결 — 남은 건 실주행 검증뿐.
 
 ## 1.B. A/B 비교 결론
 

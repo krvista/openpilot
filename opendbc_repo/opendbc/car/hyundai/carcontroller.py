@@ -575,6 +575,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     override_factor = float(np.clip((abs(steer_torque_eff) - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
 
+    # Phase 9: the heavy-override anchor (apply_angle_last := wheel for a bump-free
+    # resume) must fire on REAL heavy grip, not the column-torque offset tripping
+    # override_factor>=0.9 hands-off at low speed (where full_override_torque is
+    # only 180 Nm) — which would re-inject the raw wheel's 2-8 Hz even with the
+    # command-blend gone. In yield-by-authority mode also require the debounced
+    # pressed flag; legacy keeps the pure override_factor gate (bit-identical).
+    heavy_grip_anchor = override_factor >= 0.9
+    if CarControllerParams.YIELD_BY_AUTHORITY:
+      heavy_grip_anchor = heavy_grip_anchor and bool(CS.out.steeringPressed)
+
     # Low-speed camera passthrough latch (kept-feature #11).
     # 11th: STEER_THRESHOLD=350 Nm leaves a 100-350 Nm band where the driver
     # is actively steering but `steeringPressed` is False — require
@@ -640,7 +650,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # from the wheel, collapsing transition-frame mismatch. The later
       # post-frame clamp still runs, covering the angle_passive_active
       # case which is updated mid-method.
-      if override_factor >= 0.9:
+      if heavy_grip_anchor:
         self.apply_angle_last = float(np.clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
@@ -837,7 +847,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # parking_mode_active is included so apply_angle_last tracks the wheel
     # while op is held passive (CC.latActive may still be True), giving a
     # bump-free resume when the latch releases above 33 km/h.
-    if self.angle_passive_active or override_factor >= 0.9 or self.parking_mode_active:
+    if self.angle_passive_active or heavy_grip_anchor or self.parking_mode_active:
       self.apply_angle_last = float(np.clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
