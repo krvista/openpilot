@@ -614,6 +614,30 @@ lag도 혼재.
 코너 많은 노선 주행 → achieved/desired 비율 상승(0.82→?) + over-correction(비율>1.1, inside-cut) 감시.
 올라가되 over-correction 안 늘면 성공. 늘면 cap back-off 또는 ERR_MAX 동반 검토.
 
+## 1.N. Phase 7a-4 (ERR_MAX 안전버전) + lookahead 진입 lag 분석
+
+### 데이터 — deficit 대역 (1s-LP 정상상태, lag 분리)
+풀링 0x50-0x5b 코너 n=4782: 순간 비율 0.82 → **정상상태 0.91**(차이 = 진입 lag = "밀림"의 절반).
+대역: <10e-4 **68%**(구 cap 처리) / 10-15e-4 **9%**(신 cap=14 타깃) / **>15e-4 23%**(ERR_MAX가 막음).
+즉 cap 상향(7a-3)은 9%만 직접 개선, 진짜 미해결은 **23%의 sharp 코너(ERR_MAX 잠금)** + 진입 lag.
+
+### 조치 — ERR_MAX 안전버전 (7a-4)
+>15e-4의 23%는 1s-LP 정상값이라 **지속 sharp 코너**(스파이크 아님). 단 ERR_MAX 게이트는 **순간** fb_err에
+걸려 올리면 windup 위험. 안전버전: 게이트를 **0.3s LP 오차**에 걸어 스파이크는 거르고 지속 deficit만 통과,
+임계 15e-4→**22e-4**(지속), 별도 **순간 hard guard 30e-4** 유지, steeringPressed 게이트 불변. 트림은
+여전히 cap(14e-4)+accel cap이 묶으므로 **권한·안전 envelope 불변**(어느 코너가 cap에 도달하나만 바뀜).
+킬스위치 `LAT_FB_ERR_LP_TAU=0`+`ERR_MAX=15e-4`.
+
+### lookahead 진입 lag — 분석만 (구현 보류)
+desired→achieved 곡률 교차상관 lag(post-lookahead, n=9 windows): **net lag p50 ~170ms**(35-55kph 155ms).
+즉 lookahead가 플랜트 지연을 **~170ms 덜 보상** → lead 더 줄 여지 있음. **단 ① 표본 9개로 얇음 ②
+lookahead는 과조향(627a715) 민감 경로**(현재 conf-floor taper+7a 피드백으로 가드되나). → **이번엔 구현
+안 함**(미검증 변경 3중첩 방지). 코너 많은 출퇴근 로그로 lag 재확인 후, 확정되면 boost_s 소폭(0.20→0.25)
+별도 검증 스텝.
+
+### A/B (대기): cap(7a-3)+ERR_MAX(7a-4) 합산 = "7a가 코너 deficit을 더 메움". 비율↑·over-correction 무증
+확인. 진입 lag는 별도(lookahead).
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |

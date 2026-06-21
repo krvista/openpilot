@@ -52,7 +52,21 @@ LAT_FB_CAP = 14e-4          # 1/m (Phase 7a-3: 10e-4 -> 14e-4. Pooled 0x50-0x5b
                             # over-correction/inside-cut. Kill switch: LAT_FB_KI=0.
                             # (Phase 7a-2 was 4e-4 -> 10e-4 on 0x4b/0x4c.)
 LAT_FB_ACCEL_CAP = 0.5      # m/s^2; speed-aware cap = ACCEL_CAP / v^2
-LAT_FB_ERR_MAX = 15e-4      # 1/m; larger error = yield/clip, don't integrate
+# Phase 7a-4: the "large error -> bleed" gate now keys on a short LP of the error,
+# not the instantaneous error, so transient spikes (model jumps, brief glitches)
+# no longer bleed the trim while SUSTAINED sharp-corner under-delivery does get
+# integrated. Pooled 0x50-0x5b corner steady-deficit (1s-LP): 23% of corner
+# frames sit >15e-4, locked behind the old instantaneous 15e-4 gate (bled, never
+# corrected) — these are persistent (1s) deficits, i.e. real sharp-corner
+# shortfall, not spikes. Gate on a 0.3 s LP and raise the sustained threshold to
+# 22e-4 so those integrate (still bounded by LAT_FB_CAP=14e-4 + the v^2 accel
+# cap, so the trim authority/safety envelope is UNCHANGED — only WHICH corners
+# reach it changes). Keep a hard INSTANTANEOUS guard (30e-4) so a genuine large
+# spike still bleeds immediately; steeringPressed still gates overrides. Kill
+# switch: LAT_FB_ERR_LP_TAU=0 + LAT_FB_ERR_MAX=15e-4 -> previous behaviour.
+LAT_FB_ERR_LP_TAU   = 0.3   # s; gate on this LP of the error (transient-spike reject)
+LAT_FB_ERR_MAX      = 22e-4 # 1/m; SUSTAINED (LP'd) error above this = yield/bleed (was 15e-4 instantaneous)
+LAT_FB_ERR_MAX_HARD = 30e-4 # 1/m; INSTANTANEOUS error above this also bleeds (spike safety)
 LAT_FB_BLEED_FROZEN = 2.0   # s
 LAT_FB_BLEED_INACTIVE = 0.5 # s
 LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
@@ -73,6 +87,7 @@ class LatControlAngle(LatControl):
     self._roll_lp_init = False
     self._fb_integ = 0.0  # Phase 7a closed-loop curvature trim state
     self._des_slow = 0.0  # Phase 7b rising-entry detector (EMA 0.5 s)
+    self._fb_err_lp = 0.0  # Phase 7a-4: 0.3 s LP of fb_err for the sustained-error gate
 
   def _filtered_roll(self, roll: float) -> float:
     if ROLL_LP_TAU <= 0.0:
@@ -93,9 +108,14 @@ class LatControlAngle(LatControl):
     if LAT_FB_KI > 0.0:
       curv_actual = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, roll_filtered)
       fb_err = desired_curvature - curv_actual
+      # Phase 7a-4: short LP of the error so the yield gate keys on SUSTAINED
+      # deficit, not transient spikes (see constants block).
+      err_lp_a = self.dt / (LAT_FB_ERR_LP_TAU + self.dt) if LAT_FB_ERR_LP_TAU > 0.0 else 1.0
+      self._fb_err_lp += err_lp_a * (fb_err - self._fb_err_lp)
       if not active or CS.vEgo < LAT_FB_MIN_SPEED:
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_INACTIVE, 0.0)
-      elif CS.steeringPressed or steer_limited_by_safety or curvature_limited or abs(fb_err) > LAT_FB_ERR_MAX:
+      elif (CS.steeringPressed or steer_limited_by_safety or curvature_limited
+            or abs(self._fb_err_lp) > LAT_FB_ERR_MAX or abs(fb_err) > LAT_FB_ERR_MAX_HARD):
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_FROZEN, 0.0)
       else:
         cap = min(LAT_FB_CAP, LAT_FB_ACCEL_CAP / max(CS.vEgo, 5.0) ** 2)
