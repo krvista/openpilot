@@ -632,8 +632,9 @@ lag도 혼재.
 desired→achieved 곡률 교차상관 lag(post-lookahead, n=9 windows): **net lag p50 ~170ms**(35-55kph 155ms).
 즉 lookahead가 플랜트 지연을 **~170ms 덜 보상** → lead 더 줄 여지 있음. **단 ① 표본 9개로 얇음 ②
 lookahead는 과조향(627a715) 민감 경로**(현재 conf-floor taper+7a 피드백으로 가드되나). → **이번엔 구현
-안 함**(미검증 변경 3중첩 방지). 코너 많은 출퇴근 로그로 lag 재확인 후, 확정되면 boost_s 소폭(0.20→0.25)
-별도 검증 스텝.
+안 함**(미검증 변경 3중첩 방지). 코너 많은 출퇴근 로그로 lag 재확인 후, 확정되면 **t_ahead 캡(0.25→0.30s)**
+별도 검증 스텝. (정정: lead 레버는 boost_s가 아님 — 코너에서 base+boost=0.30이 이미 0.25 캡에 포화하므로
+boost_s는 무효. 캡이 진짜 레버이고, lead는 6h-2의 J=0.7 jerk-budget으로 bounded.)
 
 ### A/B (대기): cap(7a-3)+ERR_MAX(7a-4) 합산 = "7a가 코너 deficit을 더 메움". 비율↑·over-correction 무증
 확인. 진입 lag는 별도(lookahead).
