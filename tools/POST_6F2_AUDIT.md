@@ -594,6 +594,26 @@ envelope·VM angle-limit 불변). 킬스위치 `YIELD_BY_AUTHORITY=False` → Ph
 그립은 그대로 앵커(resume 보존), 오프셋-only 핸즈오프는 앵커 안 함(주입 제거). 레거시는 순수 override 게이트
 유지(bit-identical). 이로써 코드측은 완결 — 남은 건 실주행 검증뿐.
 
+## 1.M. Phase 7a-3 — 코너 곡률추종 cap 상향 (저속진동 소진 후 전환)
+
+저속 1-2Hz 진동은 데이터로 **소진**(원인=모델곡률 지터→MDPS 플랜트 외란, roll 아님; op 권한 밖, 능동댐핑도
+플랜트 식별 불가 coh 0.19/위상 std 105°로 불가). 전체 구조 survey에서 **유일하게 실효·고가치 미해결 = 코너
+곡률추종 deficit**로 전환.
+
+### 데이터 (풀링 0x50-0x5b, 빌드 무관)
+핸즈오프 >35km/h 코너(|κ|>0.003) n=3705: **achieved/desired 비율 p50 0.82, p25 0.65** → op가 코너에서
+~18% 바깥. 분포 거의 다 under(over-correction 드묾=헤드룸). §1.H의 0.75-0.82·cap 28-31% 포화와 일치.
+
+### 조치
+`LAT_FB_CAP 10e-4 → 14e-4`(~deficit 중앙값). 안전: 트림가속 v²·cap=0.39<0.5 m/s²@60km/h(accel cap이
+80km/h↑서 바인딩), ERR_MAX(15e-4)>cap 유지(게이트 역전 없음), worst-case release ~1.4° wheel. 킬스위치
+LAT_FB_KI=0. **한계**: deficit 일부는 모델 plan(7a 불가시) — cap으로 전부는 못 잡음. 순간비율 0.82엔 진입
+lag도 혼재.
+
+### A/B 검증 (대기)
+코너 많은 노선 주행 → achieved/desired 비율 상승(0.82→?) + over-correction(비율>1.1, inside-cut) 감시.
+올라가되 over-correction 안 늘면 성공. 늘면 cap back-off 또는 ERR_MAX 동반 검토.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
