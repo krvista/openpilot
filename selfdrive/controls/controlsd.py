@@ -63,6 +63,19 @@ LAT_CMD_SMOOTH_TAU_V  = [0.20, 0.12, 0.08]
 # larger than the standalone pre-validation numbers, by design (lead-horizon
 # proportional). Kill switch: 1e9 (= replace behaviour, pre-6h-2).
 LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
+# Phase 7c-2: corner-entry lead cap. The corner under-steer is mostly ENTRY LAG
+# (pooled 0x50-0x5b: achieved/desired 0.82 instantaneous vs 0.90 steady — the gap
+# is lag; cross-correlation showed ~170 ms residual desired->achieved lag AFTER
+# the current lookahead). Lag cannot be closed by the 7a integral without
+# winding up and over-cutting on exit (the 7a-3/7a-4 over-correction reverted in
+# 7a-5, which crossed a lane at the Seoul-Station S-curve). Feed-forward LEAD is
+# the right tool — it anticipates instead of reacting, so no windup. Raise the
+# t_ahead cap a SMALL step (0.25 -> 0.27 s, +20 ms) as a conservative probe; the
+# additive lead stays bounded by LOOKAHEAD_JERK_BUDGET (dk_max) so it cannot
+# over-command beyond the J=0.7 envelope even on an uncertain reverse curve.
+# Validate at the S-curve (the overshoot worst case) before any larger step.
+# Kill switch: LOOKAHEAD_T_AHEAD_CAP = 0.25 (previous behaviour).
+LOOKAHEAD_T_AHEAD_CAP = 0.27  # s
 
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
@@ -182,7 +195,7 @@ class Controls(ControlsExt):
     #     in shallow-to-medium corners (where it matters most for entry feel).
     base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
     boost_s = float(np.interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
-    t_ahead = min(base_s + boost_s + lookahead_extra_s, 0.25 + lookahead_extra_s)
+    t_ahead = min(base_s + boost_s + lookahead_extra_s, LOOKAHEAD_T_AHEAD_CAP + lookahead_extra_s)
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
     if dist_ahead < 0.3:

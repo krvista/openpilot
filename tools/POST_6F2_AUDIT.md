@@ -678,6 +678,20 @@ op 해제. **옛 baseline에선 이 S자 deficit(~20e-4)이 ERR_MAX 15e-4 게이
 코너 곡률추종은 baseline(7a-2, cap10)이 sweet spot. 향후 더 짜려면 7a 트림(over-cut)이 아니라 **model-plan/
 진입 lag** 쪽을 별도로 봐야 함(단 lookahead는 과조향 민감, t_ahead 캡이 레버).
 
+## 1.P. Phase 7c-2 — lookahead lead 소폭 상향 (진입 lag용, 적분 대신 feed-forward)
+
+7a-5 revert로 코너 트림은 baseline 복귀. 남은 under-steer는 **대부분 진입 lag**(0.82 순간 vs 0.90 정상,
+~170ms 잔여)이고, **lag는 적분(7a)으론 와인드업→over-cut 없이 못 메움**(서울역 S자 사건이 그 증거).
+정도(正道) = **feed-forward lead**(반응 아닌 예측 → 와인드업 없음). lookahead `t_ahead` 캡을 **0.25→0.27s
+(+20ms)** 보수적 소폭 상향. additive lead는 여전히 J=0.7 jerk-budget(dk_max)으로 bounded → 불확실
+reverse 커브서도 envelope 초과 불가. 7a와 직교(메커니즘 다름)라 동일 빌드서도 분석 분리 가능
+(over-correction=7a / 진입lag=lookahead). 킬스위치 `LOOKAHEAD_T_AHEAD_CAP=0.25`.
+
+### A/B (대기) — S자 우선 검증
+① **서울역 S자에서 inside-cut 사라졌나**(revert 확인) + **lookahead가 과조향 안 만드나**(과조향 최악
+케이스) ② 일반 코너 진입 lag(achieved/desired 순간비율) 개선 ③ over-correction 무증. S자 안전하면
+다음 스텝(0.27→0.30) 검토, 과조향이면 즉시 0.25 복귀.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
