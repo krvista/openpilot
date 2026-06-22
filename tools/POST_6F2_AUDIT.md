@@ -639,6 +639,37 @@ boost_s는 무효. 캡이 진짜 레버이고, lead는 6h-2의 J=0.7 jerk-budget
 ### A/B (대기): cap(7a-3)+ERR_MAX(7a-4) 합산 = "7a가 코너 deficit을 더 메움". 비율↑·over-correction 무증
 확인. 진입 lag는 별도(lookahead).
 
+## 1.O. Phase 7a-3/7a-4 온차량 검증 — 🔴 over-correction 회귀 → REVERT (2026-06-23, 0x5d-0x61)
+
+빌드 `63bac87`(7a-3 cap14 + 7a-4 ERR_MAX sustained + Phase 9) 첫 실측. 사용자 정정: 출퇴근은 **이전과
+동일코스**, 블루핸즈 왕복(점심)만 새 sharp 코스 → 동일코스 A/B 가능.
+
+### 결과 (코너, hands-off >35kph)
+| | OLD(cap10/ERR15) | 0x61(동일코스) | 0x5d(sharp) |
+|---|---|---|---|
+| \|κ\|p90 | 0.0098 | 0.0108(≈OLD) | 0.0254 |
+| ratio p50 | 0.90 | **0.95** | 0.70 |
+| **over>1.1(inside-cut)** | 11% | **23%** | 22% |
+
+**동일코스(0x61)에서도** over-correction이 11%→23%로 2배. 중앙값은 0.90→0.95로 *개선*(7a가 deficit은
+메움)이나 **꼬리에서 inside-cut**. 사용자 주관도 "안쪽 컷/과조향" 확인. 매칭 bin에서 sharp 코너 over-correction
+0%→23-26%(7a-4가 푼 영역) — cap·ERR_MAX 둘 다 과함.
+
+### 판정 — REVERT (Phase 7a-5)
+deficit-닫힘과 over-correction이 **결합**(트림 세게 밀면 평균은 좁히되 꼬리서 inside-cut). baseline 0.90
+ratio가 **실질 한계** — 그 이상은 model-plan deficit+진입 lag라 desired-vs-achieved 트림으로는 over-cut
+없이 못 메움. `LAT_FB_CAP 14→10`, `LAT_FB_ERR_LP_TAU 0.3→0`, `ERR_MAX 22→15`(7a-2와 bit-identical).
+killswitch 코드는 보존. lookahead lead 증가(진입 lag)는 **과조향 방향이라 보류**(over-correction 상황서
+aggression 추가는 부적절).
+
+### 무회귀 확인
+- **Phase 9 yield: 사용자 "양보 자연스러움"** → ✅ 정상, 유지.
+- LDW: 이탈 0건(토글 여전 미검증).
+
+### 교훈
+코너 곡률추종은 baseline(7a-2, cap10)이 sweet spot. 향후 더 짜려면 7a 트림(over-cut)이 아니라 **model-plan/
+진입 lag** 쪽을 별도로 봐야 함(단 lookahead는 과조향 민감, t_ahead 캡이 레버).
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |

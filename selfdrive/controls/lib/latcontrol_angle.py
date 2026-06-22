@@ -33,23 +33,24 @@ ROLL_LP_TAU = 0.6  # s
 # 2.6e-4. Does NOT address the model-plan entry deficit (that error is not
 # visible to desired-vs-achieved). Kill switch: LAT_FB_KI = 0.0 (bit-identical).
 LAT_FB_KI = 0.8             # 1/s
-LAT_FB_CAP = 14e-4          # 1/m (Phase 7a-3: 10e-4 -> 14e-4. Pooled 0x50-0x5b
-                            # (build-independent: latcontrol/model unchanged),
-                            # corner hands-off >35 km/h |kappa|>0.003 n=3705:
-                            # achieved/desired ratio p50 0.82 (p25 0.65) -> op
-                            # runs ~18% wide; the distribution is almost all
-                            # UNDER (over-correction rare) so headroom exists,
-                            # and §1.H measured the 10e-4 cap saturating 28-31%
-                            # of corner frames with steady deficit p50 ~12e-4 >
-                            # cap. Raise to ~the median deficit so the trim can
-                            # actually close it. Still accel-bounded: trim accel
-                            # = v^2*cap = 0.39 m/s^2 at 60 km/h (< the 0.5 m/s^2
-                            # LAT_FB_ACCEL_CAP, which binds above ~80 km/h), and
-                            # the slow KI + bleed keep worst-case release ~1.4 deg
-                            # wheel. Part of the corner deficit is the model plan
-                            # itself (not visible to desired-vs-achieved) and is
-                            # NOT addressed here. Back off if a log shows
-                            # over-correction/inside-cut. Kill switch: LAT_FB_KI=0.
+LAT_FB_CAP = 10e-4          # 1/m. Phase 7a-5 REVERT to the validated 7a-2 value.
+                            # 7a-3 tried 10e-4 -> 14e-4 (and 7a-4 unlocked sharp
+                            # corners via a sustained-error gate) to close the
+                            # corner curvature deficit (achieved/desired ~0.82
+                            # inst / 0.90 steady). On-road (0x5d-0x61, build
+                            # 63bac87) the deficit DID NOT close — instead
+                            # over-correction (steady ratio >1.1) doubled
+                            # 10.8% -> 22.5%, concentrated in the sharp corners
+                            # 7a-4 unlocked (matched-bin 0% -> 23-26%), and the
+                            # driver confirmed "inside-cut / over-steering" in
+                            # corners. So pushing the trim harder cuts inside
+                            # rather than tracking: the ~0.90 steady ratio at this
+                            # cap is near the practical limit (the residual is
+                            # mostly model-plan deficit + entry lag, which the
+                            # desired-vs-achieved trim cannot fix without
+                            # over-cutting). Reverted to 10e-4 + the instantaneous
+                            # ERR_MAX gate (7a-4 disabled below). Kill: LAT_FB_KI=0.
+                            # (7a-2 was 4e-4 -> 10e-4 on 0x4b/0x4c, validated good.)
                             # (Phase 7a-2 was 4e-4 -> 10e-4 on 0x4b/0x4c.)
 LAT_FB_ACCEL_CAP = 0.5      # m/s^2; speed-aware cap = ACCEL_CAP / v^2
 # Phase 7a-4: the "large error -> bleed" gate now keys on a short LP of the error,
@@ -64,9 +65,12 @@ LAT_FB_ACCEL_CAP = 0.5      # m/s^2; speed-aware cap = ACCEL_CAP / v^2
 # reach it changes). Keep a hard INSTANTANEOUS guard (30e-4) so a genuine large
 # spike still bleeds immediately; steeringPressed still gates overrides. Kill
 # switch: LAT_FB_ERR_LP_TAU=0 + LAT_FB_ERR_MAX=15e-4 -> previous behaviour.
-LAT_FB_ERR_LP_TAU   = 0.3   # s; gate on this LP of the error (transient-spike reject)
-LAT_FB_ERR_MAX      = 22e-4 # 1/m; SUSTAINED (LP'd) error above this = yield/bleed (was 15e-4 instantaneous)
-LAT_FB_ERR_MAX_HARD = 30e-4 # 1/m; INSTANTANEOUS error above this also bleeds (spike safety)
+LAT_FB_ERR_LP_TAU   = 0.0   # s; 7a-5 REVERT: 0 = gate on the INSTANTANEOUS error
+                            # (the 7a-4 0.3 s sustained gate unlocked sharp
+                            # corners and over-corrected them 0%->23-26% in
+                            # matched bins; driver felt inside-cut). Restored.
+LAT_FB_ERR_MAX      = 15e-4 # 1/m; instantaneous error above this = yield/bleed (7a-2 value)
+LAT_FB_ERR_MAX_HARD = 30e-4 # 1/m; redundant when LP_TAU=0 (15e-4 gate subsumes it); kept for the code path
 LAT_FB_BLEED_FROZEN = 2.0   # s
 LAT_FB_BLEED_INACTIVE = 0.5 # s
 LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
