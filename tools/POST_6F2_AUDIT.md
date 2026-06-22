@@ -662,6 +662,14 @@ ratio가 **실질 한계** — 그 이상은 model-plan deficit+진입 lag라 de
 killswitch 코드는 보존. lookahead lead 증가(진입 lag)는 **과조향 방향이라 보류**(over-correction 상황서
 aggression 추가는 부적절).
 
+### 🔴 안전사건 — 서울역 S자 차선침범 (0x5d seg2, GPS 0m 일치) = 이 over-correction의 실차 발현
+사용자가 "늘 테스트하는 S자에서 다른 차선으로 넘어감" 보고. 좌향 bend apex 정량: 명령각이 desK 요구각보다
+**+3.3° 초과**(7a cap ~3.6°에 일치), achieved/desired 곡률비가 **1.0→1.55로 overshoot**(inside-cut) →
+좌선 접근(L -1.19) → 좌선 검출 점프(-1.17→-2.74)+prob붕괴(0.23, 차선 재검출=이탈) → 운전자 1733Nm 개입,
+op 해제. **옛 baseline에선 이 S자 deficit(~20e-4)이 ERR_MAX 15e-4 게이트에 막혀 7a 미개입**(그래서 이전엔
+정상)이었는데 7a-4가 게이트를 풀어 +3.3° 과조향을 주입한 것. **7a-5 revert가 게이트를 복원해 직접 제거.**
+다음 주행 그 S자에서 재확인 필요.
+
 ### 무회귀 확인
 - **Phase 9 yield: 사용자 "양보 자연스러움"** → ✅ 정상, 유지.
 - LDW: 이탈 0건(토글 여전 미검증).
