@@ -98,7 +98,8 @@ PARKING_MODE_EXIT_SUSTAIN_FRAMES  = 200          # 2 s @ 100 Hz
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
-                                  grip_start=100.0, grip_full=350.0, grip_floor=0.19, suppress_error_boost=False):
+                                  grip_start=100.0, grip_full=350.0, grip_floor=0.19, suppress_error_boost=False,
+                                  use_shelf=False):
   # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
   # augmented across Phase 5 and Phase 6 by stateless hooks that each
   # take a single per-frame signal as input:
@@ -157,7 +158,19 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # [100,350]->[ceiling,0.19]). Under real grip the caller passes
     # [100,260]->[ceiling,0.10] so authority drops harder to absorb the removed
     # command-blend's yield; hands-off keeps the legacy band (bit-identical).
-    target = np.interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
+    if use_shelf:
+      # Phase 10: speed-dependent breakpoints + mid-torque shelf (see values.py
+      # ACIGAIN_SHELF). Holds authority through moderate grip and retains more at
+      # highway, vs the linear drop. Shelf capped at the (post error-boost/blinker)
+      # dynamic_ceiling; breakpoints scale with speed.
+      vms = v_ego_kph / 3.6
+      shelf = min(float(np.interp(vms, CarControllerParams.ACIGAIN_SHELF_V, CarControllerParams.ACIGAIN_SHELF_VAL)),
+                  float(dynamic_ceiling))
+      floor = float(np.interp(vms, CarControllerParams.ACIGAIN_FLOOR_V, CarControllerParams.ACIGAIN_FLOOR_VAL))
+      bp = [float(np.interp(vms, [2.0, 11.0], b)) for b in CarControllerParams.ACIGAIN_SHELF_BP]
+      target = float(np.interp(abs(steering_torque), bp, [dynamic_ceiling, shelf, shelf, floor]))
+    else:
+      target = np.interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
   else:
     target = 0.0
   delta = target - last_gain
@@ -885,6 +898,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip else 350.0),
         grip_floor=(CarControllerParams.ACIGAIN_GRIP_FLOOR if real_grip else 0.19),
         suppress_error_boost=real_grip,
+        use_shelf=(real_grip and CarControllerParams.ACIGAIN_SHELF),
       )
       self.aci_gain_last = effective_aci_gain
 

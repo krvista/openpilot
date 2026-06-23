@@ -199,6 +199,28 @@ class CarControllerParams:
   ACIGAIN_GRIP_FULL_NM = 260.0    # torque (when pressed) at which authority hits the floor
   ACIGAIN_GRIP_FLOOR   = 0.10     # min ACIGain under real grip (legacy 0.19 @ 350 Nm)
 
+  # Phase 10: sunnypilot-style speed-dependent breakpoints + mid-torque "shelf"
+  # for the real-grip ACIGain curve (ported from sunnypilot/opendbc
+  # hkg-angle-steering-2025 compute_torque_reduction_gain). Replaces the 2-point
+  # [grip_start, grip_full]->[ceiling, grip_floor] curve ONLY in the pressed
+  # (real_grip) branch; hands-off keeps the offset-robust legacy path. Holds more
+  # authority through moderate grip (the shelf) and retains more at highway (the
+  # speed-dependent floor) -> better corner authority/under-steer without giving
+  # the wheel up as eagerly. Still bounded [floor, ceiling], op-side only (panda /
+  # VM angle-limit unchanged). Shelf is capped at the dynamic ceiling. The torque
+  # breakpoints scale with speed (high-speed driving carries higher baseline
+  # torque). i6n-conservative starting values (sunnypilot floor 0.3 lowered to
+  # 0.22 to respect §6h-4); tune on-road. Kill switch: ACIGAIN_SHELF = False.
+  ACIGAIN_SHELF     = True
+  ACIGAIN_SHELF_V   = [2.0, 11.0]            # m/s
+  ACIGAIN_SHELF_VAL = [0.45, 0.60]           # mid-torque plateau (capped at the ceiling)
+  ACIGAIN_FLOOR_V   = [2.0, 22.0]            # m/s
+  ACIGAIN_FLOOR_VAL = [0.10, 0.22]           # authority retained at max grip (low->high speed)
+  ACIGAIN_SHELF_BP  = [[100.0, 140.0],       # bp1 (yield onset) at [2, 11] m/s
+                       [140.0, 170.0],       # bp2 (shelf start)
+                       [200.0, 300.0],       # bp3 (shelf end)
+                       [400.0, 700.0]]       # bp4 (floor reached)
+
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
   # self-centering fight: at |wheel| 190-200° with 307-348 Nm grip,
