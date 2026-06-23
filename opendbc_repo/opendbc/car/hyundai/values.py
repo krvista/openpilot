@@ -211,7 +211,15 @@ class CarControllerParams:
   # breakpoints scale with speed (high-speed driving carries higher baseline
   # torque). i6n-conservative starting values (sunnypilot floor 0.3 lowered to
   # 0.22 to respect §6h-4); tune on-road. Kill switch: ACIGAIN_SHELF = False.
-  ACIGAIN_SHELF     = True
+  # DISABLED after all-route A/B: the shelf is pressed-gated (real_grip), but the
+  # corner under-steer it was meant to fix is a HANDS-OFF deficit, so the shelf
+  # cannot touch it; meanwhile it firms op authority under grip 2-4x (180-500 Nm
+  # 0.10->0.36-0.40, even >500 Nm 0.10->0.22), regressing the Phase 9 "natural
+  # yield". sunnypilot's shelf helps because they have no pressed-gate (it acts on
+  # the hands-off offset torque); our offset-robust gate makes the same port
+  # net-negative. Re-enable only if applied to the hands-off branch (which would
+  # reopen the §6h-4 dither tradeoff). Kept kill-switchable for the record.
+  ACIGAIN_SHELF     = False
   ACIGAIN_SHELF_V   = [2.0, 11.0]            # m/s
   ACIGAIN_SHELF_VAL = [0.45, 0.60]           # mid-torque plateau (capped at the ceiling)
   ACIGAIN_FLOOR_V   = [2.0, 22.0]            # m/s
