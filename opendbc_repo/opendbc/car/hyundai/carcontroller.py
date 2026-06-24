@@ -98,8 +98,7 @@ PARKING_MODE_EXIT_SUSTAIN_FRAMES  = 200          # 2 s @ 100 Hz
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
-                                  grip_start=100.0, grip_full=350.0, grip_floor=0.19, suppress_error_boost=False,
-                                  use_shelf=False):
+                                  grip_start=100.0, grip_full=350.0, grip_floor=0.19, suppress_error_boost=False):
   # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
   # augmented across Phase 5 and Phase 6 by stateless hooks that each
   # take a single per-frame signal as input:
@@ -154,23 +153,11 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # (B1 blend on lowered override) and authority-side yield.
     if blinker_on:
       dynamic_ceiling = min(dynamic_ceiling, 0.45)
-    # Phase 9: authority reduction band is parameterized (legacy default
-    # [100,350]->[ceiling,0.19]). Under real grip the caller passes
-    # [100,260]->[ceiling,0.10] so authority drops harder to absorb the removed
-    # command-blend's yield; hands-off keeps the legacy band (bit-identical).
-    if use_shelf:
-      # Phase 10: speed-dependent breakpoints + mid-torque shelf (see values.py
-      # ACIGAIN_SHELF). Holds authority through moderate grip and retains more at
-      # highway, vs the linear drop. Shelf capped at the (post error-boost/blinker)
-      # dynamic_ceiling; breakpoints scale with speed.
-      vms = v_ego_kph / 3.6
-      shelf = min(float(np.interp(vms, CarControllerParams.ACIGAIN_SHELF_V, CarControllerParams.ACIGAIN_SHELF_VAL)),
-                  float(dynamic_ceiling))
-      floor = float(np.interp(vms, CarControllerParams.ACIGAIN_FLOOR_V, CarControllerParams.ACIGAIN_FLOOR_VAL))
-      bp = [float(np.interp(vms, [2.0, 11.0], b)) for b in CarControllerParams.ACIGAIN_SHELF_BP]
-      target = float(np.interp(abs(steering_torque), bp, [dynamic_ceiling, shelf, shelf, floor]))
-    else:
-      target = np.interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
+    # Phase 9: authority reduction band is parameterized. Under real grip the
+    # caller passes [100,260]->[ceiling,0.10] so authority drops harder to absorb
+    # the removed command-blend's yield; hands-off keeps the legacy band
+    # [100,350]->[ceiling,0.19].
+    target = np.interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
   else:
     target = 0.0
   delta = target - last_gain
@@ -268,17 +255,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.accel_last = 0
     self.apply_torque_last = 0
     self.apply_angle_last = 0.0
-    # Phase 8: learned quasi-static column-torque bias (see values.py
-    # DRIVER_TORQUE_OFFSET_TAU). Subtracted from steeringTorque before the
-    # override deadzone so the grip-blend stops false-firing on the sensor
-    # offset during hands-off (low-speed 2-8 Hz wobble feedback).
-    self.steer_torque_offset = 0.0
-    # Phase 8b: low-pass state for the wheel-angle reference fed to the heavy-grip
-    # yield blend (see values.py DRIVER_GRIP_BLEND_WHEEL_LP_TAU). Tracks the wheel
-    # continuously so the blend yields toward the driver's <1 Hz position without
-    # injecting the wheel's 2-8 Hz noise. Seeded lazily on first use.
-    self.blend_wheel_lp = 0.0
-    self.blend_wheel_lp_init = False
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
     # Low-speed camera passthrough latch (kept-feature #11): hands back the
@@ -568,35 +544,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                            [CarControllerParams.DRIVER_TORQUE_LOW_V_SPEED,
                                             CarControllerParams.DRIVER_TORQUE_HIGH_V_SPEED],
                                            [override_low_v, override_high_v]))
-    # Phase 8: subtract the quasi-static column-torque bias before the deadzone
-    # (see values.py DRIVER_TORQUE_OFFSET_TAU). Learn only when the driver is not
-    # pressing AND |torque| is below OFFSET_MAX, so a genuine large override yank
-    # is excluded while the bias still converges from 0 (the bias itself exceeds
-    # the deadzone, so a deadzone-width learn band would never start). The slow
-    # EMA + not-pressed gate keep seconds-long real grip from dragging it.
-    # Dynamic driver torque is preserved -> override yield authority unchanged.
-    steer_torque_eff = steer_torque_safe
-    if ccnc_lka_alt and CarControllerParams.DRIVER_TORQUE_OFFSET_TAU > 0.0:
-      if (not CS.out.steeringPressed and
-          abs(steer_torque_safe) < CarControllerParams.DRIVER_TORQUE_OFFSET_MAX):
-        a = DT_CTRL / (CarControllerParams.DRIVER_TORQUE_OFFSET_TAU + DT_CTRL)
-        self.steer_torque_offset += a * (steer_torque_safe - self.steer_torque_offset)
-        self.steer_torque_offset = float(np.clip(self.steer_torque_offset,
-                                                 -CarControllerParams.DRIVER_TORQUE_OFFSET_MAX,
-                                                  CarControllerParams.DRIVER_TORQUE_OFFSET_MAX))
-      steer_torque_eff = steer_torque_safe - self.steer_torque_offset
-    override_factor = float(np.clip((abs(steer_torque_eff) - DRIVER_TORQUE_DEADZONE) /
+    override_factor = float(np.clip((abs(steer_torque_safe) - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
 
-    # Phase 9: the heavy-override anchor (apply_angle_last := wheel for a bump-free
-    # resume) must fire on REAL heavy grip, not the column-torque offset tripping
-    # override_factor>=0.9 hands-off at low speed (where full_override_torque is
-    # only 180 Nm) — which would re-inject the raw wheel's 2-8 Hz even with the
-    # command-blend gone. In yield-by-authority mode also require the debounced
-    # pressed flag; legacy keeps the pure override_factor gate (bit-identical).
-    heavy_grip_anchor = override_factor >= 0.9
-    if CarControllerParams.YIELD_BY_AUTHORITY:
-      heavy_grip_anchor = heavy_grip_anchor and bool(CS.out.steeringPressed)
+    # The heavy-override anchor (apply_angle_last := wheel for a bump-free resume)
+    # fires on REAL heavy grip only — debounced steeringPressed AND override>=0.9 —
+    # not the column-torque offset tripping override_factor>=0.9 hands-off at low
+    # speed (where full_override_torque is only 180 Nm), which would re-inject the
+    # raw wheel's 2-8 Hz into apply_angle_last.
+    heavy_grip_anchor = (override_factor >= 0.9) and bool(CS.out.steeringPressed)
 
     # Low-speed camera passthrough latch (kept-feature #11).
     # 11th: STEER_THRESHOLD=350 Nm leaves a 100-350 Nm band where the driver
@@ -672,40 +628,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if abs(v_ego_safe) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_safe, desired_angle, self.apply_angle_last)
 
-      # Heavy-grip yield blend: bias the commanded angle toward the actual
-      # wheel proportionally to override_factor so the VM rate limiter's
-      # slew target is closer to where the wheel already is — op stops
-      # pulling against the driver without needing a snap state.
-      # Light-grip dead-band: ignore override_factor ≤ 0.1 (~108 Nm low-v
-      # / ~125 Nm high-v) so resting hands on the wheel produce no blend
-      # and the reference flow continues unmodified. Moderate two-hand
-      # grip saturates at override_factor=0.5 (~140 Nm low-v / ~225 Nm
-      # high-v): drivelog 0000001f showed 38% of 150-300 Nm grip frames
-      # stuck below full blend with the previous Phase 6a divisor 0.9 —
-      # narrowing the divisor to 0.4 reaches full wheel-tracking at
-      # typical two-hand grip torques (Phase 6c-1 commit 9d51e46).
-      # Phase 8b: low-pass the wheel reference so the blend yields toward the
-      # driver's <1 Hz position without injecting the wheel's 2-8 Hz noise (the
-      # sole input->TX amplifier — see values.py DRIVER_GRIP_BLEND_WHEEL_LP_TAU).
-      # Updated every frame so it stays fresh for whenever the blend fires.
-      # Phase 9: in yield-by-authority mode the command-side blend is OFF — op
-      # keeps its own clean trajectory and the yield is done entirely on the
-      # ACIGain authority axis below, so the measured wheel's 2-8 Hz never enters
-      # the command. Legacy mode keeps the Phase 8b LP'd grip-blend (bit-identical).
-      if not CarControllerParams.YIELD_BY_AUTHORITY:
-        blend_tau = CarControllerParams.DRIVER_GRIP_BLEND_WHEEL_LP_TAU
-        if blend_tau > 0.0:
-          if not self.blend_wheel_lp_init:
-            self.blend_wheel_lp = steer_angle_safe
-            self.blend_wheel_lp_init = True
-          self.blend_wheel_lp += (DT_CTRL / (blend_tau + DT_CTRL)) * (steer_angle_safe - self.blend_wheel_lp)
-          wheel_ref = self.blend_wheel_lp
-        else:
-          wheel_ref = steer_angle_safe
-        if override_factor > 0.1:
-          blend = min((override_factor - 0.1) / 0.4, 1.0)
-          desired_angle = (1.0 - blend) * desired_angle + blend * wheel_ref
-
+      # Phase 9 (yield-by-authority): op keeps its own clean commanded angle — the
+      # driver yield is done entirely on the ACIGain authority axis below, so the
+      # measured wheel's 2-8 Hz never enters the command. (The earlier command-side
+      # grip-blend, Phase 5a/8b, was removed: it false-fired on the column-torque
+      # offset and was the sole input->TX 2-8 Hz amplifier.)
       apply_angle = apply_steer_angle_limits_vm(
         desired_angle, self.apply_angle_last, v_ego_safe,
         steer_angle_safe, CC.latActive, self.params, self.VM,
@@ -890,7 +817,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # the DEBOUNCED steeringPressed flag (not the offset-corrupted torque/
       # override_factor): hands-off therefore stays bit-identical to legacy
       # (full authority + drift recovery), only real grip changes behaviour.
-      real_grip = CarControllerParams.YIELD_BY_AUTHORITY and bool(CS.out.steeringPressed)
+      real_grip = bool(CS.out.steeringPressed)
       effective_aci_gain = compute_torque_reduction_gain(
         steer_torque_safe, v_ego_safe * CV.MS_TO_KPH,
         effective_lat_active, self.aci_gain_last, steering_error,
@@ -898,7 +825,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip else 350.0),
         grip_floor=(CarControllerParams.ACIGAIN_GRIP_FLOOR if real_grip else 0.19),
         suppress_error_boost=real_grip,
-        use_shelf=(real_grip and CarControllerParams.ACIGAIN_SHELF),
       )
       self.aci_gain_last = effective_aci_gain
 

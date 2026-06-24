@@ -141,93 +141,24 @@ class CarControllerParams:
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
 
-  # Phase 8: column-torque static-bias compensation for the override factor.
-  # DISABLED (TAU=0) after on-device validation — the hypothesis did not hold.
-  # The motivating 0x4e/0x4f analysis claimed the carcontroller doubles the
-  # 2-8 Hz (latcontrol 0.176° -> TX 0.345°) via the Phase 5a grip-blend firing
-  # on a +90..+180 Nm column-torque sensor offset. On 0x50/0x51 (Phase 8 build
-  # 43312af) the ACTUAL CAN TX (ADAS_StrAnglReqVal) showed: (1) the offline
-  # replay overestimated TX 2-8 Hz by ~3.6x (0.54 vs real 0.15) — the "doubling"
-  # and the "0.341->0.295" A/B were a replay/windowing artifact; (2) the real
-  # carcontroller 2-8 Hz gain (TX/input) is ~1.3x on BOTH builds (pre-P8 1.32 /
-  # P8 1.44 — Phase 8 did not lower it); (3) the gain persists even when the
-  # grip-blend barely fires (0x4e seg10: 1.37x at |tq|>100 only 23% of frames),
-  # proving the amplifier is the rate-limiter / sp_smooth / dual-VM-limit chain,
-  # NOT the grip-blend that Phase 8 targets. The code is kept (kill-switchable,
-  # safety-neutral) for the record; TAU=0 makes it bit-identical to the
-  # validated Phase 7 baseline. Real residual lever is input-side (controlsd
-  # low-speed model-curvature jitter), see POST_6F2_AUDIT §1.J.
-  DRIVER_TORQUE_OFFSET_TAU = 0.0    # s, EMA time constant (0 = disabled)
-  DRIVER_TORQUE_OFFSET_MAX = 250.0  # Nm, clamp on the learned bias magnitude
-
-  # Phase 8b: low-pass the wheel-angle reference used by the heavy-grip yield
-  # blend. ccnc-drivelog 0x52/0x53 (build d81cf85) replay element-isolation
-  # localized the input->TX 2-8 Hz amplifier (gain ~2x, coherence ~0.1) to the
-  # grip blend ALONE — sp_smooth deadband/EMA and the dual-VM rate limiter add
-  # none. The CCNC-ALT column-torque offset makes override_factor>0.1 fire on
-  # ~78% of hands-off frames, so the blend mixes the NOISY measured wheel angle
-  # (steer_angle_safe) into the command and the wheel's own 2-8 Hz is re-TX'd.
-  # Blending toward a low-passed wheel keeps the yield position-tracking (<1 Hz,
-  # the actual driver-intent signal) while removing the 2-8 Hz noise before it
-  # enters the command. Unlike Phase 8 (offset estimation, ineffective on real
-  # CAN) this needs no offset model — it just stops the noise, regardless of why
-  # the blend fires. Safety-neutral: applied to the blend REFERENCE only, before
-  # apply_steer_angle_limits_vm; authority/limits unchanged. Replay (over-states
-  # absolute, read relative): 2-8 Hz -22%, yield 0.2-1 Hz -2~3% at tau=0.15.
-  # Kill switch: DRIVER_GRIP_BLEND_WHEEL_LP_TAU = 0.0 -> raw wheel, bit-identical.
-  DRIVER_GRIP_BLEND_WHEEL_LP_TAU = 0.15  # s
-
-  # Phase 9: yield-by-authority architecture (see carcontroller). Element-
-  # isolation (§1.K) proved the command-side grip-blend is the SOLE 2-8 Hz
-  # injector (it mixes the noisy measured wheel into the angle command). This
-  # shifts driver-yield off the command axis entirely and onto the ACIGain
-  # authority axis (reduce how hard MDPS follows op, not WHERE op points) — which
-  # is offset-robust: reduced authority injects nothing, it just lets the driver
-  # win. op keeps commanding its own clean trajectory, so the wheel's 2-8 Hz
-  # never enters the command. Master A/B switch: False = legacy grip-blend
-  # (bit-identical to Phase 8b); True = authority-only yield. Flip per build for a
-  # same-route controlled A/B. Safety-neutral: panda envelope (VM angle-limit +
-  # its own ACIGain bound) unchanged; this only reshapes the op-side ACIGain.
-  YIELD_BY_AUTHORITY = True
-  # New-mode authority reduction is gated on the DEBOUNCED steeringPressed flag
-  # (real grip), NOT on raw torque — so the column-torque offset (which trips
-  # torque>100 on ~78% of hands-off frames) never triggers it. Result: hands-off
-  # ACIGain is bit-identical to legacy (full authority + §5c drift-recovery
-  # intact); only when the driver is actually gripping does authority drop hard
-  # (to a low floor over [deadzone, GRIP_FULL]) to replace the removed command-
-  # blend's yield. These two numbers are the primary A/B tunables.
+  # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
+  # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a
+  # command-side wheel-blend. §1.K element-isolation proved the old grip-blend was
+  # the SOLE input->TX 2-8 Hz injector (it mixed the noisy measured wheel into the
+  # angle command and false-fired on the +90..180 Nm column-torque sensor offset);
+  # authority reduction injects nothing — it just lets the driver win, and op
+  # keeps commanding its own clean trajectory. Gated on the DEBOUNCED
+  # steeringPressed flag (not the offset-corrupted torque) so hands-off ACIGain is
+  # the legacy curve (full authority + §5c drift recovery); only real grip drops
+  # authority to the floor over [deadzone, GRIP_FULL] to provide the yield.
+  # Safety-neutral: only reshapes the op-side ACIGain; panda's VM angle-limit +
+  # ACIGain bound are unchanged.
+  # (Pruned dead experiments — restore from git / POST_6F2_AUDIT if ever needed:
+  #  Phase 8 column-torque offset estimation, ineffective on real CAN §1.J;
+  #  Phase 8b grip-blend wheel-LP, superseded by this; Phase 10 sunnypilot shelf,
+  #  net-negative under our pressed-gate §1.O.)
   ACIGAIN_GRIP_FULL_NM = 260.0    # torque (when pressed) at which authority hits the floor
   ACIGAIN_GRIP_FLOOR   = 0.10     # min ACIGain under real grip (legacy 0.19 @ 350 Nm)
-
-  # Phase 10: sunnypilot-style speed-dependent breakpoints + mid-torque "shelf"
-  # for the real-grip ACIGain curve (ported from sunnypilot/opendbc
-  # hkg-angle-steering-2025 compute_torque_reduction_gain). Replaces the 2-point
-  # [grip_start, grip_full]->[ceiling, grip_floor] curve ONLY in the pressed
-  # (real_grip) branch; hands-off keeps the offset-robust legacy path. Holds more
-  # authority through moderate grip (the shelf) and retains more at highway (the
-  # speed-dependent floor) -> better corner authority/under-steer without giving
-  # the wheel up as eagerly. Still bounded [floor, ceiling], op-side only (panda /
-  # VM angle-limit unchanged). Shelf is capped at the dynamic ceiling. The torque
-  # breakpoints scale with speed (high-speed driving carries higher baseline
-  # torque). i6n-conservative starting values (sunnypilot floor 0.3 lowered to
-  # 0.22 to respect §6h-4); tune on-road. Kill switch: ACIGAIN_SHELF = False.
-  # DISABLED after all-route A/B: the shelf is pressed-gated (real_grip), but the
-  # corner under-steer it was meant to fix is a HANDS-OFF deficit, so the shelf
-  # cannot touch it; meanwhile it firms op authority under grip 2-4x (180-500 Nm
-  # 0.10->0.36-0.40, even >500 Nm 0.10->0.22), regressing the Phase 9 "natural
-  # yield". sunnypilot's shelf helps because they have no pressed-gate (it acts on
-  # the hands-off offset torque); our offset-robust gate makes the same port
-  # net-negative. Re-enable only if applied to the hands-off branch (which would
-  # reopen the §6h-4 dither tradeoff). Kept kill-switchable for the record.
-  ACIGAIN_SHELF     = False
-  ACIGAIN_SHELF_V   = [2.0, 11.0]            # m/s
-  ACIGAIN_SHELF_VAL = [0.45, 0.60]           # mid-torque plateau (capped at the ceiling)
-  ACIGAIN_FLOOR_V   = [2.0, 22.0]            # m/s
-  ACIGAIN_FLOOR_VAL = [0.10, 0.22]           # authority retained at max grip (low->high speed)
-  ACIGAIN_SHELF_BP  = [[100.0, 140.0],       # bp1 (yield onset) at [2, 11] m/s
-                       [140.0, 170.0],       # bp2 (shelf start)
-                       [200.0, 300.0],       # bp3 (shelf end)
-                       [400.0, 700.0]]       # bp4 (floor reached)
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
