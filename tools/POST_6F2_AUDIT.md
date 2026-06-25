@@ -692,6 +692,37 @@ reverse 커브서도 envelope 초과 불가. 7a와 직교(메커니즘 다름)�
 케이스) ② 일반 코너 진입 lag(achieved/desired 순간비율) 개선 ③ over-correction 무증. S자 안전하면
 다음 스텝(0.27→0.30) 검토, 과조향이면 즉시 0.25 복귀.
 
+## 1.Q. 센터링 쏠림 근본원인 추적 — 아키텍처 갭(횡 미보상) (2026-06-25, 0x66/0x67)
+
+**증상**: 직선 센터링이 한쪽으로 상수 쏠림 +0.14–0.25 m(두 로그 같은 방향). 이탈/inside-cut 안전
+이벤트는 0건.
+
+**정체 = yaw 오차 아닌 고정 횡 오프셋.** lateral profile: idx0(0 m)=+0.25 m, ~12 m=+0.22 m(거의 일정),
+먼 거리서 약간 감소. yaw 오정렬이면 0 m에서 0이고 멀수록 커져야 하는데 **0 m에서 최대 → 회전이 아니라
+프레임 전체의 상수 횡 평행이동 바이어스.**
+
+**파이프라인 추적 — 보상 단 부재(아키텍처 갭):**
+- 캘리브(`rpyCalib`) = roll/pitch/yaw 회전 + height(수직)만. `get_view_frame_from_road_frame` translation
+  `[[0],[height],[0]]` — 수직 성분만, **횡(x) 항 = 0**.
+- 모델 워프(`get_warp_matrix`) = `intrinsics @ view_frame_from_device @ device_from_calib`, **회전 전용**.
+- `device_from_calib = rot_from_euler` 순수 회전 — 카메라 횡 장착 오프셋 보정 항 없음.
+- `CameraOffset` Param 존재하나 `model_renderer.py` **UI 표시 전용**(params_keys.h:229), e2e 제어
+  경로(controlsd → `model_v2.action.desiredCurvature`)에 미배선.
+- → **횡 장착/모델 횡 바이어스를 보정하는 레버가 e2e 제어 경로 전체에 없음.** 빌드 무관하게 쏠림이
+  남는 이유.
+
+**두 성분의 합으로 좁힘:**
+- (a) 카메라 횡 장착 오프셋 — 고정분(작음). 0.25 m는 윈드실드 mount 치곤 과대.
+- (b) 모델 횡 바이어스 + 노면 의존 변동 — **주성분(가변).** 0.14→0.25 m 날짜별 변동은 고정 mount로
+  설명 불가 → 모델이 차로 중심을 한쪽으로 약간 치우치게 추정 → desiredCurvature 정렬 → op 충실 추종.
+
+**측정 한계**: 이 metric만으론 "차가 실제 한쪽 치우침" vs "차는 중앙·카메라가 옆으로 봄"을 분리 불가
+(둘 다 거리무관 상수 오프셋). 분리엔 외부 ground truth 필요(없음).
+
+**판정 = 수용(A).** 근본원인이 op 제어단 밖(모델 횡 바이어스 + 미보상 mount). PD 위치-피드백(B)은
+모델 노이즈까지 되먹여 7a류 over-correction/inside-cut 위험 + 가변분이라 게인 고정 곤란. 차로폭(~3.5 m)
+안 상수 쏠림이라 이탈 위험 없음(0x66/0x67 이탈 0건 확인). 근본 해결은 업스트림 모델/캘리브 개선 대기.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
