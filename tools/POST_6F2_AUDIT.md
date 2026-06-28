@@ -723,6 +723,39 @@ reverse 커브서도 envelope 초과 불가. 7a와 직교(메커니즘 다름)�
 모델 노이즈까지 되먹여 7a류 over-correction/inside-cut 위험 + 가변분이라 게인 고정 곤란. 차로폭(~3.5 m)
 안 상수 쏠림이라 이탈 위험 없음(0x66/0x67 이탈 0건 확인). 근본 해결은 업스트림 모델/캘리브 개선 대기.
 
+## 1.R. §1.Q 정정 — 우측 정상 오프셋의 roll-comp 기여 (제로베이스 재검토, faae679e, 0x63/66/67)
+
+§1.Q는 lean을 "인지/평행이동 측 + 모델 바이어스, op-side 레버 없음 → 수용"으로 닫았다.
+별도 세션의 제로베이스 재검토가 **부호/일관성**(§1.Q가 안 본 축)을 측정해 그 결론을 정교화:
+
+**측정**: signed center-offset이 전 세그먼트·전 속도(44–114 km/h) **동부호 우측**,
+직선 mean **+0.118 m**(n=15,886), 코너 **+0.127 m**(n=1,108). 세그먼트별 +0.05~+0.30 m 모두 양(우).
+
+**메커니즘(코드 확인됨)**: localizer roll(`liveParameters.roll`)이 준-DC **+0.036~0.049 rad
+(2.1–2.8°)**, 세그 내 std 0.006(사실상 상수), offset과 corr +0.05(무상관). 이 DC roll이
+- `paramsd.py:17` ROLL_MIN/MAX ±10° 안이라 clip 안 되고 KF로 통과,
+- `latcontrol_angle.py:142` ≥15 m/s(54 km/h) full roll gain(1.0),
+- `vehicle_model.py:121` `roll_compensation=g·roll/(1/sf−u²)`를 `get_steer_from_curvature`가 매 프레임 차감
+→ 존재하지 않는 뱅킹을 상시 메우는 방향으로 명령각 bias(50 km/h 등가곡률 ~0.002 1/m)
+→ 차로유지 루프와 평형 → 상수 우측 오프셋. order-of-magnitude로 0.12 m와 정합.
+
+**판별(준-DC bias vs 실뱅킹)**: 세그 내 roll std 0.006으로 상수인데 offset std 0.24로 변동
+→ 실뱅킹이면 offset이 roll을 따라야 하나 안 따름. 한국 시내 크라운은 방향이 자주 바뀌므로
+진짜 roll이면 분산이 커야 함 → **마운팅/캘리 roll bias가 road-roll로 귀속**이 유력.
+
+**§1.Q "no clean op-side lever" 정정**: 틀렸음. roll-comp 경로를 (저속 댐핑 때문에) 닫아버린 게
+누락 원인. 실제로는 두 레버 존재 — (1) **재캘리브레이션(코드 0)**: roll DC가 캘리 artifact면 해결,
+(2) **roll DC 차감**(`_filtered_roll`에 τ~120s HPF, 6h-6 LP와 직교): 캘리로 안 빠지는 잔여 DC만 제거.
+
+**caveat**: 인과 미확정(angleOffset −0.44°/카메라 yaw/실평균 크라운 공동 기여 가능). 세그 간
+roll DC 차이(0.036 vs 0.049)는 부분 실뱅킹 혼재 시사 → **roll DC 차감을 무리하게 걸면 상시
+편경사 도로(고가도로)에서 보상 깎는 부작용** → 코드 수정 전 진단 필수.
+
+**ZB-1 (P1, 미착수)**: Step A 진단(코드 0) — 0x66 vs 0x67 같은 GPS 구간에서 roll DC 재현성
++ offset 부호가 roll 따라가나 확인. 결정적 테스트 = 재마운트/재캘리 후 roll DC 변화 관찰.
+결과 따라 재캘리(코드 0) 또는 roll DC 차감. 게이트: 직선 signed offset +0.12→±0.03 m, 진동/추종 무회귀.
+※ 현 컨테이너에 0x63/66/67 부재(이전 컨테이너 회수) → 다음 주행 로그/재업로드 필요.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
