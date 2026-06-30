@@ -787,6 +787,55 @@ op-side 수정이 정당화됨. 2-track:
    상시편경사 구간 offset 감시.
 - 다음 스텝: 사용자 재캘리 → 다음 주행 로그로 roll DC·offset 재측정 → 잔여 DC 있으면 roll DC 차감 구현.
 
+## 1.T. 업스트림 sync 검토 — sunnypilot hkg-angle-steering-2025 (2026-06-30)
+
+i6n(현 HEAD **faa679e**)과 sunnypilot 업스트림 비교. 결론: **차용할 것 없음 — angle-steering
+영역에서 i6n이 기능·실차검증으로 앞서 있고, 업스트림 고유 변경은 i6n에 부적합.**
+
+**ref 좌표 (재조사 불필요하도록 고정):**
+| 항목 | commit | 날짜 | opendbc pin |
+|---|---|---|---|
+| **fork 지점** | `fffb5ab` "sunnypilot v2026.03.13-4326" | 2026-03-13 | `966c60b8d593` (업스트림 force-push로 GC됨, raw 404) |
+| Kay Oh 첫 커밋 | `c91727f` "Update values.py" | 2026-03-31 | — |
+| 사용자가 링크한 `…-2025-prebuilt` | `705bfb5` (github-actions bot 빌드) | **2026-04-10 (STALE)** | — |
+| **활성 소스** `hkg-angle-steering-2025` | `282f517` | **2026-06-09** | `0b5dacee34fa` |
+| i6n HEAD | `faa679e` | (현재) | opendbc_repo **vendored**(서브모듈 아님) |
+
+opendbc 서브모듈 repo = **github.com/sunnypilot/opendbc**. 업스트림이 두 브랜치를 force-push/
+rebuild → fork base와 **공통 조상 끊김**(`No common ancestor`) → git-compare 불가, content/
+commit-history 분석으로 우회. (proxy: krvista/openpilot만 git smart-HTTP 허용, 그 외는 raw/API만.
+cross-fork compare selector 차단.)
+
+**fork 이후 car/hyundai 변경 = 64 커밋(3개월).** 분류:
+- **ACIGain/토크감쇠 대수술**: `TorqueReductionGainController` 클래스 제거(`00d5c0de`)→함수형 전환,
+  speed/error 보정 추가 후 다시 단순화(`b6e30040`/`5278c0fb`/`b3913542`). → **업스트림도 독립적으로
+  클래스/shelf 정리 방향에 수렴**(i6n Phase 10 + dead-code prune과 동일 결론).
+- **lookahead/안전위반 예측 실험 전부 REVERT**(`cf3223a5`/`4cce6392`/`c941e665` 등) = net no-op.
+  → i6n 7c-2 feed-forward lead가 더 앞섬.
+- **신규 차종/핑거프린트**: Ioniq 6(non-HDA-II) `3e4da61b`, Ioniq 9 `1954b1cb`, Ioniq 5 PE,
+  Kona EV, Niro, Santa Fe PHEV, **Sorento HDA2 angle** `115b68b5` — i6n 거동 무관(참고용만).
+- **comma/opendbc 인프라 sync**: DBC→generator `f1ec12a4`, CAN FD DBC 갱신, 범용 BSM, CarState.brake
+  deprecate — opendbc 전체 resync 시에만 의미.
+
+**상세 비교 2건:**
+1. **EPS-whine smoothing `88bb52cf`** (2026-04-03, +34/-5 carcontroller): `sp_smooth_angle` 속도-EMA
+   재구현 + 0.1° deadzone. 저속 α 0.05~0.10(매우 무겁게)→80km/h α 1.0. **i6n과 동일 함수(공통 조상)**.
+   i6n은 Phase 6c-3에서 같은 저속 무거운 α를 했다가 **6g-1 코너 wide-running으로 기각 → 6h-1에서
+   floor 0.30 + jitter 흡수를 controlsd 곡률-LP(matched lead)로 이전.** 업스트림 α0.05(τ~0.2s lag)는
+   i6n이 의도적으로 피한 코너-진입 lag. **포팅 시 6g-1 회귀.** 저속진동(§1.J plant-지배, <20km/h
+   op-inactive)엔 각도-EMA 무효.
+2. **ACIGain 최종 `compute_torque_reduction_gain` @0b5dace**: 업스트림 = 4-bp **mid-torque SHELF**
+   곡선(ceiling→shelf→shelf→floor), 토크 breakpoint **속도-스케일**(저속 bp1=75Nm→고속 125Nm),
+   m/s 단위, rate −0.014/+0.004 고정, **steering_error/blinker/grip 없음**. i6n = 2-bp(shelf 없음),
+   error_mult ceiling boost + blinker yield + Phase 9 grip-band + error rate_up. 업스트림 고유 2개 모두
+   부적합: **(a) SHELF = i6n Phase 10에서 전라우트 A/B로 net-negative 기각필. (b) 속도-스케일 bp =
+   저속 bp1=75Nm가 i6n 컬럼-토크 오프셋(+90~180Nm hands-off)에 걸려 저속 hands-off authority 헛감소
+   → i6n Phase 9 grip-state 게이팅이 센서오프셋에 안 걸리는 올바른 축.** 기능상 i6n이 superset.
+
+**권고**: 업스트림 sync 불필요. 단 차종 포팅(신규 핑거프린트)·comma 인프라 변경이 필요해지면 그때
+opendbc resync 별도 검토. 업스트림=단순화 방향 / i6n=차-특화 정교화 — i6n 센서오프셋·실차검증 감안 시
+i6n 방향 유지가 맞음.
+
 ## 1.B. A/B 비교 결론
 
 | 항목 | 5479ecc baseline | d83c3b5 6F2-A | 판정 |
