@@ -89,7 +89,7 @@ class SelfdriveD(CruiseHelper):
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
-    ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP']
+    ignore = self.sensor_packets + self.gps_packets + ['alertDebug'] + ['modelDataV2SP']
     if SIMULATION:
       ignore += ['driverCameraState', 'managerState']
     if REPLAY:
@@ -99,7 +99,7 @@ class SelfdriveD(CruiseHelper):
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'livePose', 'liveDelay',
                                    'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'audioFeedback',
-                                   'lateralManeuverPlan', 'modelDataV2SP', 'longitudinalPlanSP'] + \
+                                   'modelDataV2SP', 'longitudinalPlanSP'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
                                   ignore_alive=ignore, ignore_avg_freq=ignore,
                                   ignore_valid=ignore, frequency=int(1/DT_CTRL))
@@ -120,6 +120,7 @@ class SelfdriveD(CruiseHelper):
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
     self.events = Events()
+    self.curve_advisory_active = False
 
     self.initialized = False
     self.enabled = False
@@ -183,10 +184,7 @@ class SelfdriveD(CruiseHelper):
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
 
-    if self.sm.recv_frame['lateralManeuverPlan'] > 0:
-      self.events.add(EventName.lateralManeuver)
-      self.startup_event = None
-    elif self.sm.recv_frame['alertDebug'] > 0:
+    if self.sm.recv_frame['alertDebug'] > 0:
       self.events.add(EventName.longitudinalManeuver)
       self.startup_event = None
 
@@ -206,6 +204,33 @@ class SelfdriveD(CruiseHelper):
 
     if self.sm.updated['audioFeedback']:
       self.events.add(EventName.audioFeedback)
+
+    # CCNC angle-control silent-failure alerts surfaced by the carcontroller.
+    # These trip when op authority is degraded but no EPS hardware fault is
+    # reported (so the standard steerFault* events would not fire). Each is
+    # already debounced upstream by frame-counter hysteresis.
+    co = self.sm['carOutput']
+    if co.vmLimitTripped:
+      self.events.add(EventName.lateralAccelLimit)
+    if co.steerAngleLimitTripped:
+      self.events.add(EventName.steerAngleLimit)
+    if co.cameraDataStaleTripped:
+      self.events.add(EventName.cameraDataStale)
+
+    # curveSpeedAdvisory: silent visual heads-up when predicted v²·κ at 1.5 s
+    # lookahead approaches the angle-control envelope. Hysteresis 0.65/0.85
+    # prevents flicker around the threshold and the advisory is suppressed
+    # while vmLimitTripped is already firing (the Tight Curve alert handles
+    # that case). Ratio is published by controlsd; non-angle cars get 0.
+    ratio = self.sm['controlsState'].predictedLatAccelRatio
+    if co.vmLimitTripped:
+      self.curve_advisory_active = False
+    elif ratio > 0.85:
+      self.curve_advisory_active = True
+    elif ratio < 0.65:
+      self.curve_advisory_active = False
+    if self.curve_advisory_active:
+      self.events.add(EventName.curveSpeedAdvisory)
 
     # Don't add any more events while in dashcam mode
     if self.CP.passive:
@@ -271,6 +296,14 @@ class SelfdriveD(CruiseHelper):
         self.events.add(EventName.calibrationInvalid)
 
     # Lane departure warning
+    # The IsLdwEnabled toggle gates the user-facing warning for BOTH the
+    # manual-driving (desirePrediction) and the op-active (ldw.py 6g-4) paths.
+    # Phase 6h-6 forced the alert on whenever lateral was active ("flags fired
+    # but no event on 0x4a seg31"), but that misdiagnosis bypassed the toggle:
+    # on a device with the toggle OFF the warning still surfaced during every
+    # op-active drift (confirmed on ccnc-drivelog 0x50/0x51). Respect the toggle
+    # here; the camera-ECU lane-departure steering suppression in controlsd
+    # (a separate, always-on safety behaviour) is unaffected.
     if self.is_ldw_enabled and self.sm.valid['driverAssistance']:
       if self.sm['driverAssistance'].leftLaneDeparture or self.sm['driverAssistance'].rightLaneDeparture:
         self.events.add(EventName.ldw)
@@ -403,6 +436,8 @@ class SelfdriveD(CruiseHelper):
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
       cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      if self.mads.enabled:
+        cruise_mismatch = False
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)

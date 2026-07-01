@@ -2,9 +2,9 @@ import re
 from dataclasses import dataclass, field
 from enum import IntFlag
 
-from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds, ACCELERATION_DUE_TO_GRAVITY
-from opendbc.car.lateral import AngleSteeringLimits, ISO_LATERAL_ACCEL
+from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds
 from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.lateral import AngleSteeringLimits
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarHarness, CarDocs, CarParts, SupportType
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
@@ -13,34 +13,190 @@ from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 Ecu = CarParams.Ecu
 
-# Add extra tolerance for average banked road since safety doesn't have the roll
-AVERAGE_ROAD_ROLL = 0.06  # ~0 degrees, 0% superelevation. higher actual roll lowers lateral acceleration (it's 0 for HKG to remove margin)
-
 
 class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s
   ACCEL_MAX = 2.0 # m/s
 
+  # CCNC angle-control platform: VM-based jerk/accel limits.
+  # The path activates automatically for any Hyundai/Kia car whose `flags`
+  # contains BOTH `HyundaiFlags.CCNC` AND `HyundaiFlags.CANFD_LKA_STEERING_ALT`
+  # — Ioniq 6 N 2026 is the first member. Limits below mirror panda safety
+  # (`HYUNDAI_CANFD_ANGLE_STEERING_LIMITS` in hyundai_canfd.h).
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    # Steering angle limits based on observed stock ADAS behavior:
-    # - LKAS max requested angle is 176.7°, but no fault occurs if higher values are requested.
-    # - LFA max stock value is 119.9°.
-    # The ADAS ECU clamps LKAS commands above 176.7° down to 176.7°,
-    # and clamps LFA commands above 119.9° down to 119.9°.
-    360,  # degrees (safe upper bound for command, allowing some margin)
-    # HKG uses a vehicle model instead, check carcontroller.py for details
+    360,
     ([], []),
     ([], []),
-    MAX_LATERAL_ACCEL=(ISO_LATERAL_ACCEL + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^2
-    MAX_LATERAL_JERK=(3.0 + (ACCELERATION_DUE_TO_GRAVITY * AVERAGE_ROAD_ROLL)),  # ~3.6 m/s^3,
-    MAX_ANGLE_RATE=5  # comfort rate limit for angle commands, in degrees per frame.
+    MAX_LATERAL_ACCEL=3.0 + (9.81 * 0.06),  # ~3.59 m/s² (matches panda safety)
+    MAX_LATERAL_JERK=3.0 + (9.81 * 0.06),   # ~3.59 m/s³ (matches panda safety)
+    MAX_ANGLE_RATE=5.0,                       # deg/frame — sunnypilot default
   )
 
-  # More torque optimization
-  # The torque is calculated based on the curvature of the road and the speed of the car and it's a percentage of the maximum torque.
+  # Low-speed angle smoothing (sp_smooth_angle): EMA on commanded angle where
+  # alpha is interpolated from v_ego_raw. Strong smoothing at low speed
+  # (alpha=0.05), no smoothing at/above 18 m/s. Mirrors sunnypilot reference.
   SMOOTHING_ANGLE_VEGO_MATRIX = [0, 8.5, 11, 13.8, 18]
-  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.1, 0.3, 0.6, 1]
+  # Phase 6h-1: jitter absorption moved upstream into controlsd's speed-dependent
+  # LP (+matched lead). The angle-domain EMA shrinks to a light linear filter:
+  # re-sim on real 6g-1 desired-angle streams (0x40/0x42, op-active <40 km/h)
+  # measured |out-in| p95 0.748->0.302 deg (-60%), |bias| 0.081->0.029 (-64%),
+  # at only +4% 2-8 Hz RMS (recovered 3.2x upstream). Kill switch: restore
+  # [0.05, 0.05, 0.15, 0.4, 1] / 0.4 / 1.0(LO)/4.0(HI).
+  # (history: Phase 6c-3 heavy matrix [0.05, 0.05, 0.15, 0.4, 1] absorbed model
+  # curvature jitter measured on drivelog 0000001f at 2.0-2.5 deg/frame.)
+  SMOOTHING_ANGLE_ALPHA_MATRIX = [0.3, 0.3, 0.5, 0.7, 1]
   SMOOTHING_ANGLE_MAX_VEGO = SMOOTHING_ANGLE_VEGO_MATRIX[-1]
+  # Phase 6g-1: make the EMA slew/maneuver-aware so it suppresses jitter WITHOUT
+  # eating corner-entry response. ccnc-drivelog 0x40 seg5 (KST 07:27:43-49, ~40 km/h)
+  # showed op going near-straight (commanded ~0.002 1/m vs lane ~0.0038) into a
+  # left bend, running wide to the right line (clearance 1.4 m -> 0.77 m) until the
+  # driver grabbed (+40°, ~1500 Nm). Root cause: this EMA (alpha 0.05-0.16 at city
+  # speed) lags a building corner command with no lead compensation.
+  # Fix: release the EMA toward alpha=1 as the gap |desired - apply_last| grows past
+  # a jitter floor, so small (<=LO) oscillations keep the heavy low-speed smoothing
+  # (저속 떨림 absorption preserved) while a real corner (>=HI) passes through.
+  # Kill switch: set SMOOTHING_ANGLE_RELEASE_HI_DEG huge -> pure speed-EMA (pre-6g-1).
+  SMOOTHING_ANGLE_RELEASE_LO_DEG = 1.0   # |gap| at/below this = jitter, keep speed-alpha
+  SMOOTHING_ANGLE_RELEASE_HI_DEG = 1.0e6  # Phase 6h-1: release OFF. With alpha>=0.3
+                                          # linear, the gap-release nonlinearity (the
+                                          # alpha 0.05->1, ~14x gain jump that was the
+                                          # transfer mechanism of the 0x42 seg4 "휙")
+                                          # is obsolete. Re-enable: 4.0 (= 6g-2).
+  # Phase 6g-2: the 6g-1 release went all the way to alpha=1, so a command overshoot
+  # (0x42 seg4 S-curve: desiredCurvature spiked 2.6x, wheel slammed to -35°, driver
+  # grabbed) hit the wheel undamped. Cap the released alpha so a fast catch-up keeps
+  # ~30% damping (firm, not a "휙"). Kill switch: RELEASE_MAX = 1.0 (= 6g-1).
+  SMOOTHING_ANGLE_RELEASE_MAX = 0.7
+  # Phase 6g-2 introduced a low-speed micro-jitter deadband at 0.4 deg.
+  # Phase 6h-1: re-sim on the deployed 6g-1 streams measured the 0.4 deg deadband
+  # at +11% p95 tracking error / +44% bias for ZERO smoothness gain (2-8 Hz RMS
+  # unchanged) — the dither absorption now lives upstream in controlsd tau(v).
+  # Shrink to the CAN LSB (0.1 deg). Kill switch: 0.0 (off) / 0.4 (= 6g-2).
+  SMOOTHING_ANGLE_DEADBAND_DEG = 0.1
+  SMOOTHING_ANGLE_DEADBAND_MAX_VEGO = 11.0  # m/s (~40 km/h); deadband only below this
+
+  # Phase 5: driver-override thresholds for CANFD_LKA_STEERING_ALT angle-control.
+  # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°
+  # applies only 60-80 Nm torque, never reaching the old fixed 150 Nm
+  # FULL_OVERRIDE threshold → MADS kept fighting back (user-reported "tic
+  # tic"). Fix: speed-dependent full-override torque.
+  #   - below LOW_V_SPEED  (~29 km/h): FULL at 60 Nm  (responsive at low speed)
+  #   - above HIGH_V_SPEED (~54 km/h): FULL at 120 Nm (stable at high speed)
+  #   - between: linear interpolation
+  # DEADZONE also reduced 30 → 25 Nm for earlier onset of override ramp.
+  DRIVER_TORQUE_DEADZONE = 25.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V  = 60.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V = 120.0
+  DRIVER_TORQUE_LOW_V_SPEED  = 8.0    # m/s ≈ 29 km/h
+  DRIVER_TORQUE_HIGH_V_SPEED = 15.0   # m/s ≈ 54 km/h
+
+  # Angle-control MDPS (Ioniq 6 N CCNC + CANFD_LKA_STEERING_ALT) reports
+  # STEERING_COL_TORQUE that INCLUDES EPS reaction force during angle tracking,
+  # not just driver input like torque-control cars. Route 0x49 evidence on
+  # ~210k latActive frames:
+  #   - Light hand grip (steeringPressed=False): p50=36, p75=92, p90=184 Nm
+  #   - Active driver steering (steeringPressed=True): p50=381, p75=488, p90=619 Nm
+  #
+  # 2026-05-12 (drivelog 0000000d, 22,309 op-active samples): the prior
+  # thresholds (DEADZONE=200, FULL=450/600) made override_factor sit at
+  # ~0.20 even at 250 Nm — desired_angle_deg blend (carcontroller.py:746)
+  # only pulled 20% toward the wheel, and op kept commanding the lane-keep
+  # angle. Result: 32.9% of latActive frames had op commanding >1° opposite
+  # to the driver's torque direction; 78.2% under blinker; 69.8% under
+  # <8 m/s. ACIGain (lowered in v2/v3) reduced MDPS authority, but the
+  # commanded angle itself was still toward the lane — the residual
+  # fraction reached the wheel as resistance.
+  #
+  # Revised thresholds tighten the override ramp so the driver-intent
+  # zone blends desired_angle_deg linearly toward the actual wheel:
+  #   - DEADZONE 200 -> 100: starts blending just above light-grip p75
+  #     (92). Light grip (<100 Nm) still gets override_factor=0 —
+  #     preserves hands-off stability for cruising.
+  #   - FULL_OVERRIDE_LOW_V  450 -> 200: full wheel-tracking at active-
+  #     steering p25 (250) range; reaches 0.50 by 150 Nm.
+  #   - FULL_OVERRIDE_HIGH_V 600 -> 350: same shape at highway, where
+  #     EPS reaction adds more to the reading.
+  # DRIVER_TORQUE_LOW_V_SPEED=8.0 / HIGH_V_SPEED=15.0 unchanged.
+  #
+  # 2026-05-12 (Phase 6 driver-torque retune): drivelog 0000000f+10
+  # showed only a 51% snap-entry rate in the 150-200 Nm band — the
+  # transition zone where the driver clearly intends to override but
+  # the snap-entry trip (190 Nm at the time) sat just above. Lowered
+  # FULL_OVERRIDE_LOW_V 200→180 so the snap trip falls to 172 Nm,
+  # still safely above the light-grip p90 (184 Nm) and absorbed by
+  # the Phase 5 30 ms steer_torque LPF against ±5 Nm CAN noise.
+  DRIVER_TORQUE_DEADZONE_ANGLE              = 100.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_ANGLE   = 180.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_ANGLE  = 350.0
+  # Phase 5b (B2) blinker variant: driver light grip (~92 Nm light-grip
+  # p90, measured in drivelog 0000000e where the non-blinker 100 Nm
+  # deadzone left override_factor=0 during 50% of lane-change frames)
+  # should immediately start the override blend. Lowered deadzone +
+  # full-override thresholds keep the blend curve meaningful in the
+  # light-grip range so op yields the wheel as soon as the driver
+  # signals intent. Combined with the Phase 5d (A2) blinker ceiling
+  # cap of 0.45 in compute_torque_reduction_gain, both the command-
+  # and authority-side of the actuator stop pulling against the driver.
+  DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 70.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
+
+  # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
+  # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a
+  # command-side wheel-blend. §1.K element-isolation proved the old grip-blend was
+  # the SOLE input->TX 2-8 Hz injector (it mixed the noisy measured wheel into the
+  # angle command and false-fired on the +90..180 Nm column-torque sensor offset);
+  # authority reduction injects nothing — it just lets the driver win, and op
+  # keeps commanding its own clean trajectory. Gated on the DEBOUNCED
+  # steeringPressed flag (not the offset-corrupted torque) so hands-off ACIGain is
+  # the legacy curve (full authority + §5c drift recovery); only real grip drops
+  # authority to the floor over [deadzone, GRIP_FULL] to provide the yield.
+  # Safety-neutral: only reshapes the op-side ACIGain; panda's VM angle-limit +
+  # ACIGain bound are unchanged.
+  # (Pruned dead experiments — restore from git / POST_6F2_AUDIT if ever needed:
+  #  Phase 8 column-torque offset estimation, ineffective on real CAN §1.J;
+  #  Phase 8b grip-blend wheel-LP, superseded by this; Phase 10 sunnypilot shelf,
+  #  net-negative under our pressed-gate §1.O.)
+  ACIGAIN_GRIP_FULL_NM = 260.0    # torque (when pressed) at which authority hits the floor
+  ACIGAIN_GRIP_FLOOR   = 0.10     # min ACIGain under real grip (legacy 0.19 @ 350 Nm)
+
+  # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
+  # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
+  # self-centering fight: at |wheel| 190-200° with 307-348 Nm grip,
+  # mean B1 blend reached 0.88-0.94 (op committed to wheel-follow)
+  # while the caster naturally returned the wheel — MDPS therefore
+  # held an active torque target on every new frame. Driving STEER_REQ
+  # to 0 in this regime lets the wheel coast freely on the caster.
+  #   - ENTER_WHEEL_DEG = 40°: clearly above gentle-curve wheel range
+  #     (highway typically <30°, lane changes <20°), so the latch
+  #     never trips during ordinary lane-keeping.
+  #   - ENTER_TORQUE_NM = 60: above the light-grip p90 (~92 Nm) so
+  #     resting hands do not arm the latch, but well below the
+  #     active-driver p25 (~250 Nm) range.
+  #   - EXIT_TORQUE_NM  = 30: 30 Nm hysteresis band; sits comfortably
+  #     above the ±5 Nm CAN noise floor so noise does not chatter.
+  ANGLE_PASSIVE_ENTER_WHEEL_DEG = 40.0
+  ANGLE_PASSIVE_ENTER_TORQUE_NM = 60.0
+  ANGLE_PASSIVE_EXIT_TORQUE_NM  = 30.0
+  # Phase 6f-3 low-speed intent-disagreement OR-arm. The 6d-1 wheel-angle
+  # gate (>= 40°) misses the case where the driver pushes hard while the
+  # wheel is still near-straight and op commands the opposite direction.
+  # ccnc-drivelog routes 0x3c-0x3f (9899a611, 152 min): 137 sign-disagree
+  # clusters over 13,285 frames covering 16-28% of low-speed op-active
+  # time, with ~55% of clusters at |wheel|<10°. OR-arm catches them while
+  # reusing the existing 5-frame sustain and torque-only exit.
+  INTENT_DISAGREE_VEGO_MS    = 30.0 / 3.6   # ≤30 km/h
+  INTENT_DISAGREE_TQ_MIN_NM  = 30.0          # matches ANGLE_PASSIVE_EXIT_TORQUE_NM
+  INTENT_DISAGREE_DELTA_DEG  = 5.0           # |apply_angle_last - wheel|
+  # Phase 6e-1 transient-blip filter. The Phase 6d entry conjunction
+  # is met by sub-50 ms wheel spikes (road bumps, sensor noise) when
+  # combined with a driver's reactive grip — once latched, the
+  # torque-only exit holds STEER_REQ=0 across the entire reactive
+  # window even though no genuine driver-active turn occurred.
+  # Require 5 consecutive frames (50 ms) of entry conjunction before
+  # latching, mirroring the Phase 5e VM_REJECT_FORCE_PASSIVE_FRAMES
+  # 1-counter pattern. Exit and stay-zone behaviour are unchanged.
+  ANGLE_PASSIVE_MIN_ENTER_FRAMES = 5
 
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
@@ -58,9 +214,9 @@ class CarControllerParams:
       self.STEER_THRESHOLD = 250
       self.STEER_DELTA_UP = 2
       self.STEER_DELTA_DOWN = 3
-
-    if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-       self.STEER_THRESHOLD = 175
+      if CP.flags & HyundaiFlags.CCNC:
+        self.STEER_STEP = 1  # 100 Hz — matches panda safety frequency
+        self.STEER_THRESHOLD = 350  # angle-control: EPS reaction inflates torque
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
@@ -96,7 +252,7 @@ class HyundaiSafetyFlags(IntFlag):
   CANFD_LKA_STEERING_ALT = 128
   FCEV_GAS = 256
   ALT_LIMITS_2 = 512
-  CANFD_ANGLE_STEERING = 1024
+  CCNC = 1024
 
 
 class HyundaiFlags(IntFlag):
@@ -157,7 +313,10 @@ class HyundaiFlags(IntFlag):
 
   ALT_LIMITS_2 = 2 ** 26
 
-  CANFD_ANGLE_STEERING = 2 ** 27
+  CCNC = 2 ** 27
+
+  # These cars use different CAN addresses for doors, seatbelts, and blinkers
+  CANFD_ALT_DOORS_BLINKERS = 2 ** 28
 
 
 @dataclass
@@ -295,6 +454,16 @@ class CAR(Platforms):
     CarSpecs(mass=1491, wheelbase=2.6, steerRatio=13.42, tireStiffnessFactor=0.385),
     flags=HyundaiFlags.CAMERA_SCC | HyundaiFlags.ALT_LIMITS_2,
   )
+  HYUNDAI_KONA_2ND_GEN = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Kona (without HDA II) 2024-25", car_parts=CarParts.common([CarHarness.hyundai_l]))],
+    CarSpecs(mass=1590, wheelbase=2.66, steerRatio=13.6, tireStiffnessFactor=0.385),
+    flags=HyundaiFlags.CCNC,
+  )
+  HYUNDAI_KONA_HEV_2ND_GEN = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Kona Hybrid (without HDA II) 2024", car_parts=CarParts.common([CarHarness.hyundai_l]))],
+    CarSpecs(mass=1590, wheelbase=2.66, steerRatio=13.6, tireStiffnessFactor=0.385),
+    flags=HyundaiFlags.CCNC,
+  )
   HYUNDAI_KONA_EV = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Kona Electric 2018-21", car_parts=CarParts.common([CarHarness.hyundai_g]))],
     CarSpecs(mass=1685, wheelbase=2.6, steerRatio=13.42, tireStiffnessFactor=0.385),
@@ -306,10 +475,13 @@ class CAR(Platforms):
     flags=HyundaiFlags.CAMERA_SCC | HyundaiFlags.EV | HyundaiFlags.ALT_LIMITS,
   )
   HYUNDAI_KONA_EV_2ND_GEN = HyundaiCanFDPlatformConfig(
-    [HyundaiCarDocs("Hyundai Kona Electric (with HDA II, Korea only) 2023", video="https://www.youtube.com/watch?v=U2fOCmcQ8hw",
-                    car_parts=CarParts.common([CarHarness.hyundai_r]))],
+    [
+      HyundaiCarDocs("Hyundai Kona Electric (with HDA II, Korea only) 2023", video="https://www.youtube.com/watch?v=U2fOCmcQ8hw",
+                    car_parts=CarParts.common([CarHarness.hyundai_r])),
+      HyundaiCarDocs("Hyundai Kona Electric (without HDA II) 2024", car_parts=CarParts.common([CarHarness.hyundai_a])),
+    ],
     CarSpecs(mass=1740, wheelbase=2.66, steerRatio=13.6, tireStiffnessFactor=0.385),
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_NO_RADAR_DISABLE,
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_NO_RADAR_DISABLE | HyundaiFlags.CCNC,
   )
   HYUNDAI_KONA_HEV = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Kona Hybrid 2020", car_parts=CarParts.common([CarHarness.hyundai_i]))],  # TODO: check packages,
@@ -343,19 +515,16 @@ class CAR(Platforms):
     HYUNDAI_SANTA_FE.specs,
     flags=HyundaiFlags.MANDO_RADAR | HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID,
   )
-  HYUNDAI_SANTA_FE_HEV_5TH_GEN = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Hyundai Santa Fe Hybrid (with HDA II & LFA2) 2024-25", "Highway Driving Assist II & Lane Follow Assist 2",
-                     car_parts=CarParts.common([CarHarness.hyundai_p])),
-    ],
-    CarSpecs(mass=2035, wheelbase=2.81, steerRatio=13.72),
-    flags=HyundaiFlags.CANFD_ANGLE_STEERING,
-  )
   HYUNDAI_SONATA = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Sonata 2020-23", "All", video="https://www.youtube.com/watch?v=ix63r9kE3Fw",
                    car_parts=CarParts.common([CarHarness.hyundai_a]))],
     CarSpecs(mass=1513, wheelbase=2.84, steerRatio=13.27 * 1.15, tireStiffnessFactor=0.65),  # 15% higher at the center seems reasonable
     flags=HyundaiFlags.MANDO_RADAR | HyundaiFlags.CHECKSUM_CRC8,
+  )
+  HYUNDAI_SONATA_2024 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Sonata (without HDA II) 2024-25", car_parts=CarParts.common([CarHarness.hyundai_a]))],
+    CarSpecs(mass=1556, wheelbase=2.84, steerRatio=12.81),
+    flags=HyundaiFlags.CCNC,
   )
   HYUNDAI_SONATA_LF = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Sonata 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
@@ -392,6 +561,11 @@ class CAR(Platforms):
     HYUNDAI_SONATA.specs,
     flags=HyundaiFlags.MANDO_RADAR | HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID,
   )
+  HYUNDAI_SONATA_HEV_2024 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Sonata Hybrid (without HDA II) 2024-25", car_parts=CarParts.common([CarHarness.hyundai_a]))],
+    CarSpecs(mass=1616, wheelbase=2.84, steerRatio=13.27),
+    flags=HyundaiFlags.CCNC,
+  )
   HYUNDAI_IONIQ_5 = HyundaiCanFDPlatformConfig(
     [
       HyundaiCarDocs("Hyundai Ioniq 5 (Southeast Asia and Europe only) 2022-24", "All", car_parts=CarParts.common([CarHarness.hyundai_q])),
@@ -401,27 +575,21 @@ class CAR(Platforms):
     CarSpecs(mass=1948, wheelbase=2.97, steerRatio=14.26, tireStiffnessFactor=0.65),
     flags=HyundaiFlags.EV,
   )
-  HYUNDAI_IONIQ_5_PE = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Hyundai Ioniq 5 PE (with HDA II & LFA2) 2025-26", "Highway Driving Assist II & Lane Follow Assist 2",
-                     car_parts=CarParts.common([CarHarness.hyundai_q]))
-    ],
-    HYUNDAI_IONIQ_5.specs,
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
+  HYUNDAI_IONIQ_5_N = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Ioniq 5 N (with HDA II) 2024", car_parts=CarParts.common([CarHarness.hyundai_s]))],
+    CarSpecs(mass=2205, wheelbase=3.00, steerRatio=14.26, tireStiffnessFactor=1.3),
+    flags=HyundaiFlags.EV | HyundaiFlags.CCNC,
   )
   HYUNDAI_IONIQ_6 = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Ioniq 6 (with HDA II) 2023-24", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_p]))],
     HYUNDAI_IONIQ_5.specs,
     flags=HyundaiFlags.EV | HyundaiFlags.CANFD_NO_RADAR_DISABLE,
   )
-  HYUNDAI_IONIQ_9 = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Hyundai Ioniq 9 (with HDA II & LFA2) 2025-26", "Highway Driving Assist II & Lane Follow Assist 2",
-                     car_parts=CarParts.common([CarHarness.hyundai_m]))
-    ],
-    CarSpecs(mass=2700, wheelbase=3.13, steerRatio=16.02),
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
-  )
+  HYUNDAI_IONIQ_6_N = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Ioniq 6 N (with HDA II) 2026", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_s]))],
+    CarSpecs(mass=2175, wheelbase=2.965, steerRatio=14.96, tireStiffnessFactor=1.15),
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_NO_RADAR_DISABLE | HyundaiFlags.CCNC | HyundaiFlags.CANFD_ALT_BUTTONS | HyundaiFlags.CANFD_ALT_DOORS_BLINKERS,
+  ) 
   HYUNDAI_TUCSON_4TH_GEN = HyundaiCanFDPlatformConfig(
     [
       HyundaiCarDocs("Hyundai Tucson 2022", car_parts=CarParts.common([CarHarness.hyundai_n])),
@@ -431,10 +599,25 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=1630, wheelbase=2.756, steerRatio=13.7, tireStiffnessFactor=0.385),
   )
+  HYUNDAI_TUCSON_2025 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Tucson (without HDA II) 2025-26", car_parts=CarParts.common([CarHarness.hyundai_n]))],
+    CarSpecs(mass=1630, wheelbase=2.756, steerRatio=13.7, tireStiffnessFactor=0.385),
+    flags=HyundaiFlags.CCNC,
+  )
+  HYUNDAI_TUCSON_HEV_2025 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Tucson Hybrid (without HDA II) 2025", car_parts=CarParts.common([CarHarness.hyundai_n]))],
+    CarSpecs(mass=1630, wheelbase=2.756, steerRatio=13.7, tireStiffnessFactor=0.385),
+    flags=HyundaiFlags.CCNC,
+  )
   HYUNDAI_SANTA_CRUZ_1ST_GEN = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Santa Cruz 2022-24", car_parts=CarParts.common([CarHarness.hyundai_n]))],
     # weight from Limited trim - the only supported trim, steering ratio according to Hyundai News https://www.hyundainews.com/assets/documents/original/48035-2022SantaCruzProductGuideSpecsv2081521.pdf
     CarSpecs(mass=1870, wheelbase=3, steerRatio=14.2),
+  )
+  HYUNDAI_SANTA_CRUZ_2025 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Hyundai Santa Cruz (without HDA II) 2025", car_parts=CarParts.common([CarHarness.hyundai_n]))],
+    CarSpecs(mass=1920, wheelbase=3, steerRatio=14.2),
+    flags=HyundaiFlags.CCNC,
   )
   HYUNDAI_CUSTIN_1ST_GEN = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Custin 2023", "All", car_parts=CarParts.common([CarHarness.hyundai_k]))],
@@ -450,10 +633,23 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=2878 * CV.LB_TO_KG, wheelbase=2.8, steerRatio=13.75, tireStiffnessFactor=0.5)
   )
+  KIA_K4_2025 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Kia K4 (without HDA II) 2025", car_parts=CarParts.common([CarHarness.hyundai_a])),
+      HyundaiCarDocs("Kia K4 (with HDA II) 2025", car_parts=CarParts.common([CarHarness.hyundai_r])),
+    ],
+    CarSpecs(mass=2987 * CV.LB_TO_KG, wheelbase=2.72, steerRatio=13.4),
+    flags=HyundaiFlags.CCNC,
+  )
   KIA_K5_2021 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Kia K5 2021-24", car_parts=CarParts.common([CarHarness.hyundai_a]))],
     CarSpecs(mass=3381 * CV.LB_TO_KG, wheelbase=2.85, steerRatio=13.27, tireStiffnessFactor=0.5),  # 2021 Kia K5 Steering Ratio (all trims)
     flags=HyundaiFlags.CHECKSUM_CRC8,
+  )
+  KIA_K5_2025 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Kia K5 (without HDA II) 2025", car_parts=CarParts.common([CarHarness.hyundai_m]))],
+    CarSpecs(mass=3230 * CV.LB_TO_KG, wheelbase=2.85, steerRatio=13.27),
+    flags=HyundaiFlags.CCNC,
   )
   KIA_K5_HEV_2020 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Kia K5 Hybrid 2020-22", car_parts=CarParts.common([CarHarness.hyundai_a]))],
@@ -482,7 +678,7 @@ class CAR(Platforms):
   KIA_NIRO_EV_2ND_GEN = HyundaiCanFDPlatformConfig(
     [
       HyundaiCarDocs("Kia Niro EV (without HDA II) 2023-25", "All", car_parts=CarParts.common([CarHarness.hyundai_a])),
-      HyundaiCarDocs("Kia Niro EV (with HDA II) 2024-25", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_r])),
+      HyundaiCarDocs("Kia Niro EV (with HDA II) 2025", "Highway Driving Assist II", car_parts=CarParts.common([CarHarness.hyundai_r])),
     ],
     KIA_NIRO_EV.specs,
     flags=HyundaiFlags.EV,
@@ -513,7 +709,7 @@ class CAR(Platforms):
     flags=HyundaiFlags.HYBRID,
   )
   KIA_NIRO_HEV_2ND_GEN = HyundaiCanFDPlatformConfig(
-    [HyundaiCarDocs("Kia Niro Hybrid 2023-24", car_parts=CarParts.common([CarHarness.hyundai_a]))],
+    [HyundaiCarDocs("Kia Niro Hybrid 2023", car_parts=CarParts.common([CarHarness.hyundai_a]))],
     KIA_NIRO_EV.specs,
   )
   KIA_OPTIMA_G4 = HyundaiPlatformConfig(
@@ -556,7 +752,6 @@ class CAR(Platforms):
       HyundaiCarDocs("Kia Sportage Hybrid 2026", car_parts=CarParts.common([CarHarness.hyundai_n])),
     ],
     CarSpecs(mass=1812, wheelbase=2.756, steerRatio=13.7),
-    flags=HyundaiFlags.CANFD_ANGLE_STEERING,
   )
   KIA_SORENTO = HyundaiPlatformConfig(
     [
@@ -571,6 +766,11 @@ class CAR(Platforms):
     [HyundaiCarDocs("Kia Sorento 2021-23", car_parts=CarParts.common([CarHarness.hyundai_k]))],
     CarSpecs(mass=3957 * CV.LB_TO_KG, wheelbase=2.81, steerRatio=13.5),  # average of the platforms
     flags=HyundaiFlags.RADAR_SCC,
+  )
+  KIA_SORENTO_2024 = HyundaiCanFDPlatformConfig(
+    [HyundaiCarDocs("Kia Sorento (without HDA II) 2024-25", car_parts=CarParts.common([CarHarness.hyundai_a]))],
+    CarSpecs(mass=3957 * CV.LB_TO_KG, wheelbase=2.81, steerRatio=13.5),
+    flags=HyundaiFlags.CCNC,
   )
   KIA_SORENTO_HEV_4TH_GEN = HyundaiCanFDPlatformConfig(
     [
@@ -602,20 +802,6 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=2055, wheelbase=2.9, steerRatio=16, tireStiffnessFactor=0.65),
     flags=HyundaiFlags.EV,
-  )
-  KIA_EV6_2025 = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Kia EV6 (with HDA I) 2025", "Highway Driving Assist I", car_parts=CarParts.common([CarHarness.hyundai_p]))
-    ],
-    CarSpecs(mass=2055, wheelbase=2.9, steerRatio=16, tireStiffnessFactor=0.65),
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
-  )
-  KIA_EV9 = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Kia EV9 2025-26", car_parts=CarParts.common([CarHarness.hyundai_r]))
-    ],
-    CarSpecs(mass=2664, wheelbase=3.1, steerRatio=16),
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
   )
   KIA_CARNIVAL_4TH_GEN = HyundaiCanFDPlatformConfig(
     [
@@ -667,13 +853,6 @@ class CAR(Platforms):
     CarSpecs(mass=2260, wheelbase=2.87, steerRatio=17.1),
     flags=HyundaiFlags.EV,
   )
-  GENESIS_GV70_ELECTRIFIED_2ND_GEN = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Genesis GV70 Electrified 2026", "All", car_parts=CarParts.common([CarHarness.hyundai_m])),
-    ],
-    GENESIS_GV70_ELECTRIFIED_1ST_GEN.specs,
-    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
-  )
   GENESIS_G80 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Genesis G80 2018-19", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
     CarSpecs(mass=2060, wheelbase=3.01, steerRatio=16.5),
@@ -691,16 +870,6 @@ class CAR(Platforms):
     [HyundaiCarDocs("Genesis GV80 2023", "All", car_parts=CarParts.common([CarHarness.hyundai_m]))],
     CarSpecs(mass=2258, wheelbase=2.95, steerRatio=14.14),
     flags=HyundaiFlags.RADAR_SCC,
-  )
-  GENESIS_GV80_2025 = HyundaiCanFDPlatformConfig(
-    [
-      HyundaiCarDocs("Genesis GV80 (3.5T Prestige Trim, with HDA II & LFA2) 2025", "Highway Driving Assist II & Lane Follow Assist 2",
-                     car_parts=CarParts.common([CarHarness.hyundai_q])),
-      HyundaiCarDocs("Genesis GV80 Coupe (with HDA II & LFA2) 2025", "Highway Driving Assist II & Lane Follow Assist 2",
-                     car_parts=CarParts.common([CarHarness.hyundai_q])),
-    ],
-    GENESIS_GV80.specs,
-    flags=HyundaiFlags.CANFD_ANGLE_STEERING,
   )
 
   # port extensions
@@ -873,11 +1042,13 @@ FW_QUERY_CONFIG = FwQueryConfig(
       [HYUNDAI_VERSION_REQUEST_LONG],
       [HYUNDAI_VERSION_RESPONSE],
       bus=0,
+      auxiliary=True,
     ),
     Request(
       [HYUNDAI_VERSION_REQUEST_LONG],
       [HYUNDAI_VERSION_RESPONSE],
       bus=1,
+      auxiliary=True,
       obd_multiplexing=False,
     ),
 
@@ -887,6 +1058,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
       [HYUNDAI_ECU_MANUFACTURING_DATE],
       [HYUNDAI_VERSION_RESPONSE],
       bus=0,
+      auxiliary=True,
       logging=True,
     ),
 
@@ -895,12 +1067,14 @@ FW_QUERY_CONFIG = FwQueryConfig(
       [HYUNDAI_VERSION_REQUEST_ALT],
       [HYUNDAI_VERSION_RESPONSE],
       bus=0,
+      auxiliary=True,
       logging=True,
     ),
     Request(
       [HYUNDAI_VERSION_REQUEST_ALT],
       [HYUNDAI_VERSION_RESPONSE],
       bus=1,
+      auxiliary=True,
       logging=True,
       obd_multiplexing=False,
     ),
@@ -935,6 +1109,9 @@ CAN_GEARS = {
 }
 
 CANFD_CAR = CAR.with_flags(HyundaiFlags.CANFD)
+CANFD_RADAR_SCC_CAR = CAR.with_flags(HyundaiFlags.RADAR_SCC)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
+
+CANFD_UNSUPPORTED_LONGITUDINAL_CAR = CAR.with_flags(HyundaiFlags.CANFD_NO_RADAR_DISABLE)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
 
 CAMERA_SCC_CAR = CAR.with_flags(HyundaiFlags.CAMERA_SCC)
 
@@ -944,10 +1121,9 @@ EV_CAR = CAR.with_flags(HyundaiFlags.EV)
 
 LEGACY_SAFETY_MODE_CAR = CAR.with_flags(HyundaiFlags.LEGACY)
 
-UNSUPPORTED_LONGITUDINAL_CAR = {
-  "legacy": CAR.with_flags(HyundaiFlags.LEGACY),
-  "can": CAR.with_flags(HyundaiFlags.UNSUPPORTED_LONGITUDINAL),
-}
+# TODO: another PR with (HyundaiFlags.LEGACY | HyundaiFlags.UNSUPPORTED_LONGITUDINAL | HyundaiFlags.CAMERA_SCC |
+#       HyundaiFlags.CANFD_RADAR_SCC | HyundaiFlags.CANFD_NO_RADAR_DISABLE | )
+UNSUPPORTED_LONGITUDINAL_CAR = CAR.with_flags(HyundaiFlags.LEGACY) | CAR.with_flags(HyundaiFlags.UNSUPPORTED_LONGITUDINAL)
 
 # port extensions
 NON_SCC_CAR = CAR.with_sp_flags(HyundaiFlagsSP.NON_SCC)

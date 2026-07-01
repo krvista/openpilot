@@ -1,6 +1,8 @@
 from opendbc.car import Bus, get_safety_config, structs, uds
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, \
+                                                   CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
+                                                   UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
@@ -40,32 +42,38 @@ class CarInterface(CarInterfaceBase):
 
     if ret.flags & HyundaiFlags.CANFD:
       # Shared configuration for CAN-FD cars
-      ret.alphaLongitudinalAvailable = not (ret.flags & HyundaiFlags.CANFD_NO_RADAR_DISABLE)
+      ret.alphaLongitudinalAvailable = candidate not in CANFD_UNSUPPORTED_LONGITUDINAL_CAR
       if lka_steering and Ecu.adas not in [fw.ecu for fw in car_fw]:
         # this needs to be figured out for cars without an ADAS ECU
         ret.alphaLongitudinalAvailable = False
 
-      # no longitudinal for all lka_steering angle steering
-      if lka_steering and ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-        ret.alphaLongitudinalAvailable = False
-
-      ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN]
+      ret.enableBsm = 0x1e5 in fingerprint[CAN.ECAN]
 
       # Check if the car is hybrid. Only HEV/PHEV cars have 0xFA on E-CAN.
       if 0xFA in fingerprint[CAN.ECAN]:
         ret.flags |= HyundaiFlags.HYBRID.value
 
       if lka_steering:
-        # detect LKA steering
-        ret.flags |= HyundaiFlags.CANFD_LKA_STEERING.value
-        if 0x110 in fingerprint[CAN.CAM]:
-          ret.flags |= HyundaiFlags.CANFD_LKA_STEERING_ALT.value
+          ret.flags |= HyundaiFlags.CANFD_LKA_STEERING.value
+          # HDA2-ALT + CCNC angle-control platform auto-detection:
+          # presence of LKAS_ALT (0x110) on the camera bus indicates the
+          # ADAS architecture that commands MDPS via ADAS_StrAnglReqVal.
+          # Combined with HyundaiFlags.CCNC from the car's static config
+          # in values.py, this auto-enables angle-based steering, rate
+          # limiter, hysteresis, camera-ref blend, low-speed camera
+          # passthrough, ACI gain policy, and op-only alert suppression
+          # — no per-car code is required; future 2025+ Hyundai/Kia/
+          # Genesis cars sharing this ADAS architecture inherit all
+          # behaviour automatically via this fingerprint-driven flag.
+          if 0x110 in fingerprint[CAN.CAM]:
+              ret.flags |= HyundaiFlags.CANFD_LKA_STEERING_ALT.value
       else:
-        # no LKA steering
-        if 0x1cf not in fingerprint[CAN.ECAN]:
+          if not ret.flags & HyundaiFlags.RADAR_SCC:
+              ret.flags |= HyundaiFlags.CANFD_CAMERA_SCC.value
+      
+      # CANFD_ALT_BUTTONS detection applies to both LKA and non-LKA variants.
+      if 0x1cf not in fingerprint[CAN.ECAN]:
           ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
-        if not ret.flags & HyundaiFlags.RADAR_SCC:
-          ret.flags |= HyundaiFlags.CANFD_CAMERA_SCC.value
 
       # Some LKA steering cars have alternative messages for gear checks
       # ICE cars do not have 0x130; GEARS message on 0x40 or 0x70 instead
@@ -88,13 +96,23 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ALT_BUTTONS.value
       if ret.flags & HyundaiFlags.CANFD_CAMERA_SCC:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
-      if ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-        ret.steerControlType = structs.CarParams.SteerControlType.angle
-        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ANGLE_STEERING.value
+      # CCNC safety flag: required for panda to allow 0x161/0x162 TX on
+      # any member of the HDA2-ALT + CCNC angle-control platform (Ioniq
+      # 6 N and future 2025+ Hyundai/Kia/Genesis cars that share the
+      # CCNC | CANFD_LKA_STEERING_ALT flag combo), so we can suppress
+      # spurious hands-on / HDP takeover alerts while openpilot steers.
+      # Note: on HDA2-ALT the 0x161/0x162 publisher is native on bus 1
+      # (not camera-forwarded), so panda cannot block the stock source;
+      # suppression is best-effort (see c6a33de for the safety-side
+      # check_relay=false requirement on this platform).
+      if ret.flags & HyundaiFlags.CCNC and (
+        not (ret.flags & HyundaiFlags.CANFD_LKA_STEERING) or (ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT)
+      ):
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CCNC.value
 
     else:
       # Shared configuration for non CAN-FD cars
-      ret.alphaLongitudinalAvailable = not (ret.flags & (HyundaiFlags.LEGACY | HyundaiFlags.UNSUPPORTED_LONGITUDINAL))
+      ret.alphaLongitudinalAvailable = candidate not in UNSUPPORTED_LONGITUDINAL_CAR
       ret.enableBsm = 0x58b in fingerprint[0]
 
       # Send LFA message on cars with HDA
@@ -124,7 +142,16 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.1
     ret.steerLimitTimer = 0.4
 
-    if not (ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING):
+    # HDA2-ALT + CCNC angle-control platform (Ioniq 6 N 2026 and future
+    # 2025+ Hyundai/Kia/Genesis cars with CCNC | CANFD_LKA_STEERING_ALT)
+    # uses angle-based control via LKAS_ALT's ADAS_StrAnglReqVal field.
+    # LatControlAngle provides live steerRatio, angleOffsetDeg, and roll
+    # compensation from liveParameters, which are critical for accurate
+    # angle commands.
+    if ret.flags & HyundaiFlags.CCNC and ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+      ret.steerControlType = structs.CarParams.SteerControlType.angle
+      ret.minSteerSpeed = 20.0 / 3.6
+    else:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     if ret.flags & HyundaiFlags.ALT_LIMITS:
