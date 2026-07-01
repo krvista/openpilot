@@ -205,32 +205,15 @@ class SelfdriveD(CruiseHelper):
     if self.sm.updated['audioFeedback']:
       self.events.add(EventName.audioFeedback)
 
-    # CCNC angle-control silent-failure alerts surfaced by the carcontroller.
-    # These trip when op authority is degraded but no EPS hardware fault is
-    # reported (so the standard steerFault* events would not fire). Each is
-    # already debounced upstream by frame-counter hysteresis.
-    co = self.sm['carOutput']
-    if co.vmLimitTripped:
-      self.events.add(EventName.lateralAccelLimit)
-    if co.steerAngleLimitTripped:
-      self.events.add(EventName.steerAngleLimit)
-    if co.cameraDataStaleTripped:
-      self.events.add(EventName.cameraDataStale)
-
-    # curveSpeedAdvisory: silent visual heads-up when predicted v²·κ at 1.5 s
-    # lookahead approaches the angle-control envelope. Hysteresis 0.65/0.85
-    # prevents flicker around the threshold and the advisory is suppressed
-    # while vmLimitTripped is already firing (the Tight Curve alert handles
-    # that case). Ratio is published by controlsd; non-angle cars get 0.
-    ratio = self.sm['controlsState'].predictedLatAccelRatio
-    if co.vmLimitTripped:
-      self.curve_advisory_active = False
-    elif ratio > 0.85:
-      self.curve_advisory_active = True
-    elif ratio < 0.65:
-      self.curve_advisory_active = False
-    if self.curve_advisory_active:
-      self.events.add(EventName.curveSpeedAdvisory)
+    # i6nv2: the CCNC angle-control silent-failure alerts (lateralAccelLimit /
+    # steerAngleLimit / cameraDataStale) and the curveSpeedAdvisory heads-up are
+    # i6n cereal extensions — they need EventName enum members + CarOutput
+    # *Tripped flags (opendbc car.capnp) + ControlsState.predictedLatAccelRatio,
+    # none of which exist in the 04-10 base cereal schema. Reading co.vmLimitTripped
+    # or EventName.lateralAccelLimit here would AttributeError-crash selfdrived on
+    # engage ("system unresponsive"). These are telemetry/advisory alerts only — the
+    # actual angle/lateral-accel limiting still happens in carcontroller + panda —
+    # so the block is disabled until i6nv2 carries i6n's cereal (needs a rebuild).
 
     # Don't add any more events while in dashcam mode
     if self.CP.passive:

@@ -495,7 +495,10 @@ class Controls(ControlsExt):
     cs.ufAccelCmd = float(self.LoC.pid.f)
     cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
-    cs.predictedLatAccelRatio = float(self.predicted_lat_accel_ratio)
+    # i6nv2: predictedLatAccelRatio is an i6n ControlsState extension absent from the
+    # 04-10 base cereal schema. Publishing it would AttributeError-crash controlsd on
+    # engage. The ratio is still computed internally; only the (telemetry-only) publish
+    # is dropped. curveSpeedAdvisory (its only consumer) is likewise disabled in selfdrived.
 
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
