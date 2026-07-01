@@ -1,0 +1,14 @@
+AddOption('--minimal',
+          action='store_false',
+          dest='extras',
+          default=True,
+          help='the minimum build. no tests, tools, etc.')
+
+env = Environment(
+  COMPILATIONDB_USE_ABSPATH=True,
+  tools=["default", "compilation_db"],
+)
+
+env.CompilationDatabase("compile_commands.json")
+
+SConscript('SConscript')
