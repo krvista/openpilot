@@ -178,6 +178,11 @@ def run_models(args, indices):
 
   manifest = []
   for idx in indices:
+    existing = list(out_dir.glob(f"{idx:03d}_*.zst"))
+    if existing:
+      print(f"  [skip] idx={idx} already done: {existing[0].name}")
+      manifest.append((idx, existing[0].stem, "skipped"))
+      continue
     ab = stage_model(params, idx)
     if ab is None:
       manifest.append((idx, None, "stage_failed"))
@@ -251,6 +256,9 @@ def main():
     import subprocess
     import sys
     for idx in indices:
+      if list(out_dir.glob(f"{idx:03d}_*.zst")):
+        print(f"\n===== model {idx}: already done, skipping =====", flush=True)
+        continue
       print(f"\n===== model {idx} (isolated subprocess) =====", flush=True)
       subprocess.run([sys.executable, os.path.abspath(__file__),
                       "--seg-dir", args.seg_dir, "--indices", str(idx),
