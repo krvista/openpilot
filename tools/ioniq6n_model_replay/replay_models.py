@@ -161,19 +161,13 @@ def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict, custo
   return [m for m in msgs if m.which() in ("modelV2", "drivingModelData")]
 
 
-def main():
-  ap = argparse.ArgumentParser()
-  ap.add_argument("--seg-dir", required=True, help="local segment dir with rlog.zst + fcamera.hevc + ecamera.hevc")
-  ap.add_argument("--indices", required=True, help="comma-separated bundle indices, e.g. 67,63,58,53")
-  ap.add_argument("--start", type=int, default=0)
-  ap.add_argument("--end", type=int, default=200)
-  ap.add_argument("--out-dir", default="/data/model_replay_out")
-  args = ap.parse_args()
-
+def run_models(args, indices):
+  """Worker: stage + replay + save for each index IN THIS PROCESS. The dispatcher calls
+  this with a single index per subprocess so all memory (frame cache + GPU) is released
+  between models."""
   seg_dir = Path(args.seg_dir)
   out_dir = Path(args.out_dir)
   out_dir.mkdir(parents=True, exist_ok=True)
-  indices = [int(x) for x in args.indices.split(",") if x.strip()]
 
   params = Params()
   original = get_active_bundle(params)
@@ -233,10 +227,43 @@ def main():
   print("\n=== manifest ===")
   for idx, name, status in manifest:
     print(f"  idx={idx} {name} -> {status}")
-  # record which frames/segment this run covers for compare_models
+  return manifest
+
+
+def main():
+  ap = argparse.ArgumentParser()
+  ap.add_argument("--seg-dir", required=True, help="local segment dir with rlog.zst + fcamera.hevc + ecamera.hevc")
+  ap.add_argument("--indices", required=True, help="comma-separated bundle indices, e.g. 67,63,58,53")
+  ap.add_argument("--start", type=int, default=0)
+  ap.add_argument("--end", type=int, default=200)
+  ap.add_argument("--out-dir", default="/data/model_replay_out")
+  args = ap.parse_args()
+
+  indices = [int(x) for x in args.indices.split(",") if x.strip()]
+  out_dir = Path(args.out_dir)
+  out_dir.mkdir(parents=True, exist_ok=True)
+
+  if len(indices) > 1:
+    # Isolate each model in its own process. A modeld replay holds ~2 GB (decoded frame
+    # cache + GPU host buffers); forking a second modeld from a process that large OOMs
+    # (os.fork -> Errno 12). A fresh interpreter per model releases everything between
+    # runs, so `--indices 67,63,58,53` works in one command.
+    import subprocess
+    import sys
+    for idx in indices:
+      print(f"\n===== model {idx} (isolated subprocess) =====", flush=True)
+      subprocess.run([sys.executable, os.path.abspath(__file__),
+                      "--seg-dir", args.seg_dir, "--indices", str(idx),
+                      "--start", str(args.start), "--end", str(args.end),
+                      "--out-dir", args.out_dir])
+    (out_dir / "run_meta.txt").write_text(
+      f"seg_dir={args.seg_dir}\nstart={args.start}\nend={args.end}\nindices={indices}\n")
+    print(f"\nall models done -> run: python3 {os.path.dirname(os.path.abspath(__file__))}/compare_models.py {args.out_dir}")
+    return
+
+  run_models(args, indices)
   (out_dir / "run_meta.txt").write_text(
-    f"seg_dir={seg_dir}\nstart={args.start}\nend={args.end}\n"
-    f"indices={indices}\noriginal_idx={original_idx}\n")
+    f"seg_dir={args.seg_dir}\nstart={args.start}\nend={args.end}\nindices={indices}\n")
 
 
 if __name__ == "__main__":
