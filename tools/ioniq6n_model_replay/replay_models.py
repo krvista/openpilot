@@ -127,7 +127,12 @@ def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict):
   lr = list(LogReader(str(rlog)))
 
   cam_states = {"roadCameraState", "wideRoadCameraState"}
-  extra = {"roadEncodeIdx", "wideRoadEncodeIdx", "carParams", "carState", "carControl", "can"}
+  # modeld's replay pubs (what it actually consumes) are camera + encodeIdx + carParams
+  # + carState/carControl + calibration/deviceState. It does NOT subscribe to `can`,
+  # which at 500+ Hz would otherwise dominate the replay queue (~5x the messages) and
+  # slow the per-message loop for zero benefit. Keep the queue lean.
+  extra = {"roadEncodeIdx", "wideRoadEncodeIdx", "carParams", "carState", "carControl",
+           "liveCalibration", "deviceState", "liveDelay", "driverMonitoringState"}
   logs = trim_logs(lr, start_frame, end_frame, cam_states, extra)
 
   # seed calibration + deviceState at t0 so modeld initializes deterministically
