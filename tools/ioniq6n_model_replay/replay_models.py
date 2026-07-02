@@ -35,10 +35,14 @@ not the boot segment. --end caps the frame count (200 frames = ~10 s @ 20 Hz);
 keep it modest — each model re-runs the whole range.
 """
 import argparse
+import copy
+import json
 import os
 import time
 from collections import defaultdict
 from pathlib import Path
+
+import numpy as np
 
 # NOTE: modeld pins itself to RT core 7 via config_realtime_process(); under replay
 # from an SSH shell whose cpuset cgroup doesn't own that core, os.sched_setaffinity
@@ -112,17 +116,30 @@ def build_frame_readers(seg_dir: Path, end_frame: int) -> dict:
   return frs
 
 
-def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict):
+def build_modeld_config():
+  """process_replay only ships a config for the STOCK python modeld
+  (selfdrive.modeld.modeld), which loads fixed model files and ignores the
+  sunnypilot ModelManager bundle entirely — so every bundle replays identically
+  with degenerate output. The real driving model on this device is the sunnypilot
+  process `modeld_tinygrad` (a bash->modeld.py wrapper in sunnypilot/modeld_v2).
+  It has the same camera/calibration/carState inputs and publishes modelV2, so we
+  reuse the stock config's pubs/callbacks and just retarget proc_name to the
+  sunnypilot process (ProcessContainer resolves it via managed_processes)."""
+  cfg = copy.deepcopy(get_process_config("modeld"))
+  cfg.proc_name = "modeld_tinygrad"
+  return cfg
+
+
+def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict, custom_params: dict):
   rlog = seg_dir / "rlog.zst"
   if not rlog.exists():
     rlog = seg_dir / "rlog"
   lr = list(LogReader(str(rlog)))
 
   cam_states = {"roadCameraState", "wideRoadCameraState"}
-  # modeld's replay pubs (what it actually consumes) are camera + encodeIdx + carParams
-  # + carState/carControl + calibration/deviceState. It does NOT subscribe to `can`,
-  # which at 500+ Hz would otherwise dominate the replay queue (~5x the messages) and
-  # slow the per-message loop for zero benefit. Keep the queue lean.
+  # modeld's inputs are camera + encodeIdx + carParams + carState/carControl +
+  # calibration/deviceState/liveDelay/driverMonitoringState. It does NOT subscribe to
+  # `can` (500+ Hz), which would otherwise dominate the replay queue for zero benefit.
   extra = {"roadEncodeIdx", "wideRoadEncodeIdx", "carParams", "carState", "carControl",
            "liveCalibration", "deviceState", "liveDelay", "driverMonitoringState"}
   logs = trim_logs(lr, start_frame, end_frame, cam_states, extra)
@@ -136,8 +153,11 @@ def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict):
     except StopIteration:
       print(f"  [warn] no {s} in log; modeld may use defaults")
 
-  modeld = get_process_config("modeld")
-  msgs = replay_process(modeld, logs, frs)
+  # process_replay isolates params under an OpenpilotPrefix, so the ModelManager bundle
+  # we activated on the real params is invisible to the replayed modeld. Inject it via
+  # custom_params (model FILES live at the unprefixed /data/media/0/models, so they are
+  # still found). Without this modeld would fall back to the default bundle.
+  msgs = replay_process(build_modeld_config(), logs, frs, custom_params=custom_params)
   return [m for m in msgs if m.which() in ("modelV2", "drivingModelData")]
 
 
@@ -169,17 +189,33 @@ def main():
       manifest.append((idx, None, "stage_failed"))
       continue
     name = str(ab.get("internalName") or ab.get("displayName") or idx).replace("/", "_").replace(" ", "_")
+    # snapshot the just-activated bundle from the REAL params to inject into the
+    # replay's isolated params (see replay_one). Pass the raw values through verbatim.
+    custom_params = {}
+    ab_param = params.get("ModelManager_ActiveBundle")
+    if ab_param is not None:
+      custom_params["ModelManager_ActiveBundle"] = json.dumps(ab_param) if isinstance(ab_param, dict) else ab_param
+    runner = params.get("ModelRunnerTypeCache")
+    if runner is not None:
+      custom_params["ModelRunnerTypeCache"] = str(runner)
     try:
-      msgs = replay_one(seg_dir, args.start, args.end, frs)
+      msgs = replay_one(seg_dir, args.start, args.end, frs, custom_params)
     except Exception as e:
       print(f"  [replay] idx={idx} FAILED: {e}")
       manifest.append((idx, name, f"replay_failed:{type(e).__name__}"))
       continue
-    n = sum(1 for m in msgs if m.which() == "modelV2")
+    mv2 = [m for m in msgs if m.which() == "modelV2"]
+    n = len(mv2)
     if n == 0:
       print(f"  [replay] idx={idx} produced 0 modelV2 msgs (modeld likely crashed — see log above). NOT saving.")
       manifest.append((idx, name, "empty:modeld_crash?"))
       continue
+    # sanity: real driving output has a varying desiredCurvature. If it's flat/zero the
+    # model didn't really run (wrong bundle / degenerate load) — flag it loudly.
+    dcs = [m.modelV2.action.desiredCurvature for m in mv2]
+    dc_std = float(np.std(dcs)) if len(dcs) > 1 else 0.0
+    flag = "  <-- FLAT desiredCurvature, model may not have run!" if dc_std < 1e-7 else ""
+    print(f"  [check] idx={idx} desiredCurvature std={dc_std:.2e}{flag}")
     out = out_dir / f"{idx:03d}_{name}.zst"
     save_log(str(out), msgs)
     print(f"  [saved] {out.name}: {n} modelV2 msgs")
