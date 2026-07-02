@@ -201,7 +201,11 @@ def main():
     try:
       msgs = replay_one(seg_dir, args.start, args.end, frs, custom_params)
     except Exception as e:
+      import traceback
       print(f"  [replay] idx={idx} FAILED: {e}")
+      # replay_process masks the real error in its cleanup (stop() on a half-started
+      # container); print the full chain so the ORIGINAL exception is visible.
+      traceback.print_exc()
       manifest.append((idx, name, f"replay_failed:{type(e).__name__}"))
       continue
     mv2 = [m for m in msgs if m.which() == "modelV2"]
