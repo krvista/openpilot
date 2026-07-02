@@ -190,14 +190,14 @@ def main():
       continue
     name = str(ab.get("internalName") or ab.get("displayName") or idx).replace("/", "_").replace(" ", "_")
     # snapshot the just-activated bundle from the REAL params to inject into the
-    # replay's isolated params (see replay_one). Pass the raw values through verbatim.
+    # replay's isolated params (see replay_one). ModelManager_ActiveBundle is a JSON-type
+    # param, so params.get returns a dict and params.put expects a dict (NOT a JSON
+    # string) — pass it through verbatim. modeld derives the runner from the bundle, so
+    # ModelRunnerTypeCache does not need injecting.
     custom_params = {}
     ab_param = params.get("ModelManager_ActiveBundle")
     if ab_param is not None:
-      custom_params["ModelManager_ActiveBundle"] = json.dumps(ab_param) if isinstance(ab_param, dict) else ab_param
-    runner = params.get("ModelRunnerTypeCache")
-    if runner is not None:
-      custom_params["ModelRunnerTypeCache"] = str(runner)
+      custom_params["ModelManager_ActiveBundle"] = ab_param
     try:
       msgs = replay_one(seg_dir, args.start, args.end, frs, custom_params)
     except Exception as e:
