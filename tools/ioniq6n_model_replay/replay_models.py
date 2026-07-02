@@ -214,12 +214,12 @@ def main():
       print(f"  [replay] idx={idx} produced 0 modelV2 msgs (modeld likely crashed — see log above). NOT saving.")
       manifest.append((idx, name, "empty:modeld_crash?"))
       continue
-    # sanity: real driving output has a varying desiredCurvature. If it's flat/zero the
-    # model didn't really run (wrong bundle / degenerate load) — flag it loudly.
-    dcs = [m.modelV2.action.desiredCurvature for m in mv2]
-    dc_std = float(np.std(dcs)) if len(dcs) > 1 else 0.0
-    flag = "  <-- FLAT desiredCurvature, model may not have run!" if dc_std < 1e-7 else ""
-    print(f"  [check] idx={idx} desiredCurvature std={dc_std:.2e}{flag}")
+    # sanity: check the PLAN (position.y), not action.desiredCurvature — the latter is
+    # engagement-gated and always 0 under replay. A live model has a varying plan.
+    pys = [m.modelV2.position.y[10] for m in mv2 if len(m.modelV2.position.y) > 10]
+    py_std = float(np.std(pys)) if len(pys) > 1 else 0.0
+    flag = "  <-- FLAT plan, model may not have run!" if py_std < 1e-4 else ""
+    print(f"  [check] idx={idx} plan position.y std={py_std:.3e}{flag}")
     out = out_dir / f"{idx:03d}_{name}.zst"
     save_log(str(out), msgs)
     print(f"  [saved] {out.name}: {n} modelV2 msgs")

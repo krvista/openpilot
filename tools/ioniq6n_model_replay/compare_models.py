@@ -74,14 +74,17 @@ def metrics(models):
   clr = []     # min(|leftY|,|rightY|) near
   lpconf = []
   for m in models:
+    # NOTE: m.action.desiredCurvature is engagement-gated — it is 0 under replay (no
+    # active lateral control), so it is useless here. The model's actual steering intent
+    # lives in the PLAN: planned curvature = yaw_rate / v = orientationRate.z / velocity.x.
+    # Floor v to avoid low-speed blowup. This reflects what the model wants to do,
+    # independent of whether openpilot was engaged.
     try:
-      dc.append(m.action.desiredCurvature)
+      v = m.velocity.x[0] if len(m.velocity.x) else 0.0
+      yr = m.orientationRate.z[0] if len(m.orientationRate.z) else 0.0
+      dc.append(yr / max(v, 3.0))
     except Exception:
-      # older schema: no action.desiredCurvature -> derive from orientationRate/velocity
-      try:
-        dc.append(m.orientationRate.z[0] / max(m.velocity.x[0], 0.1))
-      except Exception:
-        dc.append(np.nan)
+      dc.append(np.nan)
     try:
       # y[0] is always ~0 (ego-relative); use a mid-horizon point (~index 10) where
       # lateral path actually moves, so band-RMS captures real path shimmer.
