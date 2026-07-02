@@ -40,19 +40,11 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-# modeld pins itself to RT core 7 via config_realtime_process(); under replay from an
-# SSH shell that core is outside our cpuset and os.sched_setaffinity raises EINVAL,
-# crashing the modeld child. realtime.py only skips this when PC=True, but forcing PC
-# would also flip DEV to CPU and lose the QCOM GPU. modeld runs as a forked child
-# (multiprocessing default = fork on Linux), so patching os here is inherited by it.
-# Affinity is a perf hint; ignoring a failed set is harmless for a one-shot replay.
-_orig_setaffinity = os.sched_setaffinity
-def _safe_setaffinity(pid, mask):
-  try:
-    _orig_setaffinity(pid, mask)
-  except OSError:
-    pass
-os.sched_setaffinity = _safe_setaffinity
+# NOTE: modeld pins itself to RT core 7 via config_realtime_process(); under replay
+# from an SSH shell whose cpuset cgroup doesn't own that core, os.sched_setaffinity
+# raises EINVAL and crashes the modeld child. The fix lives in common/realtime.py
+# (set_core_affinity now swallows OSError) because modeld runs in a separate process
+# and a monkeypatch here would not reach it.
 
 from openpilot.common.params import Params
 from openpilot.tools.lib.logreader import LogReader, save_log

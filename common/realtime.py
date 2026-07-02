@@ -30,7 +30,14 @@ class Priority:
 
 def set_core_affinity(cores: list[int]) -> None:
   if sys.platform == 'linux' and not PC:
-    os.sched_setaffinity(0, cores)
+    # Onroad this always succeeds. It only raises when the caller's cpuset cgroup
+    # excludes the requested core — e.g. running modeld under process_replay from an
+    # SSH shell whose cgroup doesn't own the RT cores. Affinity is a soft scheduling
+    # hint, so skip it rather than crash the process in that case.
+    try:
+      os.sched_setaffinity(0, cores)
+    except OSError:
+      pass
 
 
 def config_realtime_process(cores: int | list[int], priority: int) -> None:
