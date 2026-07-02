@@ -37,6 +37,7 @@ keep it modest — each model re-runs the whole range.
 import argparse
 import os
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from openpilot.common.params import Params
@@ -45,9 +46,26 @@ from openpilot.tools.lib.framereader import FrameReader
 from openpilot.selfdrive.test.process_replay.process_replay import get_process_config, replay_process
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
-# Reuse the proven trim/setup logic from the CI model-replay so modeld gets the
-# exact set of messages it expects (encodeIdx, carParams, calibration, etc.).
-from openpilot.selfdrive.test.process_replay.model_replay import trim_logs
+
+def trim_logs(logs, start_frame, end_frame, frs_types, include_all_types):
+  """Same trim/setup logic as selfdrive/test/process_replay/model_replay.py, vendored
+  here because that module imports matplotlib at top level, which the device's
+  python env doesn't ship."""
+  all_msgs = []
+  cam_state_counts = defaultdict(int)
+  for msg in sorted(logs, key=lambda m: m.logMonoTime):
+    if msg.which() in frs_types:
+      cam_state_counts[msg.which()] += 1
+    if any(cam_state_counts[state] >= start_frame for state in frs_types):
+      all_msgs.append(msg)
+    if all(cam_state_counts[state] == end_frame for state in frs_types):
+      break
+
+  if len(include_all_types) != 0:
+    other_msgs = [m for m in logs if m.which() in include_all_types]
+    all_msgs.extend(other_msgs)
+
+  return all_msgs
 
 
 def stage_model(params: Params, idx: int, timeout: float = 600.0) -> dict | None:
