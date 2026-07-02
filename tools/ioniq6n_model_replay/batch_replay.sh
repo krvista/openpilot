@@ -26,35 +26,22 @@ mkdir -p "$OUT"
 LOG="$OUT/batch.log"
 echo "=== batch start $(date) | models=$MODELS routes=$RECENT_ROUTES end=$END cap=${MAX_SECONDS}s ===" | tee -a "$LOG"
 
-# Select the N most-recent routes (by segment mtime), all their segments except boot --0,
-# interleaved across routes so a time-capped run spreads evenly.
-mapfile -t segs < <(python3 - "$ROOT" "$RECENT_ROUTES" <<'PY'
-import sys, os, glob, re
-root, n = sys.argv[1], int(sys.argv[2])
-segdirs = [os.path.dirname(p) for p in glob.glob(os.path.join(root, "*", "fcamera.hevc"))]
-def route(d): return re.sub(r'--\d+$', '', os.path.basename(d))
-rt = {}
-for d in segdirs:
-    rt.setdefault(route(d), 0.0)
-    rt[route(d)] = max(rt[route(d)], os.path.getmtime(d))
-recent = set(sorted(rt, key=lambda r: rt[r], reverse=True)[:n])
-by_route = {}
-for d in sorted(segdirs):
-    r = route(d)
-    if r in recent and not d.endswith('--0'):
-        by_route.setdefault(r, []).append(d)
-# round-robin interleave across routes
-order = sorted(by_route, key=lambda r: rt[r], reverse=True)
-i = 0
-while any(by_route[r] for r in order):
-    for r in order:
-        if i < len(by_route[r]):
-            print(by_route[r][i])
-    i += 1
-PY
-)
+# Pick the most-recent route (by newest segment mtime), then take ALL its segments except
+# boot --0. Pure find/bash — no python — so it can't stall on glob. RECENT_ROUTES is fixed
+# at 1 here for simplicity; widen by looping this block if needed.
+echo "selecting most-recent route ..." | tee -a "$LOG"
+newest=$(find "$ROOT" -maxdepth 2 -name fcamera.hevc -printf '%T@ %h\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+if [ -z "$newest" ]; then
+  echo "ERROR: no segments with fcamera.hevc under $ROOT" | tee -a "$LOG"; exit 1
+fi
+route=$(basename "$newest" | sed -E 's/--[0-9]+$//')
+echo "most-recent route: $route" | tee -a "$LOG"
+mapfile -t segs < <(find "$ROOT" -maxdepth 1 -type d -name "${route}--*" ! -name "${route}--0" 2>/dev/null | sort -V)
 total=${#segs[@]}
-echo "segments selected: $total (from $RECENT_ROUTES most-recent routes)" | tee -a "$LOG"
+echo "segments selected: $total (route $route)" | tee -a "$LOG"
+if [ "$total" -eq 0 ]; then
+  echo "ERROR: 0 segments selected for route $route" | tee -a "$LOG"; exit 1
+fi
 
 start=$(date +%s)
 i=0
