@@ -38,6 +38,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -172,11 +173,37 @@ def build_modeld_config():
   return cfg
 
 
+def _carparams_bytes_from_seg0(seg_dir: Path):
+  """Some mid-drive segments have no carParams msg in their rlog (it is logged at drive
+  start). Fetch it from the route's seg0 so fingerprinting can proceed."""
+  route = re.sub(r"--\d+$", "", seg_dir.name)
+  seg0 = seg_dir.parent / f"{route}--0"
+  for cand in (seg0 / "rlog.zst", seg0 / "rlog"):
+    if cand.exists():
+      try:
+        for m in LogReader(str(cand)):
+          if m.which() == "carParams":
+            return m.carParams.as_builder().to_bytes()
+      except Exception:
+        pass
+  return None
+
+
 def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict, custom_params: dict):
   rlog = seg_dir / "rlog.zst"
   if not rlog.exists():
     rlog = seg_dir / "rlog"
   lr = list(LogReader(str(rlog)))
+
+  # replay_process needs a carParams msg (or CarParamsCache param) to fingerprint. If this
+  # segment's rlog lacks carParams, inject the cache from the route's seg0.
+  if not any(m.which() == "carParams" for m in lr):
+    cp_bytes = _carparams_bytes_from_seg0(seg_dir)
+    if cp_bytes is not None:
+      custom_params = {**custom_params, "CarParamsCache": cp_bytes}
+    else:
+      print("  [warn] no carParams in segment or seg0; enabling SKIP_FW_QUERY")
+      os.environ["SKIP_FW_QUERY"] = "1"
 
   cam_states = {"roadCameraState", "wideRoadCameraState"}
   # modeld's inputs are camera + encodeIdx + carParams + carState/carControl +
