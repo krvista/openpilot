@@ -78,7 +78,37 @@ def trim_logs(logs, start_frame, end_frame, frs_types, include_all_types):
   return all_msgs
 
 
-def stage_model(params: Params, idx: int, timeout: float = 600.0) -> dict | None:
+def _bundle_filenames(obj):
+  """Recursively collect every 'fileName' in a bundle dict (artifacts + metadata)."""
+  out = []
+  if isinstance(obj, dict):
+    for k, v in obj.items():
+      if k == "fileName" and isinstance(v, str):
+        out.append(v)
+      else:
+        out.extend(_bundle_filenames(v))
+  elif isinstance(obj, list):
+    for v in obj:
+      out.extend(_bundle_filenames(v))
+  return out
+
+
+def is_fully_cached(params: Params, idx: int) -> tuple[bool, list[str]]:
+  """True iff every artifact/metadata file of bundle `idx` already exists in model_root.
+  Prevents requesting a model that would need a download: modelmanagerd can stall on a
+  failing download, wedging staging for every subsequent model until a reboot."""
+  from openpilot.system.hardware.hw import Paths
+  cache = params.get("ModelManager_ModelsCache")
+  bundles = (cache or {}).get("bundles", []) if isinstance(cache, dict) else []
+  bundle = next((b for b in bundles if b.get("index") == idx), None)
+  if bundle is None:
+    return False, [f"bundle idx={idx} not in ModelsCache"]
+  root = Paths.model_root()
+  missing = [f for f in _bundle_filenames(bundle) if not os.path.exists(os.path.join(root, f))]
+  return len(missing) == 0, missing
+
+
+def stage_model(params: Params, idx: int, timeout: float = 180.0) -> dict | None:
   """Switch the active model to bundle `idx` and block until it is staged.
 
   Returns the active-bundle dict on success, None on timeout / failure.
@@ -87,6 +117,12 @@ def stage_model(params: Params, idx: int, timeout: float = 600.0) -> dict | None
   cur_idx = cur.index if cur else None
   if cur_idx == idx:
     return cur.to_dict() if hasattr(cur, "to_dict") else dict(cur)
+
+  cached, missing = is_fully_cached(params, idx)
+  if not cached:
+    print(f"  [stage] idx={idx} NOT fully cached (missing: {missing[:3]}{'...' if len(missing) > 3 else ''})")
+    print(f"  [stage] skipping — download it first via the UI model selector, then rerun.")
+    return None
 
   print(f"  [stage] requesting model idx={idx} (was {cur_idx}) ...")
   params.put("ModelManager_DownloadIndex", idx)
@@ -235,14 +271,37 @@ def run_models(args, indices):
   return manifest
 
 
+def list_cache_status():
+  """Print which catalog bundles are fully cached (safe to replay without download)."""
+  params = Params()
+  cache = params.get("ModelManager_ModelsCache")
+  bundles = (cache or {}).get("bundles", []) if isinstance(cache, dict) else []
+  ready = []
+  for b in bundles:
+    idx = b.get("index")
+    ok, missing = is_fully_cached(params, idx)
+    if ok:
+      ready.append(idx)
+      print(f"  CACHED  idx={idx:>3}  {b.get('display_name') or b.get('short_name')}")
+  print(f"\nfully cached indices: {','.join(str(i) for i in sorted(ready))}")
+  print("(models not listed need a UI download first)")
+
+
 def main():
   ap = argparse.ArgumentParser()
-  ap.add_argument("--seg-dir", required=True, help="local segment dir with rlog.zst + fcamera.hevc + ecamera.hevc")
-  ap.add_argument("--indices", required=True, help="comma-separated bundle indices, e.g. 67,63,58,53")
+  ap.add_argument("--check", action="store_true", help="list fully-cached model indices and exit")
+  ap.add_argument("--seg-dir", help="local segment dir with rlog.zst + fcamera.hevc + ecamera.hevc")
+  ap.add_argument("--indices", help="comma-separated bundle indices, e.g. 67,63,58,53")
   ap.add_argument("--start", type=int, default=0)
   ap.add_argument("--end", type=int, default=200)
   ap.add_argument("--out-dir", default="/data/model_replay_out")
   args = ap.parse_args()
+
+  if args.check:
+    list_cache_status()
+    return
+  if not args.seg_dir or not args.indices:
+    ap.error("--seg-dir and --indices are required (or use --check)")
 
   indices = [int(x) for x in args.indices.split(",") if x.strip()]
   out_dir = Path(args.out_dir)
