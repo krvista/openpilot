@@ -79,11 +79,13 @@ def trim_logs(logs, start_frame, end_frame, frs_types, include_all_types):
 
 
 def _bundle_filenames(obj):
-  """Recursively collect every 'fileName' in a bundle dict (artifacts + metadata)."""
+  """Recursively collect artifact/metadata filenames from a bundle dict. The server
+  catalog cache (ModelManager_ModelsCache) uses snake_case 'file_name' (fetcher.py),
+  while capnp to_dict bundles use camelCase 'fileName' — accept both."""
   out = []
   if isinstance(obj, dict):
     for k, v in obj.items():
-      if k == "fileName" and isinstance(v, str):
+      if k in ("fileName", "file_name") and isinstance(v, str):
         out.append(v)
       else:
         out.extend(_bundle_filenames(v))
@@ -104,7 +106,11 @@ def is_fully_cached(params: Params, idx: int) -> tuple[bool, list[str]]:
   if bundle is None:
     return False, [f"bundle idx={idx} not in ModelsCache"]
   root = Paths.model_root()
-  missing = [f for f in _bundle_filenames(bundle) if not os.path.exists(os.path.join(root, f))]
+  names = _bundle_filenames(bundle)
+  if not names:
+    # can't verify -> do NOT vacuously pass (a stalled download wedges the daemon)
+    return False, [f"bundle idx={idx}: no filenames found in cache entry"]
+  missing = [f for f in names if not os.path.exists(os.path.join(root, f))]
   return len(missing) == 0, missing
 
 
