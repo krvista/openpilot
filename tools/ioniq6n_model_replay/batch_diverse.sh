@@ -12,7 +12,7 @@ ROOT=/data/media/0/realdata
 OUT=/data/model_replay_diverse
 HARNESS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 END=200
-MAX_SECONDS=14000        # ~3h53m hard cap
+MAX_SECONDS="${MAX_SECONDS:-28000}"    # ~7h47m hard cap (override: MAX_SECONDS=NNN)
 # Which routes: empty = all local routes; or a space-separated list of route ids
 # (from list_routes.py) to compare specific trips, e.g. ROUTES="00000003--021caa3877 ..."
 ROUTES="${ROUTES:-}"
