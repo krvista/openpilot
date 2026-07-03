@@ -226,7 +226,8 @@ def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict, custo
   # we activated on the real params is invisible to the replayed modeld. Inject it via
   # custom_params (model FILES live at the unprefixed /data/media/0/models, so they are
   # still found). Without this modeld would fall back to the default bundle.
-  msgs = replay_process(build_modeld_config(), logs, frs, custom_params=custom_params)
+  msgs = replay_process(build_modeld_config(), logs, frs, custom_params=custom_params,
+                        disable_progress=bool(int(os.environ.get("REPLAY_QUIET", "0"))))
   return [m for m in msgs if m.which() in ("modelV2", "drivingModelData")]
 
 
