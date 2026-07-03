@@ -195,15 +195,19 @@ def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict, custo
     rlog = seg_dir / "rlog"
   lr = list(LogReader(str(rlog)))
 
-  # replay_process needs a carParams msg (or CarParamsCache param) to fingerprint. If this
-  # segment's rlog lacks carParams, inject the cache from the route's seg0.
+  # replay_process needs a carParams msg (or CarParamsCache) to fingerprint. If this
+  # segment's rlog lacks carParams, inject the cache from the route's seg0; if even seg0
+  # has none (e.g. a recording made with no car connected), fall back to passing the
+  # fingerprint explicitly so replay_process builds a default CP. (An env SKIP_FW_QUERY
+  # does not survive ProcessContainer's env reset, so we must pass fingerprint instead.)
+  fingerprint = None
   if not any(m.which() == "carParams" for m in lr):
     cp_bytes = _carparams_bytes_from_seg0(seg_dir)
     if cp_bytes is not None:
       custom_params = {**custom_params, "CarParamsCache": cp_bytes}
     else:
-      print("  [warn] no carParams in segment or seg0; enabling SKIP_FW_QUERY")
-      os.environ["SKIP_FW_QUERY"] = "1"
+      print("  [warn] no carParams in segment or seg0; using fingerprint fallback")
+      fingerprint = "HYUNDAI_IONIQ_6_N"
 
   cam_states = {"roadCameraState", "wideRoadCameraState"}
   # modeld's inputs are camera + encodeIdx + carParams + carState/carControl +
@@ -226,7 +230,8 @@ def replay_one(seg_dir: Path, start_frame: int, end_frame: int, frs: dict, custo
   # we activated on the real params is invisible to the replayed modeld. Inject it via
   # custom_params (model FILES live at the unprefixed /data/media/0/models, so they are
   # still found). Without this modeld would fall back to the default bundle.
-  msgs = replay_process(build_modeld_config(), logs, frs, custom_params=custom_params,
+  msgs = replay_process(build_modeld_config(), logs, frs, fingerprint=fingerprint,
+                        custom_params=custom_params,
                         disable_progress=bool(int(os.environ.get("REPLAY_QUIET", "0"))))
   return [m for m in msgs if m.which() in ("modelV2", "drivingModelData")]
 
