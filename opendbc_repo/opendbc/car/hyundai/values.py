@@ -32,6 +32,16 @@ class CarControllerParams:
     MAX_ANGLE_RATE=5.0,                       # deg/frame — sunnypilot default
   )
 
+  # Phase 10a (low-speed grab fix): below ~30 km/h the VM jerk limit (∝ 1/v²) is
+  # very loose, so the fixed MAX_ANGLE_RATE (5°/frame) is the only thing bounding
+  # per-frame angle change. ccnc-drivelog 0x07-0x0a (162 seg) measured command
+  # steps up to 4.1°/frame at ~20 km/h on override-recovery — 100% of the >2°/frame
+  # steps were <30 km/h — felt as a sudden wheel "grab". Taper the per-frame step
+  # down at low speed so op returns to lane-keep smoothly. Applied as an extra clamp
+  # AFTER the VM limiter in carcontroller. Kill switch: set _V = [5.0, 5.0].
+  MAX_ANGLE_RATE_LOWSPEED_BP = [2.8, 8.3]     # m/s (~10, ~30 km/h)
+  MAX_ANGLE_RATE_LOWSPEED_V  = [2.5, 5.0]     # deg/frame (5.0 == MAX_ANGLE_RATE)
+
   # Low-speed angle smoothing (sp_smooth_angle): EMA on commanded angle where
   # alpha is interpolated from v_ego_raw. Strong smoothing at low speed
   # (alpha=0.05), no smoothing at/above 18 m/s. Mirrors sunnypilot reference.
@@ -137,9 +147,15 @@ class CarControllerParams:
   # signals intent. Combined with the Phase 5d (A2) blinker ceiling
   # cap of 0.45 in compute_torque_reduction_gain, both the command-
   # and authority-side of the actuator stop pulling against the driver.
-  DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 70.0
-  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 130.0
-  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 220.0
+  # Phase 10b (blinker yield strengthening): ccnc-drivelog 0x07-0x0a (162 seg)
+  # measured driver |torque| during blinker-on op-active at p50=253 / p95=499 Nm
+  # versus p50=104 / p95=370 without blinker — the driver applied ~2.4x the force
+  # to finish a lane change because op kept resisting until the 130-220 Nm
+  # full-override point. Lower the blinker deadzone + full-override thresholds so a
+  # light lane-change input yields op with much less effort. Kill: restore 70/130/220.
+  DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 45.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 85.0
+  DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 150.0
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a

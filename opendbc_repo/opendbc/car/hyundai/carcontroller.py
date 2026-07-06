@@ -152,7 +152,11 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # torque deadzone shift (70/130/220), this gives both command-side
     # (B1 blend on lowered override) and authority-side yield.
     if blinker_on:
-      dynamic_ceiling = min(dynamic_ceiling, 0.45)
+      # Phase 10b: lowered from 0.45 -> 0.28. ccnc-drivelog 0x07-0x0a measured the
+      # driver applying ~2.4x torque during blinker lane changes; holding 45% MDPS
+      # authority made them fight op. 0.28 keeps a little lane-keep assist while
+      # letting a light lane-change input win. Kill switch: restore 0.45.
+      dynamic_ceiling = min(dynamic_ceiling, 0.28)
     # Phase 9: authority reduction band is parameterized. Under real grip the
     # caller passes [100,260]->[ceiling,0.10] so authority drops harder to absorb
     # the removed command-blend's yield; hands-off keeps the legacy band
@@ -654,6 +658,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             self.alert_vm_limit_cooldown_frames = 1000
       else:
         self.vm_reject_consecutive_frames = 0
+        # Phase 10a: extra low-speed angle-rate taper to kill the felt "grab" on
+        # override-recovery at <30 km/h (see values.py). The VM limiter already
+        # ran; this only tightens the per-frame step further at low speed.
+        rate_cap = float(np.interp(v_ego_safe,
+                                   CarControllerParams.MAX_ANGLE_RATE_LOWSPEED_BP,
+                                   CarControllerParams.MAX_ANGLE_RATE_LOWSPEED_V))
+        apply_angle = float(np.clip(apply_angle, self.apply_angle_last - rate_cap,
+                                                 self.apply_angle_last + rate_cap))
         self.apply_angle_last = apply_angle
         self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
 
