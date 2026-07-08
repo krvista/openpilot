@@ -153,8 +153,12 @@ class CarControllerParams:
   # to finish a lane change because op kept resisting until the 130-220 Nm
   # full-override point. Lower the blinker deadzone + full-override thresholds so a
   # light lane-change input yields op with much less effort. Kill: restore 70/130/220.
+  # Phase 10c review: low-V full-override raised 85 -> 100. 85 sat below the
+  # measured resting-grip p50 (~104 Nm), so merely holding the wheel with the
+  # blinker on was already a FULL override; 100 keeps the yield cheap for a real
+  # lane-change input while resting hands stay inside the blend zone.
   DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 45.0
-  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 85.0
+  DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 100.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 150.0
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain

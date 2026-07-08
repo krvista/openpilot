@@ -154,9 +154,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     if blinker_on:
       # Phase 10b: lowered from 0.45 -> 0.28. ccnc-drivelog 0x07-0x0a measured the
       # driver applying ~2.4x torque during blinker lane changes; holding 45% MDPS
-      # authority made them fight op. 0.28 keeps a little lane-keep assist while
-      # letting a light lane-change input win. Kill switch: restore 0.45.
-      dynamic_ceiling = min(dynamic_ceiling, 0.28)
+      # authority made them fight op.
+      # Phase 10c review: 10b's flat 0.28 also stripped authority when the blinker
+      # was on but the driver was NOT pressing (signaled lane-keep / model-initiated
+      # lane change), leaving only 28% MDPS follow-through with nobody at the wheel.
+      # Gate the drop on driver torque instead: hands-off keeps the pre-10b 0.45,
+      # and the ceiling tapers to 0.28 as real force comes in over the blinker
+      # deadzone -> low-V full-override band (45 -> 100 Nm), so the yield the 10b
+      # data asked for still happens exactly when the driver acts.
+      # Kill switches: [0.45, 0.45] = pre-10b flat; [0.28, 0.28] = 10b flat.
+      ceiling_blinker = float(np.interp(
+        abs(steering_torque),
+        [CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER,
+         CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER],
+        [0.45, 0.28]))
+      dynamic_ceiling = min(dynamic_ceiling, ceiling_blinker)
     # Phase 9: authority reduction band is parameterized. Under real grip the
     # caller passes [100,260]->[ceiling,0.10] so authority drops harder to absorb
     # the removed command-blend's yield; hands-off keeps the legacy band
