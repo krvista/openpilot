@@ -568,7 +568,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # not the column-torque offset tripping override_factor>=0.9 hands-off at low
     # speed (where full_override_torque is only 180 Nm), which would re-inject the
     # raw wheel's 2-8 Hz into apply_angle_last.
-    heavy_grip_anchor = (override_factor >= 0.9) and bool(CS.out.steeringPressed)
+    # Phase 10d (blinker anchor fast-path): steeringPressed on angle-control needs
+    # |tq| > STEER_THRESHOLD(350) sustained 5 frames, so during a signaled lane
+    # change the driver had to shove past ~350 Nm before the anchor yielded —
+    # routes 0x00-0x0b measured per-episode peak |tq| p50 = 519-562 despite the
+    # 10b/10c threshold cuts. With the blinker announcing intent, accept a lower
+    # UNDEBOUNCED torque floor instead: BLINKER_ANCHOR_TORQUE_NM (220) clears the
+    # +90..180 Nm column-torque offset (so hands-off blinker never false-fires,
+    # preserving the 10c hands-off authority) yet engages ~130 Nm / ~50 ms earlier
+    # than steeringPressed. Non-blinker behaviour unchanged.
+    # Kill switch: BLINKER_ANCHOR_TORQUE_NM = 1e9 (pressed-only, pre-10d).
+    heavy_grip_anchor = (override_factor >= 0.9) and (
+      bool(CS.out.steeringPressed)
+      or (blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM))
 
     # Low-speed camera passthrough latch (kept-feature #11).
     # 11th: STEER_THRESHOLD=350 Nm leaves a 100-350 Nm band where the driver

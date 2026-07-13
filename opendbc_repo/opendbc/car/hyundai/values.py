@@ -160,6 +160,14 @@ class CarControllerParams:
   DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER       = 45.0
   DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER  = 100.0
   DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER = 150.0
+  # Phase 10d: undebounced heavy-grip-anchor torque floor while the blinker is on.
+  # steeringPressed (the anchor's normal gate) needs |tq| > 350 Nm for 5 frames on
+  # angle-control cars, which kept the driver fighting op through the start of every
+  # signaled lane change (routes 0x00-0x0b: per-episode peak |tq| p50 = 519-562).
+  # 220 clears the +90..180 Nm column-torque sensor offset with margin, so a
+  # hands-off blinker (10c hands-off authority) can never false-fire the anchor.
+  # Kill switch: 1e9 (anchor reverts to steeringPressed-only).
+  BLINKER_ANCHOR_TORQUE_NM = 220.0
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a
