@@ -168,6 +168,46 @@ class CarControllerParams:
   # hands-off blinker (10c hands-off authority) can never false-fire the anchor.
   # Kill switch: 1e9 (anchor reverts to steeringPressed-only).
   BLINKER_ANCHOR_TORQUE_NM = 220.0
+  # Phase 12c (10c fix): torque breakpoints for the blinker ACIGain ceiling taper
+  # (0.45 -> 0.28). 10c reused [DEADZONE_BLINKER=45, FULL_OVERRIDE_LOW_V_BLINKER=100]
+  # which sit BELOW the +90..180 Nm column-torque sensor offset, so a hands-off
+  # blinker already read as "real force" and the ceiling collapsed to ~0.28 —
+  # routes 0x10-0x28 measured hands-off-blinker gain p50 = 0.260 against 10c's
+  # stated intent of 0.45. Start the taper at the 10d blinker-intent threshold
+  # (220 clears the offset with margin) so true hands-off keeps 0.45 and the
+  # 0.28 yield engages only on real force. Sim on 0x10-0x28: hands-off blinker
+  # gain p50 0.260 -> 0.364 (true hands-off frames 0.45), grip-episode min gain
+  # unchanged at 0.100. Kill switch: restore [45.0, 100.0].
+  ACIGAIN_BLINKER_GATE_START_NM = 220.0
+  ACIGAIN_BLINKER_GATE_FULL_NM  = 300.0
+  # Phase 12a (P1): TX-layer steady-curve trim. Routes 0x10-0x28 (24 routes,
+  # 214 sustained-curve windows) measured TX/cmd = 1.00 but wheel/TX = 0.55-0.63:
+  # this MDPS realizes only ~60% of a sustained angle command under tire
+  # self-aligning load (|TX-wheel| p50 = 3.7°), independent of ACIGain (delivery
+  # 0.58 even at gain 0.8-1.0, corr 0.15) and not an offset/steer-ratio artifact
+  # (L/R symmetric 0.587/0.622, straight-line residual -0.44°). The model's
+  # visual loop hides the deficit by inflating cmd ~1.6x, which is why curves
+  # start shallow and progressively tighten (entry one-shot rate 41-54%,
+  # city overshoot tail p90 +36%). This trim closes the residual at the TX
+  # layer instead: slow (rate-limited), capped, gated on a sustained curve and
+  # hands-off, bled on exit/grip. It stacks safely with latcontrol's Phase 7a
+  # curvature integrator (cap ~1° equivalent): both are driven by the same
+  # residual, so as the residual closes both stop growing — no double count.
+  # The trimmed command still passes VM + BASELINE_VM limiters and panda safety.
+  # Kill switch: CURVE_TRIM_RATE_DPS = 0.0.
+  CURVE_TRIM_MIN_CMD_DEG    = 4.0     # curve gate: |desired| must exceed this
+  CURVE_TRIM_SUSTAIN_FRAMES = 100     # ... for 1 s before the trim starts
+  CURVE_TRIM_RATE_DPS       = 2.0     # trim slew toward the residual, deg/s
+  CURVE_TRIM_CAP_SPEEDS_MS  = [8.3, 27.8]   # 30 -> 100 km/h
+  CURVE_TRIM_CAP_DEG        = [5.0, 3.0]    # tighter cap at speed
+  CURVE_TRIM_BLEED_TAU_S    = 0.5     # decay when gate drops (grip/straight/inactive)
+  CURVE_TRIM_FLIP_TAU_S     = 0.15    # fast decay of trim opposing the curve direction (S-curve flip)
+  # Phase 12b (P2): hysteresis deadband on the desired angle. Model replan churn
+  # reverses the command direction 6.5-7.7x/10s in sustained curves and the wheel
+  # follows 4.3-5.8 of those (routes 0x10-0x28). A +/-0.15° backlash band absorbs
+  # micro-reversals with ZERO added lag for any move larger than the band
+  # (0.15° is ~2% of a typical 9° curve command). Kill switch: 0.0.
+  CMD_HYSTERESIS_DEG = 0.15
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a

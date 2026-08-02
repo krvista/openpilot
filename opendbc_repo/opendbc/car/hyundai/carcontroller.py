@@ -159,14 +159,18 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
       # was on but the driver was NOT pressing (signaled lane-keep / model-initiated
       # lane change), leaving only 28% MDPS follow-through with nobody at the wheel.
       # Gate the drop on driver torque instead: hands-off keeps the pre-10b 0.45,
-      # and the ceiling tapers to 0.28 as real force comes in over the blinker
-      # deadzone -> low-V full-override band (45 -> 100 Nm), so the yield the 10b
-      # data asked for still happens exactly when the driver acts.
+      # and the ceiling tapers to 0.28 as real force comes in, so the yield the
+      # 10b data asked for still happens exactly when the driver acts.
+      # Phase 12c: the 10c breakpoints ([45, 100] — the blinker deadzone/override
+      # band) sit below the +90..180 Nm column-torque offset, so hands-off already
+      # measured >=100 Nm and the intended 0.45 never applied (0x10-0x28: hands-off
+      # blinker gain p50 = 0.260). Taper over the offset-clearing band instead —
+      # see ACIGAIN_BLINKER_GATE_* in values.py for the sim numbers.
       # Kill switches: [0.45, 0.45] = pre-10b flat; [0.28, 0.28] = 10b flat.
       ceiling_blinker = float(np.interp(
         abs(steering_torque),
-        [CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER,
-         CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER],
+        [CarControllerParams.ACIGAIN_BLINKER_GATE_START_NM,
+         CarControllerParams.ACIGAIN_BLINKER_GATE_FULL_NM],
         [0.45, 0.28]))
       dynamic_ceiling = min(dynamic_ceiling, ceiling_blinker)
     # Phase 9: authority reduction band is parameterized. Under real grip the
@@ -279,6 +283,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # present (stop-and-go traffic).
     self.low_speed_cam_latched = False
     self.traffic_following = False
+    # Phase 12a (P1): steady-curve TX trim state.
+    self.curve_trim = 0.0
+    self.curve_trim_sustain = 0
+    # Phase 12b (P2): desired-angle hysteresis (backlash) filter state.
+    self.cmd_hyst = 0.0
     # Diagnostic: log CCNC_0x161.LFA_ICON transitions.
     self.prev_lfa_icon = -1
     # CCNC angle-control vehicle models.
@@ -653,6 +662,59 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
       desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+
+      # Phase 12b (P2): backlash/hysteresis band on the desired angle. The output
+      # follows any move larger than the band with zero lag; micro-reversals
+      # inside +/-CMD_HYSTERESIS_DEG (model replan churn, 6.5-7.7 direction
+      # flips/10s on 0x10-0x28) are absorbed instead of being sent to the MDPS.
+      # When inactive, track the raw desired so engagement starts band-centered.
+      hyst = CarControllerParams.CMD_HYSTERESIS_DEG
+      if CC.latActive and hyst > 0.0:
+        self.cmd_hyst = float(np.clip(self.cmd_hyst, desired_angle - hyst, desired_angle + hyst))
+        desired_angle = self.cmd_hyst
+      else:
+        self.cmd_hyst = desired_angle
+
+      # Phase 12a (P1): steady-curve trim — close the MDPS's sustained-curve
+      # realization deficit (wheel/TX = 0.55-0.63, |TX-wheel| p50 3.7° on
+      # 0x10-0x28) at the TX layer instead of waiting for the model's visual
+      # loop to inflate the command. Slew-limited pursuit of the residual,
+      # speed-scheduled cap, armed only after a sustained curve command while
+      # hands-off; bleeds out on grip/straight/inactive. See values.py.
+      trim_rate = CarControllerParams.CURVE_TRIM_RATE_DPS
+      trim_gate = (bool(CC.latActive) and hands_off
+                   and not self.parking_mode_active and not in_passthrough
+                   and trim_rate > 0.0 and v_ego_safe > 3.0
+                   and abs(desired_angle) >= CarControllerParams.CURVE_TRIM_MIN_CMD_DEG)
+      self.curve_trim_sustain = self.curve_trim_sustain + 1 if trim_gate else 0
+      # S-curve direction flip: a trim built for the previous curve points the
+      # wrong way once desired crosses zero. The 2°/s integrator (or the 0.5 s
+      # exit bleed) alone would carry an opposing trim for seconds — replay
+      # measured up to 4.5° opposing — so fast-bleed any trim opposing the
+      # current curve direction, in every branch.
+      if self.curve_trim * np.sign(desired_angle) < 0.0:
+        self.curve_trim *= (1.0 - DT_CTRL / CarControllerParams.CURVE_TRIM_FLIP_TAU_S)
+      if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES:
+        trim_cap = float(np.interp(v_ego_safe,
+                                   CarControllerParams.CURVE_TRIM_CAP_SPEEDS_MS,
+                                   CarControllerParams.CURVE_TRIM_CAP_DEG))
+        # Rate-limited integrator: step toward the residual's sign at up to
+        # CURVE_TRIM_RATE_DPS until the residual closes (equilibrium residual=0,
+        # i.e. wheel = pre-trim desired) or the cap binds. A pursuit law
+        # (trim -> residual) would only close ~half the gap at equilibrium.
+        residual = desired_angle - steer_angle_safe
+        step = trim_rate * DT_CTRL
+        self.curve_trim = float(np.clip(self.curve_trim + np.clip(residual, -step, step),
+                                        -trim_cap, trim_cap))
+      else:
+        # exponential bleed toward 0 (tau = CURVE_TRIM_BLEED_TAU_S)
+        self.curve_trim *= (1.0 - DT_CTRL / max(CarControllerParams.CURVE_TRIM_BLEED_TAU_S, DT_CTRL))
+        if abs(self.curve_trim) < 0.01:
+          self.curve_trim = 0.0
+      desired_angle = float(np.clip(desired_angle + self.curve_trim,
+                                    -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                                     self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+
       if abs(v_ego_safe) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_safe, desired_angle, self.apply_angle_last)
 
