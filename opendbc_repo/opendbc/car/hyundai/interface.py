@@ -150,7 +150,18 @@ class CarInterface(CarInterfaceBase):
     # angle commands.
     if ret.flags & HyundaiFlags.CCNC and ret.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
       ret.steerControlType = structs.CarParams.SteerControlType.angle
-      ret.minSteerSpeed = 20.0 / 3.6
+      # Phase 11: 20 km/h -> 5 km/h. controlsd's standstill gate
+      # (vEgo <= minSteerSpeed) silently killed CC.latActive below 20 km/h:
+      # routes 0x10-0x28 measured 27% of MADS-enabled time (1.4 h) with the
+      # UI green but no steering, 31 silent dropouts/h in city stop-and-go.
+      # The carcontroller's own low-speed machinery (LOW_SPEED_PASSTHROUGH
+      # 20/22 km/h latch, traffic_following hold, parking-mode latch) was
+      # built to manage exactly this regime and never ran because this gate
+      # sits upstream of it. 5 km/h keeps a floor at walking pace (angle
+      # control while nearly stopped serves no purpose; resume is wheel-
+      # anchored) and lets the low-speed latches own 5-20 km/h as designed.
+      # Kill switch: 20.0 / 3.6 restores the pre-Phase-11 gate.
+      ret.minSteerSpeed = 5.0 / 3.6
     else:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
