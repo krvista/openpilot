@@ -64,8 +64,11 @@ LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ~ 6.11 m/s
 # Traffic-following lead distance hysteresis. When a lead is closer than
 # this, op stays engaged below the freeze threshold so the wheel is held
 # (stop-and-go traffic).
-TRAFFIC_FOLLOW_NEAR_M = 3.0
-TRAFFIC_FOLLOW_FAR_M  = 5.0
+# Phase 13a: widened 3/5 -> 8/12 m. The 3 m gate only recognized bumper-to-
+# bumper standstill; queue crawling at 10-20 km/h runs 5-12 m gaps, exactly
+# the regime the low-speed scenario gate should keep steering in.
+TRAFFIC_FOLLOW_NEAR_M = 8.0
+TRAFFIC_FOLLOW_FAR_M  = 12.0
 
 # Failsafe: if apply_steer_angle_limits_vm returns None (lateral accel
 # limit violated and rate limit cannot pull back fast enough) for this
@@ -286,8 +289,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 12a (P1): steady-curve TX trim state.
     self.curve_trim = 0.0
     self.curve_trim_sustain = 0
+    # Phase 13b: LP state of the trim residual (raw wheel noise must not
+    # reach the trim integrator).
+    self.trim_resid_lp = 0.0
     # Phase 12b (P2): desired-angle hysteresis (backlash) filter state.
     self.cmd_hyst = 0.0
+    # Phase 13a: low-speed scenario gate state.
+    self.in_low_speed_zone = False
+    self.low_speed_scen_ok = True
+    self.lowv_scen_dwell = 0
+    self.lowv_release_frames = 0
     # Diagnostic: log CCNC_0x161.LFA_ICON transitions.
     self.prev_lfa_icon = -1
     # CCNC angle-control vehicle models.
@@ -547,11 +558,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
-    # Driver override factor — used as a hands_off gate for the low-speed
-    # camera passthrough latch (kept-feature #11) and as the blend
-    # coefficient for the heavy-grip yield (Phase 5a). When the blinker
-    # is on, lower thresholds so a light grip during a lane change
-    # immediately produces override_factor > 0 and op yields.
+    # Driver override factor — the heavy-grip anchor gate and yield blend
+    # coefficient (Phase 5a lineage). When the blinker is on, lower
+    # thresholds so a light grip during a lane change immediately produces
+    # override_factor > 0 and op yields. (Phase 13a: the low-speed
+    # passthrough latch no longer keys on this — its low-V full-override
+    # point sits inside the column-torque offset; the latch now enters on
+    # debounced steeringPressed and releases on a sustained sub-260 Nm.)
     if ccnc_lka_alt:
       if blinker_on:
         DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
@@ -592,14 +605,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       or (blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM))
 
     # Low-speed camera passthrough latch (kept-feature #11).
-    # 11th: STEER_THRESHOLD=350 Nm leaves a 100-350 Nm band where the driver
-    # is actively steering but `steeringPressed` is False — require
-    # override_factor ≤ 0.5 to also agree before declaring hands-off.
-    hands_off = (not CS.out.steeringPressed) and (override_factor <= 0.5)
-    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS and not hands_off:
+    # Phase 13a: the latch used to key on `hands_off` (override_factor <= 0.5),
+    # but hands-off |tq| at low speed measures p50=156/p90=284/p99=367 Nm
+    # (offset + road load, routes 0x2a-0x2d), so ANY fixed sub-350 torque
+    # test flaps — with Phase 11 opening latActive below 20 km/h the latch
+    # flapped plan<->wheel at 1.1-2.2 Hz, which was the reported wheel
+    # shaking. Redesign: ENTER on the debounced steeringPressed flag (real
+    # 350 Nm x 5-frame grip only), RELEASE on a sustained sub-260 Nm let-go.
+    # Flap-free by construction.
+    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS and CS.out.steeringPressed:
       self.low_speed_cam_latched = True
-    elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS or hands_off:
-      self.low_speed_cam_latched = False
+      self.lowv_release_frames = 0
+    elif self.low_speed_cam_latched:
+      if (not CS.out.steeringPressed) and \
+         abs(steer_torque_safe) < CarControllerParams.LOW_SPEED_GRIP_RELEASE_NM:
+        self.lowv_release_frames += 1
+      else:
+        self.lowv_release_frames = 0
+      if (CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS
+          or self.lowv_release_frames >= CarControllerParams.LOW_SPEED_GRIP_RELEASE_FRAMES):
+        self.low_speed_cam_latched = False
+        self.lowv_release_frames = 0
+    # Speed-zone latch for the scenario gate (same 20/22 km/h hysteresis).
+    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
+      self.in_low_speed_zone = True
+    elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
+      self.in_low_speed_zone = False
     # Traffic-following keeps op engaged in stop-and-go even below the
     # low-speed freeze threshold. lead_visible / lead_distance are
     # populated by LeadDataCarController.update.
@@ -607,7 +638,24 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.traffic_following = True
     elif (not self.lead_visible) or self.lead_distance > TRAFFIC_FOLLOW_FAR_M:
       self.traffic_following = False
-    in_passthrough = self.low_speed_cam_latched and not self.traffic_following
+    # Phase 13a scenario gate: below 20 km/h, steer only in the scenarios the
+    # model handles well — traffic crawl (lead in the widened follow window) or
+    # gentle lane keeping (|cmd| < 40°). Free low-speed maneuvers (intersection
+    # turns / alleys, |cmd| 100°+) stay manual. Asymmetric dwell: 0.3 s to
+    # yield, 1.0 s to (re)engage — the gate cannot flap. Note real grip
+    # (low_speed_cam_latched) now yields even during traffic-following: with
+    # the offset-proof threshold, latched means actual driver intent.
+    scen_raw = self.traffic_following or (abs(op_curv_safe) < CarControllerParams.LOW_SPEED_MAX_CMD_DEG)
+    if scen_raw != self.low_speed_scen_ok:
+      self.lowv_scen_dwell += 1
+      need = (CarControllerParams.LOW_SPEED_SCEN_TO_ACTIVE_FRAMES if scen_raw
+              else CarControllerParams.LOW_SPEED_SCEN_TO_PASSIVE_FRAMES)
+      if self.lowv_scen_dwell >= need:
+        self.low_speed_scen_ok = scen_raw
+        self.lowv_scen_dwell = 0
+    else:
+      self.lowv_scen_dwell = 0
+    in_passthrough = self.low_speed_cam_latched or (self.in_low_speed_zone and not self.low_speed_scen_ok)
 
     # Parking-mode latch (layered on low_speed_cam_latched). A sustained
     # ≤30 km/h window containing a clear parking signature — a ≥270° (≈9 m
@@ -682,11 +730,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # speed-scheduled cap, armed only after a sustained curve command while
       # hands-off; bleeds out on grip/straight/inactive. See values.py.
       trim_rate = CarControllerParams.CURVE_TRIM_RATE_DPS
-      trim_gate = (bool(CC.latActive) and hands_off
+      # Phase 13b: gate on the debounced steeringPressed only (the original
+      # `hands_off` torque test flaps inside the p50=156/p90=284 Nm hands-off
+      # band and blocked the trim almost always — TX-cmd p50 +0.02° as
+      # shipped). Hold the angle gate with hysteresis (arm 4°, hold 3°) so
+      # the gate cannot flap at the curve threshold.
+      angle_gate = abs(desired_angle) >= (
+        CarControllerParams.CURVE_TRIM_HOLD_CMD_DEG
+        if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES
+        else CarControllerParams.CURVE_TRIM_MIN_CMD_DEG)
+      trim_gate = (bool(CC.latActive) and not CS.out.steeringPressed
                    and not self.parking_mode_active and not in_passthrough
-                   and trim_rate > 0.0 and v_ego_safe > 3.0
-                   and abs(desired_angle) >= CarControllerParams.CURVE_TRIM_MIN_CMD_DEG)
-      self.curve_trim_sustain = self.curve_trim_sustain + 1 if trim_gate else 0
+                   and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate)
+      self.curve_trim_sustain = min(self.curve_trim_sustain + 1, 10 * CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES) if trim_gate else 0
       # S-curve direction flip: a trim built for the previous curve points the
       # wrong way once desired crosses zero. The 2°/s integrator (or the 0.5 s
       # exit bleed) alone would carry an opposing trim for seconds — replay
@@ -702,11 +758,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # CURVE_TRIM_RATE_DPS until the residual closes (equilibrium residual=0,
         # i.e. wheel = pre-trim desired) or the cap binds. A pursuit law
         # (trim -> residual) would only close ~half the gap at equilibrium.
+        # Phase 13b: the residual consumes the RAW measured wheel — replay
+        # showed the un-filtered trim itself carrying 1-8 Hz RMS 0.069°, the
+        # size of the whole v2 jitter budget. LP the residual (tau 0.3 s) and
+        # apply a deadband so wheel noise never reaches the integrator; the
+        # deadband also sets the closure floor (residual converges to ~0.7°
+        # instead of 0 — a fifth of the 3.7° deficit it exists to close).
         residual = desired_angle - steer_angle_safe
+        alpha = DT_CTRL / max(CarControllerParams.CURVE_TRIM_RESID_LP_TAU_S, DT_CTRL)
+        self.trim_resid_lp += alpha * (residual - self.trim_resid_lp)
+        db = CarControllerParams.CURVE_TRIM_RESID_DEADBAND_DEG
+        res_eff = float(np.sign(self.trim_resid_lp)) * max(0.0, abs(self.trim_resid_lp) - db)
         step = trim_rate * DT_CTRL
-        self.curve_trim = float(np.clip(self.curve_trim + np.clip(residual, -step, step),
+        self.curve_trim = float(np.clip(self.curve_trim + np.clip(res_eff, -step, step),
                                         -trim_cap, trim_cap))
       else:
+        self.trim_resid_lp = 0.0
         # exponential bleed toward 0 (tau = CURVE_TRIM_BLEED_TAU_S)
         self.curve_trim *= (1.0 - DT_CTRL / max(CarControllerParams.CURVE_TRIM_BLEED_TAU_S, DT_CTRL))
         if abs(self.curve_trim) < 0.01:

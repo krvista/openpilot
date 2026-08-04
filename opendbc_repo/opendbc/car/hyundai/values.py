@@ -197,7 +197,7 @@ class CarControllerParams:
   # Kill switch: CURVE_TRIM_RATE_DPS = 0.0.
   CURVE_TRIM_MIN_CMD_DEG    = 4.0     # curve gate: |desired| must exceed this
   CURVE_TRIM_SUSTAIN_FRAMES = 100     # ... for 1 s before the trim starts
-  CURVE_TRIM_RATE_DPS       = 2.0     # trim slew toward the residual, deg/s
+  CURVE_TRIM_RATE_DPS       = 1.0     # trim slew, deg/s (13b: 2.0 -> 1.0, weave rejection)
   CURVE_TRIM_CAP_SPEEDS_MS  = [8.3, 27.8]   # 30 -> 100 km/h
   CURVE_TRIM_CAP_DEG        = [5.0, 3.0]    # tighter cap at speed
   CURVE_TRIM_BLEED_TAU_S    = 0.5     # decay when gate drops (grip/straight/inactive)
@@ -208,6 +208,50 @@ class CarControllerParams:
   # micro-reversals with ZERO added lag for any move larger than the band
   # (0.15° is ~2% of a typical 9° curve command). Kill switch: 0.0.
   CMD_HYSTERESIS_DEG = 0.15
+  # Phase 13a: low-speed (<20 km/h) scenario gate + offset-proof grip signal.
+  # Routes 0x2a-0x2d (first build with Phase 11): below 20 km/h the passthrough
+  # latch keyed on `hands_off` (override_factor <= 0.5), whose low-V full-override
+  # point (180 Nm) sits inside the +90..180 Nm column-torque offset — the latch
+  # flapped plan<->wheel 1.1-2.2x/s for 99% of low-speed hands-off time, which IS
+  # the reported strong/frequent wheel shaking. Additionally the user finds
+  # model-planned steering at low speed uncomfortable in free maneuvers
+  # (intersection turns / alleys, |cmd| 100°+) while wanting it in traffic
+  # crawl and gentle lane keeping. Below 20 km/h steering is therefore allowed
+  # only when: traffic-following (lead within TRAFFIC_FOLLOW_* in carcontroller,
+  # widened 3/5 -> 8/12 m) OR gentle path (|cmd| < LOW_SPEED_MAX_CMD_DEG).
+  # Transitions carry asymmetric dwell (fast to-passive, slow to-active) so the
+  # gate cannot flap. The grip latch: 0x2a-0x2d measured hands-off |tq| at
+  # 5-20 km/h of p50=156 / p90=284 / p99=367 Nm (offset + road load), so NO
+  # fixed threshold below ~350 separates grip from hands-off — a 220 Nm gate
+  # flapped 3.5x/s in replay, no better than the override_factor it replaced.
+  # Latch therefore ENTERS on the debounced steeringPressed flag (350 Nm x
+  # 5 frames — real grip only) and RELEASES on sustained sub-260 Nm
+  # (= ACIGAIN_GRIP_FULL_NM) for LOW_SPEED_GRIP_RELEASE_FRAMES. Flap-free by
+  # construction: entry needs real grip, release needs a sustained let-go.
+  # Parking mode remains the higher-priority passive latch, unchanged.
+  # Kill switch: LOW_SPEED_MAX_CMD_DEG = 1e9 (scenario gate always open).
+  LOW_SPEED_GRIP_RELEASE_NM        = 260.0
+  LOW_SPEED_GRIP_RELEASE_FRAMES    = 50     # 0.5 s sustained let-go to resume
+  LOW_SPEED_MAX_CMD_DEG            = 40.0   # lane-keep scale; intersection turns are 100°+
+  LOW_SPEED_SCEN_TO_PASSIVE_FRAMES = 30     # 0.3 s to yield
+  LOW_SPEED_SCEN_TO_ACTIVE_FRAMES  = 100    # 1.0 s to (re)engage
+  # Phase 13b: 12a trim repair + noise hardening. As shipped, 12a armed almost
+  # never (sustained-curve TX-cmd p50 = +0.02° on 0x2a-0x2d) because its gate
+  # reused the offset-corrupted `hands_off`, whose torque test flaps in the
+  # p50=156/p90=284 Nm hands-off band (see 13a note). Repair: gate on the
+  # debounced steeringPressed only — real grip still cuts the trim (and bleeds
+  # it), while sensor-offset torque can no longer reset the 1 s sustain.
+  # Hardening: the residual consumes the RAW wheel angle whose dominant motion
+  # is a 0.6-1.2 Hz weave — a tau=0.3 s LP passed it nearly unattenuated
+  # (replayed trim 1-8 Hz RMS 0.093°, the size of the whole v2 jitter budget).
+  # tau=1.5 s + slew 1°/s put the trim two octaves below the weave; the
+  # deadband keeps residual noise out of the integrator and sets the closure
+  # floor (~0.7° of the 3.7° deficit). The angle gate holds with hysteresis
+  # (arm >= CURVE_TRIM_MIN_CMD_DEG 4°, hold >= 3°) so it cannot flap at the
+  # curve threshold (53 re-arms/min in replay pre-fix).
+  CURVE_TRIM_HOLD_CMD_DEG       = 3.0
+  CURVE_TRIM_RESID_LP_TAU_S     = 1.5
+  CURVE_TRIM_RESID_DEADBAND_DEG = 0.7
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a
