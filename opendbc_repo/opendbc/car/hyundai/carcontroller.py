@@ -384,6 +384,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_signature_seen = False
     self.parking_mode_active = False
     self.parking_exit_frames = 0
+    # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
+    self.boot_parking_pending = True
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -710,6 +712,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # the instant a forward gear is selected). Exits only on a sustained
     # >33 km/h, then re-arms clean so a later low-speed stretch without a
     # parking signature does not re-trip on a stale flag.
+    # Phase 14-4 S1b: EV departure coverage. An EV drives off immediately
+    # while the device takes ~20-30 s to boot, so by the first control frame
+    # the gear is already D and the S1 park-gear signature can never fire for
+    # a departure. Proxy: a controller COLD-START observed at low speed is
+    # almost always a lot/departure context — decide once, ~0.5 s in (CAN
+    # settled). A mid-drive device reboot on a slow road is the only false
+    # path and costs one passive stretch until the 33 km/h exit.
+    if self.boot_parking_pending and self.frame >= 50:
+      self.boot_parking_pending = False
+      if v_ego_safe <= PARKING_MODE_ENTER_MS:
+        self.parking_signature_seen = True
     if v_ego_safe <= PARKING_MODE_ENTER_MS:
       self.parking_low_speed_frames = min(self.parking_low_speed_frames + 1,
                                           PARKING_MODE_ENTER_SUSTAIN_FRAMES)
