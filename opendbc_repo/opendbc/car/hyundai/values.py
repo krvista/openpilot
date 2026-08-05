@@ -168,6 +168,12 @@ class CarControllerParams:
   # hands-off blinker (10c hands-off authority) can never false-fire the anchor.
   # Kill switch: 1e9 (anchor reverts to steeringPressed-only).
   BLINKER_ANCHOR_TORQUE_NM = 220.0
+  # Phase 14-2: stateful anchor. The single 220 Nm test flapped 3.84x/s in
+  # low-speed blinker waits (0x2e-0x2f) — fire after FIRE_FRAMES sustained
+  # >= 220, hold while >= RELEASE_NM (40 Nm band) with a minimum hold.
+  BLINKER_ANCHOR_RELEASE_NM      = 180.0
+  BLINKER_ANCHOR_FIRE_FRAMES     = 3
+  BLINKER_ANCHOR_MIN_HOLD_FRAMES = 30     # 0.3 s
   # Phase 12c (10c fix): torque breakpoints for the blinker ACIGain ceiling taper
   # (0.45 -> 0.28). 10c reused [DEADZONE_BLINKER=45, FULL_OVERRIDE_LOW_V_BLINKER=100]
   # which sit BELOW the +90..180 Nm column-torque sensor offset, so a hands-off
@@ -218,7 +224,7 @@ class CarControllerParams:
   # (intersection turns / alleys, |cmd| 100°+) while wanting it in traffic
   # crawl and gentle lane keeping. Below 20 km/h steering is therefore allowed
   # only when: traffic-following (lead within TRAFFIC_FOLLOW_* in carcontroller,
-  # widened 3/5 -> 8/12 m) OR gentle path (|cmd| < LOW_SPEED_MAX_CMD_DEG).
+  # widened 3/5 -> 8/12 m) OR gentle path (|cmd| under the 45/35 hysteresis pair).
   # Transitions carry asymmetric dwell (fast to-passive, slow to-active) so the
   # gate cannot flap. The grip latch: 0x2a-0x2d measured hands-off |tq| at
   # 5-20 km/h of p50=156 / p90=284 / p99=367 Nm (offset + road load), so NO
@@ -229,10 +235,14 @@ class CarControllerParams:
   # (= ACIGAIN_GRIP_FULL_NM) for LOW_SPEED_GRIP_RELEASE_FRAMES. Flap-free by
   # construction: entry needs real grip, release needs a sustained let-go.
   # Parking mode remains the higher-priority passive latch, unchanged.
-  # Kill switch: LOW_SPEED_MAX_CMD_DEG = 1e9 (scenario gate always open).
+  # Kill switch: both LOW_SPEED_CMD_*_DEG = 1e9 (scenario gate always open).
   LOW_SPEED_GRIP_RELEASE_NM        = 260.0
   LOW_SPEED_GRIP_RELEASE_FRAMES    = 50     # 0.5 s sustained let-go to resume
-  LOW_SPEED_MAX_CMD_DEG            = 40.0   # lane-keep scale; intersection turns are 100°+
+  # Phase 14-3: single 40° boundary -> 45/35 hysteresis pair (lane-keep scale;
+  # intersection turns are 100°+). ~10% of residual low-speed flips on
+  # 0x2e-0x2f clustered at the old single threshold.
+  LOW_SPEED_CMD_PASSIVE_DEG        = 45.0   # exceed while steering -> go passive
+  LOW_SPEED_CMD_ACTIVE_DEG         = 35.0   # fall below while passive -> re-engage
   LOW_SPEED_SCEN_TO_PASSIVE_FRAMES = 30     # 0.3 s to yield
   LOW_SPEED_SCEN_TO_ACTIVE_FRAMES  = 100    # 1.0 s to (re)engage
   # Phase 13b: 12a trim repair + noise hardening. As shipped, 12a armed almost
@@ -287,9 +297,15 @@ class CarControllerParams:
   #     active-driver p25 (~250 Nm) range.
   #   - EXIT_TORQUE_NM  = 30: 30 Nm hysteresis band; sits comfortably
   #     above the ±5 Nm CAN noise floor so noise does not chatter.
+  # Phase 14-1: the original 60/30 Nm thresholds sit inside the +90..180 Nm
+  # column-torque offset band (hands-off |tq| p50=156/p90=284 on 0x2a-0x2d):
+  # exit <30 Nm was near-impossible while moving (sticky passive, 69% of
+  # gentle low-speed time) and the 30 Nm boundary flapped. Entry now keys on
+  # debounced steeringPressed at the 40° geometry gate; exit is a sustained
+  # let-go (!pressed & <260 Nm for EXIT_FRAMES), mirroring the 13a latch.
   ANGLE_PASSIVE_ENTER_WHEEL_DEG = 40.0
-  ANGLE_PASSIVE_ENTER_TORQUE_NM = 60.0
-  ANGLE_PASSIVE_EXIT_TORQUE_NM  = 30.0
+  ANGLE_PASSIVE_EXIT_TORQUE_NM  = 260.0
+  ANGLE_PASSIVE_EXIT_FRAMES     = 50      # 0.5 s sustained let-go
   # Phase 6f-3 low-speed intent-disagreement OR-arm. The 6d-1 wheel-angle
   # gate (>= 40°) misses the case where the driver pushes hard while the
   # wheel is still near-straight and op commands the opposite direction.
@@ -298,8 +314,13 @@ class CarControllerParams:
   # time, with ~55% of clusters at |wheel|<10°. OR-arm catches them while
   # reusing the existing 5-frame sustain and torque-only exit.
   INTENT_DISAGREE_VEGO_MS    = 30.0 / 3.6   # ≤30 km/h
-  INTENT_DISAGREE_TQ_MIN_NM  = 30.0          # matches ANGLE_PASSIVE_EXIT_TORQUE_NM
+  # Phase 14-1: 30 -> 260 Nm. At 30 Nm the sign test read the sensor offset,
+  # not the driver (a coin flip), and flapped around the low-torque tail.
+  # 260 clears the offset so an arm means a REAL opposing push; 0.3 s sustain
+  # replaces the shared 5-frame counter for this path.
+  INTENT_DISAGREE_TQ_MIN_NM  = 260.0
   INTENT_DISAGREE_DELTA_DEG  = 5.0           # |apply_angle_last - wheel|
+  INTENT_DISAGREE_SUSTAIN_FRAMES = 30        # 0.3 s
   # Phase 6e-1 transient-blip filter. The Phase 6d entry conjunction
   # is met by sub-50 ms wheel spikes (road bumps, sensor noise) when
   # combined with a driver's reactive grip — once latched, the

@@ -97,6 +97,16 @@ PARKING_MODE_ENTER_SUSTAIN_FRAMES = 300          # 3 s @ 100 Hz
 PARKING_MODE_ENTER_WHEEL_DEG      = 270.0        # ≈9 m radius parking turn
 PARKING_MODE_EXIT_MS              = 33.0 / 3.6   # exit hysteresis above entry
 PARKING_MODE_EXIT_SUSTAIN_FRAMES  = 200          # 2 s @ 100 Hz
+# Phase 14-4 S3': lead-less lot-crawl signature. Window must stay under
+# CREEP_MAX (25 km/h — lot aisles spike to 20-22) with no lead in the
+# traffic-follow window, for CREEP_FRAMES, AND show the lot pattern: a dip
+# below CREEP_DIP or a window mean under CREEP_MEAN. Steady 20-25 km/h
+# surface-street cruising (school zones, alleys) has no dip and a high mean,
+# so it does not arm.
+PARKING_CREEP_MAX_MS   = 25.0 / 3.6
+PARKING_CREEP_DIP_MS   = 8.0 / 3.6
+PARKING_CREEP_MEAN_MS  = 12.0 / 3.6
+PARKING_CREEP_FRAMES   = 1000                    # 10 s @ 100 Hz
 
 
 
@@ -299,6 +309,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.low_speed_scen_ok = True
     self.lowv_scen_dwell = 0
     self.lowv_release_frames = 0
+    # Phase 14-2: stateful blinker anchor.
+    self.blinker_anchor_on = False
+    self.blinker_anchor_fire = 0
+    self.blinker_anchor_hold = 0
+    # Phase 14-4 S3': lead-less lot-crawl window.
+    self.creep_frames = 0
+    self.creep_min = float('inf')
+    self.creep_sum = 0.0
+    # Phase 14-1: angle_passive redesigned entry/exit counters.
+    self.intent_disagree_frames = 0
+    self.angle_passive_release_frames = 0
     # Diagnostic: log CCNC_0x161.LFA_ICON transitions.
     self.prev_lfa_icon = -1
     # CCNC angle-control vehicle models.
@@ -346,7 +367,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.vm_reject_consecutive_frames = 0
     # Phase 6d: 1-bool latch for angle-aware passive hysteresis. Set
     # True when |wheel| ≥ ANGLE_PASSIVE_ENTER_WHEEL_DEG AND |torque|
-    # ≥ ANGLE_PASSIVE_ENTER_TORQUE_NM; cleared when |torque| drops
+    # with debounced steeringPressed (Phase 14-1); cleared when the grip releases
     # below ANGLE_PASSIVE_EXIT_TORQUE_NM or lat_active goes False.
     # Mirrors the Phase 5e vm_reject_consecutive_frames latch pattern
     # (1-bool / 1-counter "essential hysteresis", not a state machine).
@@ -600,9 +621,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # preserving the 10c hands-off authority) yet engages ~130 Nm / ~50 ms earlier
     # than steeringPressed. Non-blinker behaviour unchanged.
     # Kill switch: BLINKER_ANCHOR_TORQUE_NM = 1e9 (pressed-only, pre-10d).
+    # Phase 14-2: the single 220 Nm test flapped at 3.84 transitions/s during
+    # low-speed blinker waits (routes 0x2e-0x2f) as |tq| wandered across the
+    # threshold — the flicker case flagged at 10d's introduction. Make the
+    # blinker anchor stateful: fire after 3 sustained frames >= 220, then hold
+    # while |tq| >= 180 (40 Nm band) with a 0.3 s minimum hold.
+    blinker_anchor_raw = blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM
+    if self.blinker_anchor_on:
+      self.blinker_anchor_hold += 1
+      keep = blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_RELEASE_NM
+      if not keep and self.blinker_anchor_hold >= CarControllerParams.BLINKER_ANCHOR_MIN_HOLD_FRAMES:
+        self.blinker_anchor_on = False
+    else:
+      self.blinker_anchor_fire = self.blinker_anchor_fire + 1 if blinker_anchor_raw else 0
+      if self.blinker_anchor_fire >= CarControllerParams.BLINKER_ANCHOR_FIRE_FRAMES:
+        self.blinker_anchor_on = True
+        self.blinker_anchor_hold = 0
+        self.blinker_anchor_fire = 0
     heavy_grip_anchor = (override_factor >= 0.9) and (
-      bool(CS.out.steeringPressed)
-      or (blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM))
+      bool(CS.out.steeringPressed) or self.blinker_anchor_on)
 
     # Low-speed camera passthrough latch (kept-feature #11).
     # Phase 13a: the latch used to key on `hands_off` (override_factor <= 0.5),
@@ -645,7 +682,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # yield, 1.0 s to (re)engage — the gate cannot flap. Note real grip
     # (low_speed_cam_latched) now yields even during traffic-following: with
     # the offset-proof threshold, latched means actual driver intent.
-    scen_raw = self.traffic_following or (abs(op_curv_safe) < CarControllerParams.LOW_SPEED_MAX_CMD_DEG)
+    # Phase 14-3: hysteresis on the gentle-path threshold (was a single 40°
+    # boundary — ~10% of residual low-speed flips on 0x2e-0x2f): while steering
+    # stays allowed until |cmd| exceeds 45°; once passive, return below 35°.
+    gentle_thr = (CarControllerParams.LOW_SPEED_CMD_PASSIVE_DEG if self.low_speed_scen_ok
+                  else CarControllerParams.LOW_SPEED_CMD_ACTIVE_DEG)
+    scen_raw = self.traffic_following or (abs(op_curv_safe) < gentle_thr)
     if scen_raw != self.low_speed_scen_ok:
       self.lowv_scen_dwell += 1
       need = (CarControllerParams.LOW_SPEED_SCEN_TO_ACTIVE_FRAMES if scen_raw
@@ -672,10 +714,36 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.parking_low_speed_frames = min(self.parking_low_speed_frames + 1,
                                           PARKING_MODE_ENTER_SUSTAIN_FRAMES)
       if (abs(steer_angle_safe) >= PARKING_MODE_ENTER_WHEEL_DEG
-          or CS.out.gearShifter == structs.CarState.GearShifter.reverse):
+          or CS.out.gearShifter == structs.CarState.GearShifter.reverse
+          # Phase 14-4 S1: park gear = the strongest lot evidence available
+          # without scene understanding — every departure starts in P, so the
+          # boot-to-first->33km/h window is automatically a parking regime.
+          or CS.out.gearShifter == structs.CarState.GearShifter.park
+          # Phase 14-4 S2: door / seatbelt activity at standstill (pick-up,
+          # drop-off, the moments around parking itself).
+          or ((CS.out.doorOpen or CS.out.seatbeltUnlatched) and CS.out.standstill)):
         self.parking_signature_seen = True
     else:
       self.parking_low_speed_frames = 0
+    # Phase 14-4 S3': lead-less lot-crawl pattern. A parking-lot drive is
+    # crawl <-> short 20-22 km/h aisle spikes; surface streets hold 20-25
+    # steadily. Signature: a 10 s window that (a) never exceeds 25 km/h,
+    # (b) has no lead within TRAFFIC_FOLLOW_FAR_M (queue crawl excluded), and
+    # (c) shows the lot pattern — a dip below 8 km/h or window mean < 12 km/h.
+    # False-fire cost is bounded: passive only until the 33 km/h exit.
+    lead_near = self.lead_visible and self.lead_distance < TRAFFIC_FOLLOW_FAR_M
+    if v_ego_safe < PARKING_CREEP_MAX_MS and not lead_near:
+      self.creep_frames += 1
+      self.creep_min = min(self.creep_min, v_ego_safe)
+      self.creep_sum += v_ego_safe
+      if (self.creep_frames >= PARKING_CREEP_FRAMES
+          and (self.creep_min < PARKING_CREEP_DIP_MS
+               or self.creep_sum / self.creep_frames < PARKING_CREEP_MEAN_MS)):
+        self.parking_signature_seen = True
+    else:
+      self.creep_frames = 0
+      self.creep_min = float('inf')
+      self.creep_sum = 0.0
     if (self.parking_low_speed_frames >= PARKING_MODE_ENTER_SUSTAIN_FRAMES
         and self.parking_signature_seen):
       self.parking_mode_active = True
@@ -898,20 +966,37 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # the driver's entire reactive-grip window even though no genuine
     # driver-active turn occurred. The counter mirrors the Phase 5e
     # vm_reject_consecutive_frames pattern.
+    # Phase 14-1: offset-proof redesign. The v1-era thresholds (enter 30/60 Nm,
+    # exit <30 Nm) all sit inside the +90..180 Nm column-torque offset band —
+    # with Phase 11 opening latActive below 20 km/h this latch became the main
+    # residual shake source on 0x2e-0x2f: exit <30 Nm is near-impossible while
+    # moving (hands-off |tq| p10=24), locking gentle low-speed stretches 69%
+    # passive, while the 30 Nm entry boundary + offset-dominated sign test
+    # flapped plan<->wheel around the low-torque tail. Redesign to the 13a
+    # standard: entry A keys on debounced steeringPressed, entry B (opposing
+    # push) needs 260 Nm sustained 0.3 s so the sign is the driver's, and exit
+    # is a sustained let-go (!pressed & <260 Nm for 0.5 s).
     if not bool(CC.latActive):
       self.angle_passive_active = False
       self.angle_passive_enter_frames = 0
+      self.intent_disagree_frames = 0
+      self.angle_passive_release_frames = 0
     elif self.angle_passive_active:
-      if abs(steer_torque_safe) < CarControllerParams.ANGLE_PASSIVE_EXIT_TORQUE_NM:
+      if (not CS.out.steeringPressed) and \
+         abs(steer_torque_safe) < CarControllerParams.ANGLE_PASSIVE_EXIT_TORQUE_NM:
+        self.angle_passive_release_frames += 1
+      else:
+        self.angle_passive_release_frames = 0
+      if self.angle_passive_release_frames >= CarControllerParams.ANGLE_PASSIVE_EXIT_FRAMES:
         self.angle_passive_active = False
         self.angle_passive_enter_frames = 0
+        self.intent_disagree_frames = 0
+        self.angle_passive_release_frames = 0
     else:
-      # Phase 6f-3 OR-arm: low-speed sign-disagreement also arms entry
-      # even when |wheel| stays below the 40° geometry gate. The driver
-      # pushes ≥30 Nm in the opposite direction of op's last-frame
-      # apply_angle_last (≥5° off the wheel) at ≤30 km/h — the cluster
-      # signature measured on ccnc-drivelog 0x3c-0x3f. Reuses the 5-frame
-      # sustain and torque-only exit.
+      # Phase 6f-3 OR-arm, 14-1 hardened: the driver pushes >= 260 Nm
+      # (clears the offset — the old 30 Nm test made the sign a coin flip)
+      # opposite op's apply_angle_last (>= 5° off the wheel) at <= 30 km/h,
+      # sustained 0.3 s.
       low_intent_disagree = (
         v_ego_safe <= CarControllerParams.INTENT_DISAGREE_VEGO_MS
         and abs(steer_torque_safe) >= CarControllerParams.INTENT_DISAGREE_TQ_MIN_NM
@@ -919,15 +1004,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         and (np.sign(steer_torque_safe)
              * np.sign(self.apply_angle_last - steer_angle_safe)) < 0
       )
-      if ((abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
-           and abs(steer_torque_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_TORQUE_NM)
-          or low_intent_disagree):
-        self.angle_passive_enter_frames = min(self.angle_passive_enter_frames + 1,
-                                              CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES)
-        if self.angle_passive_enter_frames >= CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES:
-          self.angle_passive_active = True
-      else:
-        self.angle_passive_enter_frames = 0
+      self.intent_disagree_frames = self.intent_disagree_frames + 1 if low_intent_disagree else 0
+      geo_enter = (abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
+                   and CS.out.steeringPressed)
+      self.angle_passive_enter_frames = min(self.angle_passive_enter_frames + 1,
+                                            CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES) if geo_enter else 0
+      if (self.angle_passive_enter_frames >= CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES
+          or self.intent_disagree_frames >= CarControllerParams.INTENT_DISAGREE_SUSTAIN_FRAMES):
+        self.angle_passive_active = True
+        self.angle_passive_release_frames = 0
     # Phase 6e-2 + Phase 6f-1: clamp apply_angle_last to the actual
     # wheel position whenever either the angle-passive latch is
     # engaged OR the driver is in heavy-override territory
