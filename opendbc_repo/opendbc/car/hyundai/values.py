@@ -203,9 +203,16 @@ class CarControllerParams:
   # Kill switch: CURVE_TRIM_RATE_DPS = 0.0.
   CURVE_TRIM_MIN_CMD_DEG    = 4.0     # curve gate: |desired| must exceed this
   CURVE_TRIM_SUSTAIN_FRAMES = 100     # ... for 1 s before the trim starts
-  CURVE_TRIM_RATE_DPS       = 1.0     # trim slew, deg/s (13b: 2.0 -> 1.0, weave rejection)
+  # Phase 15: slew restored 1.0 -> 2.0 deg/s and cap widened. 13b halved the
+  # slew fearing weave feed-through, but the tau=1.5 s residual LP owns that
+  # defense: 0x30-0x33 replay shows 2.0 deg/s doubles the in-curve trim reach
+  # (p50 0.72 -> 1.44 deg, p90 2.35 -> 4.69) at the SAME trim 2-8 Hz content
+  # as 1.5 deg/s (0.035 vs 0.036 deg — LP-dominated), while the on-road
+  # tracking gap sat unchanged at |cmd-wheel| p50 = 5.45 deg because the slew
+  # x curve-duration product was too small to matter (median trim +0.88 deg).
+  CURVE_TRIM_RATE_DPS       = 2.0
   CURVE_TRIM_CAP_SPEEDS_MS  = [8.3, 27.8]   # 30 -> 100 km/h
-  CURVE_TRIM_CAP_DEG        = [5.0, 3.0]    # tighter cap at speed
+  CURVE_TRIM_CAP_DEG        = [6.0, 4.0]    # tighter cap at speed
   CURVE_TRIM_BLEED_TAU_S    = 0.5     # decay when gate drops (grip/straight/inactive)
   CURVE_TRIM_FLIP_TAU_S     = 0.15    # fast decay of trim opposing the curve direction (S-curve flip)
   # Phase 12b (P2): hysteresis deadband on the desired angle. Model replan churn
