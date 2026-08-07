@@ -313,6 +313,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.blinker_anchor_on = False
     self.blinker_anchor_fire = 0
     self.blinker_anchor_hold = 0
+    self.blinker_anchor_release = 0
     # Phase 14-4 S3': lead-less lot-crawl window.
     self.creep_frames = 0
     self.creep_min = float('inf')
@@ -632,14 +633,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if self.blinker_anchor_on:
       self.blinker_anchor_hold += 1
       keep = blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_RELEASE_NM
-      if not keep and self.blinker_anchor_hold >= CarControllerParams.BLINKER_ANCHOR_MIN_HOLD_FRAMES:
+      # Phase 14-2b: the release was a SINGLE sub-180 frame (vs the 3-frame
+      # debounced fire) — asymmetric, so offset-band noise (100-300 Nm,
+      # 1-5 Hz) still flapped the anchor at 2-3 transitions/s in sim, the
+      # exact flicker 14-2 set out to remove. Release on a sustained let-go
+      # instead, same 0.5 s standard as the 13a latches.
+      self.blinker_anchor_release = 0 if keep else self.blinker_anchor_release + 1
+      if (self.blinker_anchor_release >= CarControllerParams.BLINKER_ANCHOR_RELEASE_FRAMES
+          and self.blinker_anchor_hold >= CarControllerParams.BLINKER_ANCHOR_MIN_HOLD_FRAMES):
         self.blinker_anchor_on = False
+        self.blinker_anchor_release = 0
     else:
       self.blinker_anchor_fire = self.blinker_anchor_fire + 1 if blinker_anchor_raw else 0
       if self.blinker_anchor_fire >= CarControllerParams.BLINKER_ANCHOR_FIRE_FRAMES:
         self.blinker_anchor_on = True
         self.blinker_anchor_hold = 0
         self.blinker_anchor_fire = 0
+        self.blinker_anchor_release = 0
     heavy_grip_anchor = (override_factor >= 0.9) and (
       bool(CS.out.steeringPressed) or self.blinker_anchor_on)
 
@@ -652,7 +662,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # shaking. Redesign: ENTER on the debounced steeringPressed flag (real
     # 350 Nm x 5-frame grip only), RELEASE on a sustained sub-260 Nm let-go.
     # Flap-free by construction.
-    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS and CS.out.steeringPressed:
+    # F8/R1 note: use v_ego_safe here (not raw vEgoRaw) — a NaN speed frame
+    # fails every comparison and would freeze both latches in whatever state
+    # they held; the sanitizer maps it to 0 so they fail toward passive.
+    if v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS and CS.out.steeringPressed:
       self.low_speed_cam_latched = True
       self.lowv_release_frames = 0
     elif self.low_speed_cam_latched:
@@ -661,14 +674,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.lowv_release_frames += 1
       else:
         self.lowv_release_frames = 0
-      if (CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS
+      if (v_ego_safe > LOW_SPEED_PASSTHROUGH_EXIT_MS
           or self.lowv_release_frames >= CarControllerParams.LOW_SPEED_GRIP_RELEASE_FRAMES):
         self.low_speed_cam_latched = False
         self.lowv_release_frames = 0
     # Speed-zone latch for the scenario gate (same 20/22 km/h hysteresis).
-    if CS.out.vEgoRaw < LOW_SPEED_PASSTHROUGH_ENTER_MS:
+    if v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS:
       self.in_low_speed_zone = True
-    elif CS.out.vEgoRaw > LOW_SPEED_PASSTHROUGH_EXIT_MS:
+    elif v_ego_safe > LOW_SPEED_PASSTHROUGH_EXIT_MS:
       self.in_low_speed_zone = False
     # Traffic-following keeps op engaged in stop-and-go even below the
     # low-speed freeze threshold. lead_visible / lead_distance are
@@ -1050,7 +1063,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # parking_mode_active is included so apply_angle_last tracks the wheel
     # while op is held passive (CC.latActive may still be True), giving a
     # bump-free resume when the latch releases above 33 km/h.
-    if self.angle_passive_active or heavy_grip_anchor or self.parking_mode_active:
+    # in_passthrough (low-speed grip latch / 13a scenario gate) gets the same
+    # treatment for the same reason: op is passive there with CC.latActive
+    # still True, so without the anchor apply_angle_last keeps advancing on
+    # the plan while the driver turns — the gate then re-engaged with a stale
+    # angle tens of degrees off the wheel (sim measured a 40°+ first-frame
+    # step at scenario-gate release). Anchored, resume starts at the wheel.
+    if (self.angle_passive_active or heavy_grip_anchor or self.parking_mode_active
+        or in_passthrough):
       self.apply_angle_last = float(np.clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))

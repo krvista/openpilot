@@ -96,6 +96,11 @@ class LatControlAngle(LatControl):
   def _filtered_roll(self, roll: float) -> float:
     if ROLL_LP_TAU <= 0.0:
       return roll
+    # Non-finite guard: the LP update is recursive, so a single NaN roll
+    # estimate would poison the filter state permanently (stock raw-roll was
+    # stateless and recovered next frame). Hold the last good value instead.
+    if not math.isfinite(roll):
+      return self._roll_lp
     if not self._roll_lp_init:
       self._roll_lp = roll
       self._roll_lp_init = True
@@ -112,11 +117,21 @@ class LatControlAngle(LatControl):
     if LAT_FB_KI > 0.0:
       curv_actual = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, roll_filtered)
       fb_err = desired_curvature - curv_actual
+      # Non-finite guard: the bleed paths are multiplicative, so a single NaN
+      # frame (CAN glitch on steeringAngleDeg / model output) would poison
+      # the integrator and error-LP state permanently — the pre-7a chain was
+      # pure FF and recovered on the next clean frame. Zero the frame's error
+      # and flush any state already hit; the trim just re-integrates.
+      if not math.isfinite(fb_err):
+        fb_err = 0.0
+      if not (math.isfinite(self._fb_integ) and math.isfinite(self._fb_err_lp)):
+        self._fb_integ = 0.0
+        self._fb_err_lp = 0.0
       # Phase 7a-4: short LP of the error so the yield gate keys on SUSTAINED
       # deficit, not transient spikes (see constants block).
       err_lp_a = self.dt / (LAT_FB_ERR_LP_TAU + self.dt) if LAT_FB_ERR_LP_TAU > 0.0 else 1.0
       self._fb_err_lp += err_lp_a * (fb_err - self._fb_err_lp)
-      if not active or CS.vEgo < LAT_FB_MIN_SPEED:
+      if not active or CS.vEgo < LAT_FB_MIN_SPEED or not math.isfinite(CS.vEgo):
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_INACTIVE, 0.0)
       elif (CS.steeringPressed or steer_limited_by_safety or curvature_limited
             or abs(self._fb_err_lp) > LAT_FB_ERR_MAX or abs(fb_err) > LAT_FB_ERR_MAX_HARD):
@@ -126,7 +141,9 @@ class LatControlAngle(LatControl):
         rising = abs(desired_curvature) > self._des_slow * 1.02
         ki = LAT_FB_KI * (LAT_FB_ENTRY_BOOST if rising else 1.0)
         self._fb_integ = float(np.clip(self._fb_integ + ki * fb_err * self.dt, -cap, cap))
-      self._des_slow += (self.dt / 0.5) * (abs(desired_curvature) - self._des_slow)
+      # (same guard for the 7b rising-entry EMA — recursive state)
+      if math.isfinite(desired_curvature):
+        self._des_slow += (self.dt / 0.5) * (abs(desired_curvature) - self._des_slow)
     else:
       self._fb_integ = 0.0
 

@@ -174,6 +174,11 @@ class CarControllerParams:
   BLINKER_ANCHOR_RELEASE_NM      = 180.0
   BLINKER_ANCHOR_FIRE_FRAMES     = 3
   BLINKER_ANCHOR_MIN_HOLD_FRAMES = 30     # 0.3 s
+  # Phase 14-2b: sustained let-go before release (was a single sub-180 frame,
+  # which flapped 2-3x/s against the 3-frame fire debounce under offset-band
+  # noise). 0.5 s matches the 13a-standard release counters
+  # (LOW_SPEED_GRIP_RELEASE_FRAMES / ANGLE_PASSIVE_EXIT_FRAMES).
+  BLINKER_ANCHOR_RELEASE_FRAMES  = 50     # 0.5 s
   # Phase 12c (10c fix): torque breakpoints for the blinker ACIGain ceiling taper
   # (0.45 -> 0.28). 10c reused [DEADZONE_BLINKER=45, FULL_OVERRIDE_LOW_V_BLINKER=100]
   # which sit BELOW the +90..180 Nm column-torque sensor offset, so a hands-off
