@@ -167,8 +167,17 @@ class ModularAssistiveDrivingSystem:
       # edge fires during NO_ENTRY window and is never retried).
       # For allow_always platforms (CANFD Hyundai), this guarantees MADS
       # auto-enables on boot even if MadsMainCruiseAllowed=False.
+      # Respect the configured brake-pedal behavior while retrying: the
+      # PAUSE/DISENGAGE modes gate user-initiated enables on the pedal
+      # (should_silent_lkas_enable / the lkasEnable removal below), and the
+      # silent retry must not slip past that gate — otherwise MADS enables
+      # against the pedal for one frame and immediately disengages again
+      # (enable/disable flap + alert churn with the brake held at boot).
+      # The retry simply resumes once the pedal is released.
       if self._boot_enable_pending and CS.cruiseState.available and not self.enabled and \
-         (self.main_enabled_toggle or self.allow_always):
+         (self.main_enabled_toggle or self.allow_always) and \
+         self.should_silent_lkas_enable(CS) and \
+         not (self.steering_mode_on_brake == MadsSteeringModeOnBrake.DISENGAGE and self.pedal_pressed_non_gas_pressed(CS)):
         self.events_sp.add(EventNameSP.silentLkasEnable)
 
     for be in CS.buttonEvents:

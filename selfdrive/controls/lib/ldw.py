@@ -1,3 +1,4 @@
+import math
 from collections import deque
 
 from cereal import log
@@ -44,6 +45,12 @@ class LaneDepartureWarning:
       return False
     probs = [p for p, _ in hist]
     clrs = [c for _, c in hist]
+    # every gate below is a comparison, and NaN compares False against
+    # everything — a single NaN frame would therefore pass ALL the
+    # continuity gates instead of none. The detector's contract is
+    # "every frame confirms", so a corrupted window must not fire.
+    if not all(map(math.isfinite, probs)) or not all(map(math.isfinite, clrs)):
+      return False
     if min(probs) <= OP_LDW_MIN_PROB or clrs[-1] >= OP_LDW_CLR_M:
       return False
     steps = [b - a for a, b in zip(clrs, clrs[1:])]
@@ -65,6 +72,10 @@ class LaneDepartureWarning:
       # Phase 6g-4: op-active path (see constants above).
       base_allowed = (CS.vEgo > LDW_MIN_SPEED and not recent_blinker and OP_LDW_CLR_M > 0.0
                       and len(probs) >= 3 and len(lane_lines) >= 3
+                      # model glitch frames can carry empty y arrays even when
+                      # laneLines itself has entries — y[0] below would IndexError
+                      # and take plannerd down with it
+                      and len(lane_lines[1].y) > 0 and len(lane_lines[2].y) > 0
                       and modelV2.meta.laneChangeState == log.LaneChangeState.off)
       if base_allowed:
         self._hist_l.append((float(probs[1]), abs(float(lane_lines[1].y[0]))))

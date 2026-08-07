@@ -112,6 +112,23 @@ LAT_CONF_FLOOR = 0.5
 CONF_FLOOR_LANE_LO = 0.20
 CONF_FLOOR_LANE_HI = 0.30
 
+# Non-finite model action handling. A NaN/inf model_v2.action.desiredCurvature
+# bypasses every isfinite check in _lookahead_curvature (they only cover the
+# SAMPLED TRAJECTORY, not the fallback) and reaches the recursive state below:
+# _lat_cmd_lp, _absdc_slow and self.desired_curvature (via np.clip in
+# clip_curvature) all latch NaN PERMANENTLY, and the actuator finite-guard then
+# zeroes curvature/steeringAngleDeg every frame — one glitch frame = a silent,
+# unrecoverable 0-deg steering command for the rest of the drive.
+# A short PURE HOLD of the last command rides out a transient glitch with no
+# jerk. It must be BOUNDED, though: nothing downstream (selfdrived only checks
+# frameDropPerc/posenetOK, never the value) faults on a model that keeps
+# emitting non-finite actions, so an unbounded hold would keep the car turning
+# on a stale curvature indefinitely with no alert. After the hold window the
+# target is ramped to straight — same "bleed, not hold" rule the Phase 7a trim
+# uses for its anti-windup. Kill switch: RAMP_END_S = HOLD_S = large -> pure hold.
+MODEL_NONFINITE_HOLD_S = 0.20      # pure hold (identical to the last command)
+MODEL_NONFINITE_RAMP_END_S = 2.20  # target fully ramped to 0 by here
+
 
 class Controls(ControlsExt):
   def __init__(self) -> None:
@@ -138,6 +155,7 @@ class Controls(ControlsExt):
     self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
     self._klane_lp = 0.0     # Phase 7c lane-geometry curvature (EMA 0.3 s)
     self._absdc_slow = 0.0   # Phase 7c rising-entry detector state
+    self._model_nonfinite_frames = 0  # consecutive non-finite model actions
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -168,6 +186,16 @@ class Controls(ControlsExt):
     Phase 6h-1: lookahead_extra_s is the caller's LP time constant tau(v) so the
     phase lead always matches the smoothing lag (was a fixed 0.10 s constant)."""
     fallback = model_v2.action.desiredCurvature
+
+    # Non-finite model action: hold the last command briefly, then ramp to
+    # straight (see MODEL_NONFINITE_* above). Nothing non-finite may reach the
+    # recursive state in state_control().
+    if not math.isfinite(fallback):
+      self._model_nonfinite_frames += 1
+      ramp = np.clip((MODEL_NONFINITE_RAMP_END_S - self._model_nonfinite_frames * DT_CTRL) /
+                     (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
+      return self.desired_curvature * float(ramp)
+    self._model_nonfinite_frames = 0
 
     # capnp _DynamicListReader does not support slicing, so use np.fromiter
     pos_x = model_v2.position.x
@@ -353,7 +381,11 @@ class Controls(ControlsExt):
         lc = lambda xq: 0.5 * (np.interp(xq, xl, yl) + np.interp(xq, xr, yr))
         klane_raw = (lc(0.0) - 2.0 * lc(25.0) + lc(50.0)) / 625.0
         a = DT_CTRL / (0.3 + DT_CTRL)
-        self._klane_lp += a * (float(klane_raw) - self._klane_lp)
+        # NaN lane-line y values pass the length checks and np.interp forwards
+        # them; one such frame would poison the EMA (abs(NaN) gates all go
+        # False) and silently disable entry assist for the rest of the drive.
+        if np.isfinite(klane_raw):
+          self._klane_lp += a * (float(klane_raw) - self._klane_lp)
         self._absdc_slow += (DT_CTRL / 0.5) * (abs(new_desired_curvature) - self._absdc_slow)
         rising = abs(new_desired_curvature) > self._absdc_slow * 1.02
         if (CS.vEgo > ENTRY_ASSIST_MIN_SPEED and lane_min_p > ENTRY_ASSIST_LANE_MIN
