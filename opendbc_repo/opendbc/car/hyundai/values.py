@@ -257,6 +257,13 @@ class CarControllerParams:
   LOW_SPEED_CMD_ACTIVE_DEG         = 35.0   # fall below while passive -> re-engage
   LOW_SPEED_SCEN_TO_PASSIVE_FRAMES = 30     # 0.3 s to yield
   LOW_SPEED_SCEN_TO_ACTIVE_FRAMES  = 100    # 1.0 s to (re)engage
+  # Phase 18 creep gate (see carcontroller): under ENTER the scenario gate
+  # requires traffic-following AND blinker-off — the model command itself
+  # oscillates near standstill (0x36-0x37: cmd RMS 1.2-2.4°, wheel shake at
+  # ~1 Hz in 27% of creep steering time) and only lead-anchored queue crawl
+  # measured quiet. Kill switch: CREEP_GATE_ENTER_MS = 0.0.
+  CREEP_GATE_ENTER_MS = 10.0 / 3.6
+  CREEP_GATE_EXIT_MS  = 12.0 / 3.6
   # Phase 13b: 12a trim repair + noise hardening. As shipped, 12a armed almost
   # never (sustained-curve TX-cmd p50 = +0.02° on 0x2a-0x2d) because its gate
   # reused the offset-corrupted `hands_off`, whose torque test flaps in the

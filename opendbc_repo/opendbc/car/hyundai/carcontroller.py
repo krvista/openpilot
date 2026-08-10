@@ -306,6 +306,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.cmd_hyst = 0.0
     # Phase 13a: low-speed scenario gate state.
     self.in_low_speed_zone = False
+    # Phase 18: creep-zone latch (10/12 km/h hysteresis).
+    self.in_creep_zone = False
     self.low_speed_scen_ok = True
     self.lowv_scen_dwell = 0
     self.lowv_release_frames = 0
@@ -702,7 +704,24 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # stays allowed until |cmd| exceeds 45°; once passive, return below 35°.
     gentle_thr = (CarControllerParams.LOW_SPEED_CMD_PASSIVE_DEG if self.low_speed_scen_ok
                   else CarControllerParams.LOW_SPEED_CMD_ACTIVE_DEG)
-    scen_raw = self.traffic_following or (abs(op_curv_safe) < gentle_thr)
+    # Phase 18 creep gate: below ~10 km/h the model's own command oscillates
+    # (near-standstill vision curvature noise, cmd 2-8 Hz RMS 1.2-2.4° on
+    # routes 0x36-0x37) and no amount of downstream smoothing removes it —
+    # 27% of creep-band steering time measured wheel RMS > 0.15° at ~1 Hz,
+    # the felt shake. In the creep zone steer ONLY when following a lead with
+    # the blinker off (queue crawl — the one creep scenario where the command
+    # is anchored to the lead and measured quiet). Free creep, turn-waiting
+    # and blinker creep go manual: nothing there needs op steering. Zone has
+    # its own 10/12 km/h hysteresis; the existing dwell debounces transitions.
+    # Kill switch: CREEP_GATE_ENTER_MS = 0.0 (zone never arms).
+    if v_ego_safe < CarControllerParams.CREEP_GATE_ENTER_MS:
+      self.in_creep_zone = True
+    elif v_ego_safe > CarControllerParams.CREEP_GATE_EXIT_MS:
+      self.in_creep_zone = False
+    if self.in_creep_zone:
+      scen_raw = self.traffic_following and not blinker_on
+    else:
+      scen_raw = self.traffic_following or (abs(op_curv_safe) < gentle_thr)
     if scen_raw != self.low_speed_scen_ok:
       self.lowv_scen_dwell += 1
       need = (CarControllerParams.LOW_SPEED_SCEN_TO_ACTIVE_FRAMES if scen_raw
