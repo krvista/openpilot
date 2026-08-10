@@ -195,7 +195,12 @@ def hardware_thread(end_event, hw_queue) -> None:
   started_ts: float | None = None
   started_seen = False
   startup_blocked_ts: float | None = None
-  thermal_status = ThermalStatus.yellow
+  # Phase 20a-fix: the stock initial value (yellow) is NOT a key of the mici
+  # THERMAL_BANDS dict — the first band lookup raised KeyError and killed
+  # hardwared (no deviceState -> onroad never starts -> UI stuck on the init
+  # screen; observed on-road 2026-08-XX morning commute). Start in the
+  # lowest band of whichever dict is active, mirroring upstream's ok-init.
+  thermal_status = next(iter(THERMAL_BANDS))
 
   last_hw_state = HardwareState(
     network_type=NetworkType.none,
@@ -305,6 +310,11 @@ def hardware_thread(end_event, hw_queue) -> None:
       # we want to cool down first before increasing load
       thermal_status = ThermalStatus.danger
     else:
+      # Phase 20a-fix: never index the band dict with a status outside it —
+      # the exact failure mode that took hardwared down when the mici dict
+      # dropped the yellow band. Snap to the nearest valid band instead.
+      if thermal_status not in THERMAL_BANDS:
+        thermal_status = next(iter(THERMAL_BANDS))
       current_band = THERMAL_BANDS[thermal_status]
       band_idx = list(THERMAL_BANDS.keys()).index(thermal_status)
       if current_band.min_temp is not None and all_comp_temp < current_band.min_temp:
