@@ -133,10 +133,25 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # could not be attributed at the full step. Ladder:
     # [0.4,0.62,0.85,1.0] (pre / kill switch) -> [0.32,0.5,0.75,0.95] (this) ->
     # [0.25,0.35,0.65,0.9] (full step, only after the W4 on-road gate passes).
-    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.32, 0.5, 0.75, 0.95])
+    # Phase 19a: low-speed ceiling lowered to the 6h-4 ladder's full-step
+    # LOW-END ([0.32,0.5] -> [0.25,0.40]) — softer MDPS hold at creep/city
+    # speeds transmits less of the near-standstill command noise to the wheel
+    # (routes 0x36-0x37). The 40/120 km/h points stay at the half-step values:
+    # highway authority carries the tracking/trim work (|cmd-wheel| p50 5.45°)
+    # and must not drop. Kill switch: [0.32, 0.5, 0.75, 0.95] (pre-19a).
+    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.25, 0.40, 0.75, 0.95])
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
+    # Phase 19b: the drift-recovery boost is a low-speed noise AMPLIFIER —
+    # creep-band command oscillation opens |steering_error| past error_start
+    # (measured firing 43-53% of hands-off low-speed time on 0x36-0x37), so
+    # the boost doubled MDPS authority exactly when the command was noisiest.
+    # Gate it out below 15 km/h, full strength again from 25 km/h; highway
+    # drift recovery (its actual purpose) is untouched.
+    # Kill switch: [0.0, 0.0] speeds -> boost always full.
+    boost_speed_gate = np.interp(v_ego_kph, [15.0, 25.0], [0.0, 1.0])
+    error_mult_raw = 1.0 + (error_mult_raw - 1.0) * boost_speed_gate
     # Phase 6c-2 N7b: the error_mult boost was designed to recover op
     # tracking when hands-off drift opens steering_error (i.e. ACIGain
     # ceiling 1→2x to push MDPS harder back onto the desired angle).
