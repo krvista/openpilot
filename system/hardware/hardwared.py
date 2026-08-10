@@ -40,15 +40,30 @@ HardwareState = namedtuple("HardwareState", ['network_type', 'network_info', 'ne
 
 # List of thermal bands. We will stay within this region as long as we are within the bounds.
 # When exiting the bounds, we'll jump to the lower or higher band. Bands are ordered in the dict.
-THERMAL_BANDS = OrderedDict({
-  ThermalStatus.green: ThermalBand(None, 80.0),
-  ThermalStatus.yellow: ThermalBand(75.0, 96.0),
-  ThermalStatus.red: ThermalBand(88.0, 107.),
-  ThermalStatus.danger: ThermalBand(94.0, None),
-})
+# Phase 20a: comma four thermal policy backport (upstream 0.11.2 "Improved
+# thermal policy for comma four"). The mici SOM tolerates a much wider
+# envelope: nominal band up to 100 °C (was 80), warning from 92, critical
+# from 98, offroad override at 85. Ported POLICY-only under our existing
+# ThermalStatus names — upstream also renamed the cereal enum (green->ok,
+# red->overheated, danger->critical) but the wire indices are identical, so
+# the schema and every consumer stay untouched. The yellow band simply goes
+# unused on mici (the band walk iterates this dict). tici/tizi unchanged.
+if HARDWARE.get_device_type() == "mici":
+  THERMAL_BANDS = OrderedDict({
+    ThermalStatus.green: ThermalBand(None, 100.0),
+    ThermalStatus.red: ThermalBand(92.0, 107.),
+    ThermalStatus.danger: ThermalBand(98.0, None),
+  })
+else:
+  THERMAL_BANDS = OrderedDict({
+    ThermalStatus.green: ThermalBand(None, 80.0),
+    ThermalStatus.yellow: ThermalBand(75.0, 96.0),
+    ThermalStatus.red: ThermalBand(88.0, 107.),
+    ThermalStatus.danger: ThermalBand(94.0, None),
+  })
 
 # Override to highest thermal band when offroad and above this temp
-OFFROAD_DANGER_TEMP = 75
+OFFROAD_DANGER_TEMP = 85 if HARDWARE.get_device_type() == "mici" else 75
 
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 

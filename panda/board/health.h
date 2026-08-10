@@ -3,6 +3,12 @@
 // When changing these structs, python/__init__.py needs to be kept up to date!
 
 #define HEALTH_PACKET_VERSION 18
+// Phase 20c build repair: the 0xdd handler reports this alongside the health
+// versions, but the define was lost somewhere in the i6n panda overlay (the
+// committed binaries predate the drift — the tree as committed did not
+// compile). 4 matches python/__init__.py CAN_PACKET_VERSION, i.e. exactly
+// what the currently-deployed firmware already reports.
+#define CAN_PACKET_VERSION 4
 struct __attribute__((packed)) health_t {
   uint32_t uptime_pkt;
   uint32_t voltage_pkt;

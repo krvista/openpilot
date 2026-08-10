@@ -300,7 +300,13 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
         heartbeat_lost = false;
         heartbeat_disabled = false;
         heartbeat_engaged = (req->param1 == 1U);
-        heartbeat_engaged_mads = true; // FIXME-SP: Implement proper heartbeat check from sunnypilot
+        // Phase 20c: read the real MADS-engaged flag from the heartbeat
+        // (param2, sent by pandad's send_heartbeat since the i6n port).
+        // The previous FIXME stub pinned this true, which made
+        // mads_heartbeat_engaged_check() unable to ever see a mismatch —
+        // the "host died while lateral stayed allowed" safety net was
+        // silently defeated. Mirrors upstream sunnypilot main_comms.h.
+        heartbeat_engaged_mads = (req->param2 == 1U);
         break;
       }
     // **** 0xf6: set siren enabled
