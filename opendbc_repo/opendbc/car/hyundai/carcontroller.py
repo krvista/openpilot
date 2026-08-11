@@ -111,7 +111,12 @@ PARKING_CREEP_FRAMES   = 1000                    # 10 s @ 100 Hz
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
-                                  grip_start=100.0, grip_full=350.0, grip_floor=0.19, suppress_error_boost=False):
+                                  grip_start=80.0, grip_full=280.0, grip_floor=0.15, suppress_error_boost=False):
+  # Phase 21: yield curve softened ~20% (0x36-0x37 override replay: mean gain
+  # 0.348 -> 0.272, -22%; low-speed -20%). Start 100->80, hands-off full
+  # 350->280 / floor 0.19->0.15; pressed band in values.py (260->208,
+  # 0.10->0.08). Ceilings untouched — hands-off tracking authority is not
+  # part of the felt override resist. Kill: 100.0/350.0/0.19 (+values).
   # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
   # augmented across Phase 5 and Phase 6 by stateless hooks that each
   # take a single per-frame signal as input:
@@ -163,7 +168,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # 100 Nm deadzone to zero at the 180 Nm low-v full-override point;
     # above 180 Nm there is no boost at all. The base_ceiling × 1 line
     # remains, so light-grip / hands-off recovery is unchanged.
-    torque_suppress = np.interp(abs(steering_torque), [100, 180], [1.0, 0.0])
+    torque_suppress = np.interp(abs(steering_torque), [80, 160], [1.0, 0.0])  # Phase 21: aligned to new yield start
     # Phase 9: in yield-by-authority mode the command no longer tracks the wheel,
     # so steering_error reflects the driver's own divergence during grip; boosting
     # MDPS back to op's angle would then FIGHT the driver. The caller sets
