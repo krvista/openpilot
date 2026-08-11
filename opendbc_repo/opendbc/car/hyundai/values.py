@@ -298,7 +298,7 @@ class CarControllerParams:
   #  Phase 8 column-torque offset estimation, ineffective on real CAN §1.J;
   #  Phase 8b grip-blend wheel-LP, superseded by this; Phase 10 sunnypilot shelf,
   #  net-negative under our pressed-gate §1.O.)
-  ACIGAIN_GRIP_FULL_NM = 208.0    # Phase 21: 260 -> 208 (-20% override resist); kill: 260.0
+  ACIGAIN_GRIP_FULL_NM = 220.0    # Phase 21b: 260 -> 220 (user-tuned); kill: 260.0
   ACIGAIN_GRIP_FLOOR   = 0.08     # Phase 21: 0.10 -> 0.08; kill: 0.10
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
