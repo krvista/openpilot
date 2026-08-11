@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
@@ -111,12 +112,18 @@ PARKING_CREEP_FRAMES   = 1000                    # 10 s @ 100 Hz
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
-                                  grip_start=90.0, grip_full=300.0, grip_floor=0.15, suppress_error_boost=False):
-  # Phase 21(-b): yield curve softened (0x36-0x37 override replay calibrated;
-  # user-tuned final values). Start 100->90, hands-off full
-  # 350->300 / floor 0.19->0.15; pressed band in values.py (260->220,
-  # 0.10->0.08). Ceilings untouched — hands-off tracking authority is not
-  # part of the felt override resist. Kill: 100.0/350.0/0.19 (+values).
+                                  grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False):
+  # Phase 22: the yield input is now DRIVER torque (caller subtracts the
+  # op holding-torque baseline — see the call site). Parked-car measurement
+  # proved the long-assumed "+90..180 Nm sensor offset" was actually the
+  # MDPS's own holding effort read back through the torsion bar (parked
+  # |tq| p99 = 3 Nm), so the raw-torque curve was self-yielding in curves
+  # (hold p50 223 Nm ate 40-60% of authority hands-off). Driver-domain
+  # breakpoints 30->140 (hands-off) / values.py 110 (pressed) are replay-
+  # calibrated to keep 21b's felt resist on GENUINE driver input (+/-0%)
+  # while restoring 100% hands-off curve authority (was 56%).
+  # Kill: restore 90/300/0.15 here, 220 in values, and HOLD_SCALE=0 —
+  # all three together (the domains are coupled).
   # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
   # augmented across Phase 5 and Phase 6 by stateless hooks that each
   # take a single per-frame signal as input:
@@ -168,7 +175,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # 100 Nm deadzone to zero at the 180 Nm low-v full-override point;
     # above 180 Nm there is no boost at all. The base_ceiling × 1 line
     # remains, so light-grip / hands-off recovery is unchanged.
-    torque_suppress = np.interp(abs(steering_torque), [90, 170], [1.0, 0.0])  # Phase 21b: aligned to yield start
+    torque_suppress = np.interp(abs(steering_torque), [30, 110], [1.0, 0.0])  # Phase 22: driver-domain
     # Phase 9: in yield-by-authority mode the command no longer tracks the wheel,
     # so steering_error reflects the driver's own divergence during grip; boosting
     # MDPS back to op's angle would then FIGHT the driver. The caller sets
@@ -1140,8 +1147,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # override_factor): hands-off therefore stays bit-identical to legacy
       # (full authority + drift recovery), only real grip changes behaviour.
       real_grip = bool(CS.out.steeringPressed)
+      # Phase 22: subtract the op holding-torque baseline so the yield curve
+      # sees only the DRIVER's contribution. Fit from 31k hands-off frames:
+      # hold ~ 122 + 132*lat_acc (Nm), applied at 80% with a cap (residual
+      # p90 = 127 Nm -> conservative). lat_acc from the measured wheel via
+      # the bicycle model; parked-car data proved the true sensor offset ~0.
+      lat_acc_est = (v_ego_safe ** 2) * abs(math.tan(math.radians(
+        steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
+      hold_comp = min(CarControllerParams.ACIGAIN_HOLD_SCALE *
+                      (CarControllerParams.ACIGAIN_HOLD_BASE_NM +
+                       CarControllerParams.ACIGAIN_HOLD_PER_LATACC * lat_acc_est),
+                      CarControllerParams.ACIGAIN_HOLD_MAX_NM)
+      driver_tq = max(0.0, abs(steer_torque_safe) - hold_comp)
       effective_aci_gain = compute_torque_reduction_gain(
-        steer_torque_safe, v_ego_safe * CV.MS_TO_KPH,
+        driver_tq, v_ego_safe * CV.MS_TO_KPH,
         effective_lat_active, self.aci_gain_last, steering_error,
         blinker_on=blinker_on,
         grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip else 350.0),

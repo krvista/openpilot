@@ -189,8 +189,8 @@ class CarControllerParams:
   # 0.28 yield engages only on real force. Sim on 0x10-0x28: hands-off blinker
   # gain p50 0.260 -> 0.364 (true hands-off frames 0.45), grip-episode min gain
   # unchanged at 0.100. Kill switch: restore [45.0, 100.0].
-  ACIGAIN_BLINKER_GATE_START_NM = 220.0
-  ACIGAIN_BLINKER_GATE_FULL_NM  = 300.0
+  ACIGAIN_BLINKER_GATE_START_NM = 100.0   # Phase 22: driver-torque domain (was raw 220)
+  ACIGAIN_BLINKER_GATE_FULL_NM  = 180.0   # Phase 22: driver-torque domain (was raw 300)
   # Phase 12a (P1): TX-layer steady-curve trim. Routes 0x10-0x28 (24 routes,
   # 214 sustained-curve windows) measured TX/cmd = 1.00 but wheel/TX = 0.55-0.63:
   # this MDPS realizes only ~60% of a sustained angle command under tire
@@ -298,8 +298,17 @@ class CarControllerParams:
   #  Phase 8 column-torque offset estimation, ineffective on real CAN §1.J;
   #  Phase 8b grip-blend wheel-LP, superseded by this; Phase 10 sunnypilot shelf,
   #  net-negative under our pressed-gate §1.O.)
-  ACIGAIN_GRIP_FULL_NM = 220.0    # Phase 21b: 260 -> 220 (user-tuned); kill: 260.0
+  ACIGAIN_GRIP_FULL_NM = 110.0    # Phase 22: DRIVER-torque domain (was raw 220); kill: 220.0 + HOLD_SCALE=0
   ACIGAIN_GRIP_FLOOR   = 0.08     # Phase 21: 0.10 -> 0.08; kill: 0.10
+  # Phase 22: op holding-torque baseline (subtracted before the yield curve;
+  # see carcontroller). Parked measurement: true sensor offset p99 = 3 Nm —
+  # the 90-180 Nm 'offset' was the MDPS's own effort. Fit (n=31k hands-off):
+  # hold = 122 + 132*lat_acc; applied at 80%, capped. Kill: SCALE = 0.0
+  # (together with restoring the raw-domain breakpoints — see carcontroller).
+  ACIGAIN_HOLD_BASE_NM    = 122.0
+  ACIGAIN_HOLD_PER_LATACC = 132.0
+  ACIGAIN_HOLD_SCALE      = 0.8
+  ACIGAIN_HOLD_MAX_NM     = 240.0
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
