@@ -167,11 +167,18 @@ class CarControllerParams:
   # 220 clears the +90..180 Nm column-torque sensor offset with margin, so a
   # hands-off blinker (10c hands-off authority) can never false-fire the anchor.
   # Kill switch: 1e9 (anchor reverts to steeringPressed-only).
-  BLINKER_ANCHOR_TORQUE_NM = 220.0
-  # Phase 14-2: stateful anchor. The single 220 Nm test flapped 3.84x/s in
+  # Phase 26: DRIVER-TORQUE DOMAIN (raw 220 -> 120; the carcontroller now
+  # feeds driver_tq = |raw| - hold_comp, and the straight-line hold baseline
+  # is ~98 Nm, so 120 here == the old raw 220 in a straight). Phase 22 showed
+  # the "+90..180 offset" is actually op's own holding torque, which RISES
+  # with curvature — the raw 220 test that "can never false-fire" hands-off
+  # is crossed on 25-50% of hands-off curve frames (0x36-0x3d), firing the
+  # anchor with no driver input. Raw-domain revert: 220/180.
+  BLINKER_ANCHOR_TORQUE_NM = 120.0
+  # Phase 14-2: stateful anchor. The single-threshold test flapped 3.84x/s in
   # low-speed blinker waits (0x2e-0x2f) — fire after FIRE_FRAMES sustained
-  # >= 220, hold while >= RELEASE_NM (40 Nm band) with a minimum hold.
-  BLINKER_ANCHOR_RELEASE_NM      = 180.0
+  # >= TORQUE_NM, hold while >= RELEASE_NM (40 Nm band) with a minimum hold.
+  BLINKER_ANCHOR_RELEASE_NM      = 80.0   # Phase 26: driver-domain (was raw 180)
   BLINKER_ANCHOR_FIRE_FRAMES     = 3
   BLINKER_ANCHOR_MIN_HOLD_FRAMES = 30     # 0.3 s
   # Phase 14-2b: sustained let-go before release (was a single sub-180 frame,
@@ -248,6 +255,15 @@ class CarControllerParams:
   # construction: entry needs real grip, release needs a sustained let-go.
   # Parking mode remains the higher-priority passive latch, unchanged.
   # Kill switch: both LOW_SPEED_CMD_*_DEG = 1e9 (scenario gate always open).
+  # Phase 26: enter keys on the hold-compensated driver_pressed. The RELEASE
+  # threshold stays at the raw-domain 260: release tests only ever run while
+  # the latch holds op passive, where Phase 26b gates hold_comp to 0 (op
+  # contributes nothing to the bar) — driver_tq == raw there, so 260 keeps
+  # the weeks-validated 14-1 release semantics bit-identical. G1 measurement
+  # (608 passive-signature windows, 855 s): rolling-passive hands-off |tq|
+  # p50 = 147-233 by speed band, sustained floor p50 = 158 — a 160 threshold
+  # would leave only 50.5% of windows releasable vs 87.8% at 260 (rolling
+  # bar friction/caster load is NOT the parked ~0 Nm).
   LOW_SPEED_GRIP_RELEASE_NM        = 260.0
   LOW_SPEED_GRIP_RELEASE_FRAMES    = 50     # 0.5 s sustained let-go to resume
   # Phase 14-3: single 40° boundary -> 45/35 hysteresis pair (lane-keep scale;
@@ -327,6 +343,29 @@ class CarControllerParams:
   ACIGAIN_HOLD_PER_LATACC = 132.0
   ACIGAIN_HOLD_SCALE      = 0.8
   ACIGAIN_HOLD_MAX_NM     = 240.0
+  # Phase 26: slew guard on hold_comp (per 10 ms frame). A single-frame
+  # angle/speed sensor spike would otherwise jump the compensation by up to
+  # +142 Nm and mask a real driver input for that window; genuine curve
+  # entries measure ~1 Nm/frame. 4 Nm/frame = 400 Nm/s.
+  ACIGAIN_HOLD_SLEW_NM    = 4.0
+  # Phase 26: hold-compensated equivalent of the EPS steeringPressed flag,
+  # used by every carcontroller latch (the EPS flag itself — raw 350 enter /
+  # 280 exit, 5-frame counter, carstate.py R4 — is untouched for core
+  # openpilot override/alert semantics). 250 driver-domain == raw ~350 in a
+  # straight (hold baseline ~98 Nm); in curves the raw requirement rises
+  # with the hold estimate instead of the flag tripping on op's own effort
+  # (41% of raw pressed frames sat at hold-model >= 300 Nm on 0x36-0x3d).
+  # The 0.8 exit-hysteresis factor and 5-frame debounce mirror the EPS flag.
+  # High-lat_acc note (2026-08-12 review): the linear fit extrapolated past
+  # ~1.5 m/s2 would predict hands-off torque above every threshold here, but
+  # MEASURED hands-off |tq| saturates instead of following the fit (p50 by
+  # lat_acc bin: 0.3-1.2 -> ~222, 1.2-1.6 -> 187, 1.6-2.2 -> 204, 2.2-5.0 ->
+  # 133 Nm; >=350 tail flat at ~5% across all bins), so the 240 cap slightly
+  # OVER-compensates there and self-fire risk does not grow with lat_acc.
+  # The >1.5 m/s2 band is thin in the replay set (~7.3k frames) — verify
+  # hands-off driver_pressed episodes at high lat_acc on future spirited logs.
+  DRIVER_PRESSED_NM     = 250.0
+  DRIVER_PRESSED_FRAMES = 5
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
@@ -349,6 +388,16 @@ class CarControllerParams:
   # gentle low-speed time) and the 30 Nm boundary flapped. Entry now keys on
   # debounced steeringPressed at the 40° geometry gate; exit is a sustained
   # let-go (!pressed & <260 Nm for EXIT_FRAMES), mirroring the 13a latch.
+  # Phase 26: entry keys on the hold-compensated driver_pressed — the raw
+  # pairing self-triggered in hands-off curves: a >= 40° curve at speed
+  # generates hold torque past the raw pressed threshold (202 geo-entry
+  # candidate episodes on 0x36-0x3d), dropping op passive mid-curve with
+  # nobody on the wheel. The EXIT threshold stays at the raw 260: the exit
+  # test only runs while angle-passive holds op passive, where Phase 26b
+  # gates hold_comp to 0 — driver_tq == raw, and G1 measured the rolling-
+  # passive hands-off bar at p50 147-233 Nm (sustained floor p50 158), so a
+  # 160 exit would stick the latch in half the measured windows. 260 keeps
+  # the validated 14-1 exit semantics unchanged.
   ANGLE_PASSIVE_ENTER_WHEEL_DEG = 40.0
   ANGLE_PASSIVE_EXIT_TORQUE_NM  = 260.0
   ANGLE_PASSIVE_EXIT_FRAMES     = 50      # 0.5 s sustained let-go
@@ -364,7 +413,7 @@ class CarControllerParams:
   # not the driver (a coin flip), and flapped around the low-torque tail.
   # 260 clears the offset so an arm means a REAL opposing push; 0.3 s sustain
   # replaces the shared 5-frame counter for this path.
-  INTENT_DISAGREE_TQ_MIN_NM  = 260.0
+  INTENT_DISAGREE_TQ_MIN_NM  = 160.0   # Phase 26: driver-domain (was raw 260)
   INTENT_DISAGREE_DELTA_DEG  = 5.0           # |apply_angle_last - wheel|
   INTENT_DISAGREE_SUSTAIN_FRAMES = 30        # 0.3 s
   # Phase 6e-1 transient-blip filter. The Phase 6d entry conjunction

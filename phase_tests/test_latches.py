@@ -31,9 +31,13 @@ def rate_per_s(trace):
 
 class TestFlapResistance:
   def test_low_speed_cam_latch_no_flap_under_offset_noise(self):
-    # 100-300 Nm hands-off band at 4 m/s: pressed (350x5) never fires -> latch never enters
+    # 100-300 Nm band at 4 m/s while op is actively steering: hold_comp sits
+    # at ~98 so driver_tq peaks ~202 < 250 — pressed never fires, latch never
+    # enters. (Phase 26b: at a COLD start the same band would correctly read
+    # as genuine driver torque and latch fail-passive, hence the settle.)
     for seed in range(3):
       sim = Sim()
+      run_signal(sim, 200, v=15.0, cmd=5.0)            # settle hold_comp op-active
       tr = run_signal(sim, 3000, tq_fn=band_noise(seed), v=4.0, cmd=5.0)
       assert rate_per_s(tr['low_speed_cam_latched']) < 0.2, seed
       assert not any(tr['low_speed_cam_latched'])

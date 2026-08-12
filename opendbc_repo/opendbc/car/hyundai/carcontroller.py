@@ -378,6 +378,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # apply_torque_last so the torque-control branch (non-ccnc) and the
     # angle-control branch can rate-limit their own outputs independently.
     self.aci_gain_last = 0.0
+    # Phase 26: hold-compensated driver-torque domain state (see the block at
+    # the top of update()). hold_comp starts at the straight-line baseline so
+    # the first frames after init behave like a straight, not like zero
+    # compensation.
+    # Starts at 0: op is not actuating at init, so the bar reading (if any)
+    # is entirely the driver's.
+    self.hold_comp_last = 0.0
+    self.driver_pressed_cnt = 0
+    self.driver_pressed = False
+    # Phase 26b (review fix): previous frame's effective_lat_active — the
+    # hold compensation only applies while op was actually actuating.
+    self.prev_eff_lat_active = False
+    # Phase 27: display-only flag mirrored into carStateSP.lateralControlPaused
+    # by card.py — True while op is intentionally passive (parking mode /
+    # low-speed passthrough / angle-passive) with CC.latActive still set.
+    self.lat_passive_indicated = False
 
     # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
     # camera-TX rate vs our frame%5==0 downsample.
@@ -613,6 +629,61 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
+    # Phase 26: hold-compensated driver-torque domain, computed ONCE here and
+    # consumed by every latch/grip test below (the ACIGain caller reuses it).
+    # Phase 22 established that the torsion-bar reading while op steers is
+    # mostly op's OWN holding torque (hold ~ 122 + 132*lat_acc Nm; parked
+    # |tq| p99 = 3 Nm). The yield curve was converted then, but the latches
+    # stayed raw-domain and could self-trigger on the hold torque in curves:
+    # routes 0x36-0x3d measure hands-off |tq| >= 220 Nm on ~50% of
+    # 0.3-1.2 m/s2 frames, and 41% of all pressed frames sit where the hold
+    # model predicts >= 300 Nm — i.e. op could read its own effort as driver
+    # grip and relinquish control mid-curve (blinker-anchor self-fire: 464
+    # candidate episodes; angle-passive geo-entry: 202). driver_tq subtracts
+    # the predicted hold so thresholds see the DRIVER's contribution only;
+    # straight-line behaviour is preserved by construction (hold_comp ~ 98 Nm
+    # in a straight — every converted threshold moved down by exactly that
+    # baseline, see the Phase 26 notes in values.py).
+    # Known blind spot (pre-existing — shared with the raw domain and the EPS
+    # pressed flag): a counter-push that cancels the hold torque reads near
+    # zero on the torsion bar until it exceeds ~2x the hold level.
+    lat_acc_est = (v_ego_safe ** 2) * abs(math.tan(math.radians(
+      steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
+    hold_target = min(CarControllerParams.ACIGAIN_HOLD_SCALE *
+                      (CarControllerParams.ACIGAIN_HOLD_BASE_NM +
+                       CarControllerParams.ACIGAIN_HOLD_PER_LATACC * lat_acc_est),
+                      CarControllerParams.ACIGAIN_HOLD_MAX_NM)
+    # Phase 26b (review fix): the hold model describes op's OWN torque, which
+    # exists only while op actuates. In the passive states (angle-passive /
+    # passthrough / parking / faults) STEER_REQ=0 and ACIGain has decayed to
+    # zero — the entire bar reading is the driver's, and subtracting up to
+    # 240 Nm there under-read a holding driver: the passive-exit tests could
+    # release against a 300-370 Nm grip and re-engage op on a wheel the
+    # driver was holding (harness measured a ~1.2 Hz STEER_REQ limit cycle
+    # at a steady 360 Nm). Gate the compensation on the PREVIOUS frame's
+    # effective_lat_active; the 4 Nm/frame slew smooths both edges (~0.6 s
+    # worst-case ramp, roughly matching the ACIGain ramp itself).
+    if not self.prev_eff_lat_active:
+      hold_target = 0.0
+    # Slew guard: a single-frame angle/speed sensor spike would otherwise jump
+    # hold_comp by up to +142 Nm and mask a real driver input for that window.
+    # Real curve entries measure ~1 Nm/frame; 4 Nm/frame passes them cleanly.
+    self.hold_comp_last += float(np.clip(hold_target - self.hold_comp_last,
+                                         -CarControllerParams.ACIGAIN_HOLD_SLEW_NM,
+                                          CarControllerParams.ACIGAIN_HOLD_SLEW_NM))
+    hold_comp = self.hold_comp_last
+    driver_tq = max(0.0, abs(steer_torque_safe) - hold_comp)
+    # driver_pressed: hold-compensated equivalent of CS.out.steeringPressed
+    # (raw 350 enter / 280 exit hysteresis, 5-frame up/down counter — see
+    # carstate.py R4). 250 driver-domain == raw ~350 in a straight; in a
+    # curve the raw requirement rises with the hold estimate instead of the
+    # flag self-triggering on op's own effort. The EPS flag itself is left
+    # untouched for core openpilot override/alert semantics.
+    pressed_thr = CarControllerParams.DRIVER_PRESSED_NM * (0.8 if self.driver_pressed else 1.0)
+    self.driver_pressed_cnt = int(np.clip(self.driver_pressed_cnt + (1 if driver_tq > pressed_thr else -1),
+                                          0, 2 * CarControllerParams.DRIVER_PRESSED_FRAMES + 1))
+    self.driver_pressed = self.driver_pressed_cnt > CarControllerParams.DRIVER_PRESSED_FRAMES
+
     # Driver override factor — the heavy-grip anchor gate and yield blend
     # coefficient (Phase 5a lineage). When the blinker is on, lower
     # thresholds so a light grip during a lane change immediately produces
@@ -660,10 +731,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # threshold — the flicker case flagged at 10d's introduction. Make the
     # blinker anchor stateful: fire after 3 sustained frames >= 220, then hold
     # while |tq| >= 180 (40 Nm band) with a 0.3 s minimum hold.
-    blinker_anchor_raw = blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM
+    # Phase 26: driver-torque domain — the raw 220 Nm test sat inside the hold
+    # band (hands-off curves cross it 25-50% of the time), so a signaled turn
+    # on a curved road could fire the anchor with no driver input at all and
+    # stall plan tracking mid-lane-change. 120 driver-domain == raw 220 in a
+    # straight (identical behaviour there); in curves only a real hand fires it.
+    # Phase 26b review: the fire test is additionally gated on the previous
+    # frame's effective_lat_active — the anchor exists to yield to a driver
+    # during OP-ACTIVE lane changes, and in comp-off (passive) frames the
+    # 120 threshold would otherwise degenerate to a raw test far below the
+    # measured rolling-passive bar level (p50 147-233 Nm), self-firing
+    # hands-off. The keep/release path is left ungated so an episode that
+    # legitimately fired op-active still ends on the driver's let-go.
+    blinker_anchor_raw = (blinker_on and self.prev_eff_lat_active
+                          and driver_tq >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM)
     if self.blinker_anchor_on:
       self.blinker_anchor_hold += 1
-      keep = blinker_on and abs(steer_torque_safe) >= CarControllerParams.BLINKER_ANCHOR_RELEASE_NM
+      keep = blinker_on and driver_tq >= CarControllerParams.BLINKER_ANCHOR_RELEASE_NM
       # Phase 14-2b: the release was a SINGLE sub-180 frame (vs the 3-frame
       # debounced fire) — asymmetric, so offset-band noise (100-300 Nm,
       # 1-5 Hz) still flapped the anchor at 2-3 transitions/s in sim, the
@@ -681,8 +765,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.blinker_anchor_hold = 0
         self.blinker_anchor_fire = 0
         self.blinker_anchor_release = 0
+    # Phase 26: driver_pressed (hold-compensated) replaces the raw EPS flag —
+    # 41% of raw pressed frames sat where the hold model predicts >= 300 Nm,
+    # so hard curves could anchor apply_angle_last to the wheel hands-off.
+    # override_factor stays raw-domain deliberately: it is strictly more
+    # permissive than driver_pressed, so the compensated term is the binding
+    # gate of this AND.
     heavy_grip_anchor = (override_factor >= 0.9) and (
-      bool(CS.out.steeringPressed) or self.blinker_anchor_on)
+      self.driver_pressed or self.blinker_anchor_on)
 
     # Low-speed camera passthrough latch (kept-feature #11).
     # Phase 13a: the latch used to key on `hands_off` (override_factor <= 0.5),
@@ -696,12 +786,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # F8/R1 note: use v_ego_safe here (not raw vEgoRaw) — a NaN speed frame
     # fails every comparison and would freeze both latches in whatever state
     # they held; the sanitizer maps it to 0 so they fail toward passive.
-    if v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS and CS.out.steeringPressed:
+    # Phase 26: ENTER keys on the hold-compensated driver_pressed. The
+    # release comparison keeps the raw-domain 260 threshold: it only runs
+    # while the latch is passive, where 26b gates hold_comp to 0 so
+    # driver_tq == raw — bit-identical to the validated 14-1 release
+    # (rolling-passive hands-off bar measures p50 147-233 Nm, see values.py).
+    if v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS and self.driver_pressed:
       self.low_speed_cam_latched = True
       self.lowv_release_frames = 0
     elif self.low_speed_cam_latched:
-      if (not CS.out.steeringPressed) and \
-         abs(steer_torque_safe) < CarControllerParams.LOW_SPEED_GRIP_RELEASE_NM:
+      if (not self.driver_pressed) and \
+         driver_tq < CarControllerParams.LOW_SPEED_GRIP_RELEASE_NM:
         self.lowv_release_frames += 1
       else:
         self.lowv_release_frames = 0
@@ -881,7 +976,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         CarControllerParams.CURVE_TRIM_HOLD_CMD_DEG
         if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES
         else CarControllerParams.CURVE_TRIM_MIN_CMD_DEG)
-      trim_gate = (bool(CC.latActive) and not CS.out.steeringPressed
+      # Phase 26: gate on driver_pressed — the raw EPS flag self-triggers in
+      # exactly the sustained curves the trim exists for (41% of pressed
+      # frames sit at hold-model >= 300 Nm), so the delivery fix was being
+      # disabled where the delivery deficit lives.
+      trim_gate = (bool(CC.latActive) and not self.driver_pressed
                    and not self.parking_mode_active and not in_passthrough
                    and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate)
       self.curve_trim_sustain = min(self.curve_trim_sustain + 1, 10 * CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES) if trim_gate else 0
@@ -1056,8 +1155,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.intent_disagree_frames = 0
       self.angle_passive_release_frames = 0
     elif self.angle_passive_active:
-      if (not CS.out.steeringPressed) and \
-         abs(steer_torque_safe) < CarControllerParams.ANGLE_PASSIVE_EXIT_TORQUE_NM:
+      # Phase 26/26b: exit runs with op passive, where hold_comp is gated to
+      # 0 (driver_tq == raw) — the raw-domain 260 threshold is kept, so exit
+      # semantics stay bit-identical to the validated 14-1 design.
+      if (not self.driver_pressed) and \
+         driver_tq < CarControllerParams.ANGLE_PASSIVE_EXIT_TORQUE_NM:
         self.angle_passive_release_frames += 1
       else:
         self.angle_passive_release_frames = 0
@@ -1071,16 +1173,31 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # (clears the offset — the old 30 Nm test made the sign a coin flip)
       # opposite op's apply_angle_last (>= 5° off the wheel) at <= 30 km/h,
       # sustained 0.3 s.
+      # Phase 26: magnitude test moves to driver_tq (raw 260 -> 160 driver-
+      # domain); the SIGN stays on the raw reading — driver_tq is unsigned,
+      # and when it is positive the excess beyond the hold estimate carries
+      # the raw signal's sign. The opposing-sign test already protects this
+      # arm structurally (op's own hold torque always points toward its own
+      # tracking error, never against it). Comp-off note: this arm also
+      # evaluates in passive frames (threshold then raw 160) — in parking /
+      # passthrough the |apply - wheel| >= 5° gate is structurally unmeetable
+      # (apply is wheel-clamped every frame); in fault/reverse passivity a
+      # fire is a no-op (op already passive) and clears on the raw <260
+      # let-go like any angle-passive episode.
       low_intent_disagree = (
         v_ego_safe <= CarControllerParams.INTENT_DISAGREE_VEGO_MS
-        and abs(steer_torque_safe) >= CarControllerParams.INTENT_DISAGREE_TQ_MIN_NM
+        and driver_tq >= CarControllerParams.INTENT_DISAGREE_TQ_MIN_NM
         and abs(self.apply_angle_last - steer_angle_safe) >= CarControllerParams.INTENT_DISAGREE_DELTA_DEG
         and (np.sign(steer_torque_safe)
              * np.sign(self.apply_angle_last - steer_angle_safe)) < 0
       )
       self.intent_disagree_frames = self.intent_disagree_frames + 1 if low_intent_disagree else 0
+      # Phase 26: driver_pressed replaces the raw EPS flag — a >= 40° curve at
+      # speed generates enough hold torque to trip raw pressed hands-off
+      # (geo-entry self-fire: 202 candidate episodes on 0x36-0x3d), which
+      # would drop op passive mid-curve with nobody holding the wheel.
       geo_enter = (abs(steer_angle_safe) >= CarControllerParams.ANGLE_PASSIVE_ENTER_WHEEL_DEG
-                   and CS.out.steeringPressed)
+                   and self.driver_pressed)
       self.angle_passive_enter_frames = min(self.angle_passive_enter_frames + 1,
                                             CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES) if geo_enter else 0
       if (self.angle_passive_enter_frames >= CarControllerParams.ANGLE_PASSIVE_MIN_ENTER_FRAMES
@@ -1138,6 +1255,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       effective_lat_active = bool(apply_steer_req)
 
+    # Phase 27: surface the intentional-passive latches to the driver.
+    # card.py mirrors this into carStateSP.lateralControlPaused and the UI
+    # shows the MADS paused/override presentation while it is set — op looks
+    # engaged on the cluster but is deliberately not tracking the plan here
+    # (automation-surprise fix; parking-lot congestion exits measured up to
+    # 398 s of silent passivity). Display ONLY: driving the MADS state
+    # machine from these latches would drop CC.latActive, which resets the
+    # latches themselves — an oscillation by construction. Fault paths
+    # (cam_stale / LFA fault / reverse) are excluded: they carry their own
+    # alerts. heavy_grip_anchor / blinker anchor are excluded: those are the
+    # driver's own hands on the wheel, and flashing the icon during routine
+    # overrides would train the driver to ignore it.
+    # Phase 26b (review fix): vm_reject_persistent and was_in_reverse are
+    # included after all — vm rejection has no alert below 8 m/s and the
+    # post-reverse crawl has none at any speed, so both are silent passivity
+    # in exactly the regime this flag exists for. cam_stale / LFA fault stay
+    # excluded (they raise their own alerts).
+    self.lat_passive_indicated = bool(CC.latActive) and ccnc_lka_alt and (
+      self.parking_mode_active or in_passthrough or self.angle_passive_active
+      or vm_reject_persistent or self.was_in_reverse)
+    self.prev_eff_lat_active = bool(effective_lat_active)
+
     # ACIGain (reference 17-line compute_torque_reduction_gain).
     effective_aci_gain = None
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
@@ -1148,19 +1287,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # the DEBOUNCED steeringPressed flag (not the offset-corrupted torque/
       # override_factor): hands-off therefore stays bit-identical to legacy
       # (full authority + drift recovery), only real grip changes behaviour.
-      real_grip = bool(CS.out.steeringPressed)
-      # Phase 22: subtract the op holding-torque baseline so the yield curve
-      # sees only the DRIVER's contribution. Fit from 31k hands-off frames:
-      # hold ~ 122 + 132*lat_acc (Nm), applied at 80% with a cap (residual
-      # p90 = 127 Nm -> conservative). lat_acc from the measured wheel via
-      # the bicycle model; parked-car data proved the true sensor offset ~0.
-      lat_acc_est = (v_ego_safe ** 2) * abs(math.tan(math.radians(
-        steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
-      hold_comp = min(CarControllerParams.ACIGAIN_HOLD_SCALE *
-                      (CarControllerParams.ACIGAIN_HOLD_BASE_NM +
-                       CarControllerParams.ACIGAIN_HOLD_PER_LATACC * lat_acc_est),
-                      CarControllerParams.ACIGAIN_HOLD_MAX_NM)
-      driver_tq = max(0.0, abs(steer_torque_safe) - hold_comp)
+      # Phase 26: real_grip now keys on the hold-compensated driver_pressed —
+      # the raw EPS flag self-triggered in hard curves (41% of pressed frames
+      # at hold-model >= 300 Nm), silently flipping the yield curve to the
+      # grip branch and suppressing the error boost exactly where sustained-
+      # curve delivery needs it.
+      real_grip = self.driver_pressed
+      # Phase 22: driver_tq / hold_comp (hold ~ 122 + 132*lat_acc at 80%,
+      # capped; parked-car data proved the true sensor offset ~ 0) are now
+      # computed once at the top of update() — Phase 26 — and shared with
+      # every latch above.
       # Phase 23: the hands-off else-branch used to pass the LEGACY raw-domain
       # literals (350.0 / 0.19), silently overriding every hands-off band
       # change since Phase 21 (the function defaults were dead code on this
