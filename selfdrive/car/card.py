@@ -197,6 +197,11 @@ class Car:
     # Update carState from CAN
     CS, CS_SP = self.CI.update(can_list)
     CS_SP = convert_to_capnp(CS_SP)
+    # i6n Phase 27: surface the carcontroller's intentional-passive latches
+    # (parking mode / low-speed passthrough / angle-passive) to the UI. Read
+    # from the previous control step (10 ms stale — fine for display); brands
+    # without the attribute report False.
+    CS_SP.lateralControlPaused = bool(getattr(self.CI.CC, 'lat_passive_indicated', False))
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)
