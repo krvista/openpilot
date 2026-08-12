@@ -60,7 +60,7 @@ def is_ccnc_angle_platform(flags):
 # can self-center the wheel - needed for parking-lot maneuvers, where the
 # user routinely reaches ~20 km/h.
 LOW_SPEED_PASSTHROUGH_ENTER_MS = 20.0 / 3.6   # ~ 5.56 m/s
-LOW_SPEED_PASSTHROUGH_EXIT_MS  = 22.0 / 3.6   # ~ 6.11 m/s
+LOW_SPEED_PASSTHROUGH_EXIT_MS  = 25.0 / 3.6   # Phase 24b: 22 -> 25 (경계 배회 차단; 0x3c-3d TX 발진 2건이 정확히 22km/h 경계)
 
 # Traffic-following lead distance hysteresis. When a lead is closer than
 # this, op stays engaged below the freeze threshold so the wheel is held
@@ -146,12 +146,14 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # [0.4,0.62,0.85,1.0] (pre / kill switch) -> [0.32,0.5,0.75,0.95] (this) ->
     # [0.25,0.35,0.65,0.9] (full step, only after the W4 on-road gate passes).
     # Phase 19a: low-speed ceiling lowered to the 6h-4 ladder's full-step
-    # LOW-END ([0.32,0.5] -> [0.25,0.40]) — softer MDPS hold at creep/city
-    # speeds transmits less of the near-standstill command noise to the wheel
-    # (routes 0x36-0x37). The 40/120 km/h points stay at the half-step values:
-    # highway authority carries the tracking/trim work (|cmd-wheel| p50 5.45°)
-    # and must not drop. Kill switch: [0.32, 0.5, 0.75, 0.95] (pre-19a).
-    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.25, 0.40, 0.75, 0.95])
+    # LOW-END ([0.32,0.5] -> [0.25,0.40]); Phase 24a: one more step to
+    # [0.18, 0.30] — 0x3c-0x3d residual low-speed shake sits in 20-30 km/h
+    # windows where the COMMAND is quiet (|cmd|<4°, cmdRMS~0.1) but the wheel
+    # shakes above TX: road-MDPS interaction amplified by hold authority, so
+    # transmission scales with this ceiling. Doubles as the requested softer
+    # low-speed hold. The 40/120 km/h points stay: highway authority carries
+    # the tracking/trim work. Kill: [0.25,0.40,...] (24a) / [0.32,0.5,...] (19a).
+    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
