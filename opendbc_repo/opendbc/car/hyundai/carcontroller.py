@@ -1159,12 +1159,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                        CarControllerParams.ACIGAIN_HOLD_PER_LATACC * lat_acc_est),
                       CarControllerParams.ACIGAIN_HOLD_MAX_NM)
       driver_tq = max(0.0, abs(steer_torque_safe) - hold_comp)
+      # Phase 23: the hands-off else-branch used to pass the LEGACY raw-domain
+      # literals (350.0 / 0.19), silently overriding every hands-off band
+      # change since Phase 21 (the function defaults were dead code on this
+      # path) — sub-350 Nm firm grip therefore never got the softened yield.
+      # Route through values.py constants in the Phase 22 driver-torque
+      # domain, and speed-schedule the FLOORS down at highway speed: during
+      # spirited driving the driver already grips past full-yield, so the
+      # felt residual force IS the floor — relief goes exactly there while
+      # city-speed floors (tracking authority) stay untouched.
+      v_kph_aci = v_ego_safe * CV.MS_TO_KPH
+      ho_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
+                                 CarControllerParams.ACIGAIN_HANDSOFF_FLOOR_V))
+      gr_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
+                                 CarControllerParams.ACIGAIN_GRIP_FLOOR_V))
       effective_aci_gain = compute_torque_reduction_gain(
-        driver_tq, v_ego_safe * CV.MS_TO_KPH,
+        driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
         blinker_on=blinker_on,
-        grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip else 350.0),
-        grip_floor=(CarControllerParams.ACIGAIN_GRIP_FLOOR if real_grip else 0.19),
+        grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip
+                   else CarControllerParams.ACIGAIN_HANDSOFF_FULL_NM),
+        grip_floor=(gr_floor if real_grip else ho_floor),
         suppress_error_boost=real_grip,
       )
       self.aci_gain_last = effective_aci_gain

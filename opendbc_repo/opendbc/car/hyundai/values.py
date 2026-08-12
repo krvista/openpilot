@@ -305,6 +305,16 @@ class CarControllerParams:
   # the 90-180 Nm 'offset' was the MDPS's own effort. Fit (n=31k hands-off):
   # hold = 122 + 132*lat_acc; applied at 80%, capped. Kill: SCALE = 0.0
   # (together with restoring the raw-domain breakpoints — see carcontroller).
+  # Phase 23: hands-off band constants (the caller used to hard-code legacy
+  # 350/0.19 literals, dead-coding every hands-off change since Phase 21) +
+  # speed-scheduled floors. Past full-yield the felt residual force IS the
+  # floor, so highway relief for firm-grip spirited driving goes there;
+  # city floors keep tracking authority. Kill: FLOOR_V tables flat at
+  # [0.15,0.15]/[0.08,0.08], HANDSOFF_FULL 140 -> 350 + HOLD_SCALE=0 (raw).
+  ACIGAIN_HANDSOFF_FULL_NM  = 140.0   # driver-torque domain (Phase 22 calibration)
+  ACIGAIN_FLOOR_SPEEDS_KPH  = [80.0, 140.0]
+  ACIGAIN_HANDSOFF_FLOOR_V  = [0.15, 0.10]
+  ACIGAIN_GRIP_FLOOR_V      = [0.08, 0.05]
   ACIGAIN_HOLD_BASE_NM    = 122.0
   ACIGAIN_HOLD_PER_LATACC = 132.0
   ACIGAIN_HOLD_SCALE      = 0.8
