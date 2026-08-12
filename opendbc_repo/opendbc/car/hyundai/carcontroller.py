@@ -1175,12 +1175,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                  CarControllerParams.ACIGAIN_HANDSOFF_FLOOR_V))
       gr_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
                                  CarControllerParams.ACIGAIN_GRIP_FLOOR_V))
+      # Phase 25: speed-scheduled full-yield points (see values.py).
+      ho_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
+                                CarControllerParams.ACIGAIN_HANDSOFF_FULL_V))
+      gr_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
+                                CarControllerParams.ACIGAIN_GRIP_FULL_V))
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
         blinker_on=blinker_on,
-        grip_full=(CarControllerParams.ACIGAIN_GRIP_FULL_NM if real_grip
-                   else CarControllerParams.ACIGAIN_HANDSOFF_FULL_NM),
+        grip_full=(gr_full if real_grip else ho_full),
         grip_floor=(gr_floor if real_grip else ho_floor),
         suppress_error_boost=real_grip,
       )

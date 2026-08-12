@@ -311,7 +311,15 @@ class CarControllerParams:
   # floor, so highway relief for firm-grip spirited driving goes there;
   # city floors keep tracking authority. Kill: FLOOR_V tables flat at
   # [0.15,0.15]/[0.08,0.08], HANDSOFF_FULL 140 -> 350 + HOLD_SCALE=0 (raw).
-  ACIGAIN_HANDSOFF_FULL_NM  = 140.0   # driver-torque domain (Phase 22 calibration)
+  # Phase 25: full-yield points speed-scheduled — at speed the taper completes
+  # earlier so a given driver push yields proportionally MORE than in town
+  # (city calibration at/below 40 km/h unchanged; floors keep the Phase 23
+  # schedule). General principle: driver input must win more decisively as
+  # speed rises. Kill: flat [140,140]/[110,110].
+  ACIGAIN_FULL_SPEEDS_KPH   = [40.0, 120.0]
+  ACIGAIN_HANDSOFF_FULL_V   = [140.0, 100.0]   # driver-torque domain
+  ACIGAIN_GRIP_FULL_V       = [110.0, 80.0]
+  ACIGAIN_HANDSOFF_FULL_NM  = 140.0   # low-speed anchor (kept for reference/kill)
   ACIGAIN_FLOOR_SPEEDS_KPH  = [80.0, 140.0]
   ACIGAIN_HANDSOFF_FLOOR_V  = [0.15, 0.10]
   ACIGAIN_GRIP_FLOOR_V      = [0.08, 0.05]
