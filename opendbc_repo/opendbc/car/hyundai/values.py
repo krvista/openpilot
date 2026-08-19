@@ -366,6 +366,57 @@ class CarControllerParams:
   # hands-off driver_pressed episodes at high lat_acc on future spirited logs.
   DRIVER_PRESSED_NM     = 250.0
   DRIVER_PRESSED_FRAMES = 5
+  # Phase 28 (0x41 yank fix). Field failure at 86 km/h (route 0x41 seg 16-17,
+  # build 126c0ca): a 430-500 Nm grip in an 8° curve put hold_comp at its
+  # 240 cap, so driver_pressed needed raw ~490 and the heavy-grip anchor
+  # DISENGAGED (the Phase 26 review's accepted "350-490 raw band" residual —
+  # the EPS raw-350 pressed flag was True through the whole hold). With no
+  # anchor, apply_angle_last tracked the plan to 5-6° away from the held
+  # wheel; on release driver_tq collapsed to ~0 -> ACIGain recovered at full
+  # rate WITH the error boost active (real_grip False) -> the MDPS slammed
+  # the wheel toward the stale apply (-0.3° -> +8.8° in 0.3 s at 86 km/h).
+  # Corpus fact that shapes this design (adversarial review, 508k hands-off
+  # frames): hands-off driver_tq is NOT small — p50 40.6 / p75 111 /
+  # p90 162.5 / p99 250 (the hold fit under-compensates below ~1.2 m/s2) —
+  # so NO driver_tq magnitude threshold below driver_pressed itself can
+  # separate a sub-pressed grip from hands-off. The fix therefore keys on
+  # the weeks-validated EPS flag and on divergence evidence instead:
+  # 1) heavy_grip_anchor regains CS.out.steeringPressed as an OR-arm (the
+  #    pre-Phase-26 operating point: it anchored 153/274 frames of the
+  #    field event's divergence window and ran for weeks without a yank;
+  #    its consequence — apply := wheel — is benign, unlike the STEER_REQ=0
+  #    latches Phase 26 converted).
+  # 2) release re-anchor: only AFTER a recent real anchor episode
+  #    (heavy_grip_anchor within REANCHOR_RECENT_FRAMES), when the driver
+  #    lets go (driver_tq < 30) with a stored divergence > 2°, snap apply
+  #    to the wheel. Covers the anchor's dropout gaps (pressed hysteresis /
+  #    override_factor dips while still holding) where divergence builds.
+  #    Fires keep the episode memory (F1 review fix) and are rate-limited
+  #    by a refractory instead of a disarm; each fire zeroes curve_trim so
+  #    the wound trim cannot recreate the dumped divergence (F5).
+  #    The anchor_recent gate makes hands-off firing structurally rare:
+  #    hands-off anchor engagement needs the EPS flag AND override >= 0.9
+  #    simultaneously (hard-curve tail only).
+  # 3) error-boost hold-off while anchor_recent: recovery from a just-
+  #    released grip starts unboosted; hands-off drift recovery elsewhere
+  #    keeps its boost (the arm-based v1 gate suppressed 14.6% of hands-off
+  #    boost frames — rejected in review).
+  REANCHOR_ARM_NM          = 100.0
+  REANCHOR_ARM_FRAMES      = 30
+  REANCHOR_ARM_CAP_FRAMES  = 100
+  REANCHOR_FIRE_NM         = 30.0
+  REANCHOR_MIN_DIV_DEG     = 2.0
+  # 2 s anchor-episode memory for the re-anchor gate. Set by the PRESSED
+  # anchor arms only (a blinker-arm anchor is not grip evidence — G3 review:
+  # including it produced 129 context-free hands-off fires). Measured
+  # anchor->release gap (n=440): p50 0.30 / p90 1.86 / p95 3.00 s — the 2 s
+  # window covers ~91%; the 9.1% slower-easing tail is an accepted residual.
+  REANCHOR_RECENT_FRAMES   = 200
+  # Boost hold-off window: only the first 0.25 s after an anchor frame — the
+  # recovery transient. Reusing the full 2 s memory suppressed the boost on
+  # 26.1% of hands-off frames (G1 review, worse than the rejected v1 gate);
+  # 20-30 frames lands at ~7-9%.
+  BOOST_HOLDOFF_FRAMES     = 25
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip

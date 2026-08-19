@@ -390,6 +390,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 26b (review fix): previous frame's effective_lat_active — the
     # hold compensation only applies while op was actually actuating.
     self.prev_eff_lat_active = False
+    # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
+    # re-arm edge for the release re-anchor / boost hold-off.
+    self.reanchor_arm = 0
+    self.reanchor_ready = False
+    self.anchor_recent_frames = 0
     # Phase 27: display-only flag mirrored into carStateSP.lateralControlPaused
     # by card.py — True while op is intentionally passive (parking mode /
     # low-speed passthrough / angle-passive) with CC.latActive still set.
@@ -683,6 +688,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.driver_pressed_cnt = int(np.clip(self.driver_pressed_cnt + (1 if driver_tq > pressed_thr else -1),
                                           0, 2 * CarControllerParams.DRIVER_PRESSED_FRAMES + 1))
     self.driver_pressed = self.driver_pressed_cnt > CarControllerParams.DRIVER_PRESSED_FRAMES
+    # Phase 28 (0x41 yank fix, see values.py): override-episode memory used
+    # by the release re-anchor. NOTE the arm level (100) is hands-off-
+    # reachable by design necessity (hands-off driver_tq p75 = 111) — the
+    # arm alone has no effect; firing additionally requires a recent REAL
+    # anchor episode (anchor_recent) and a stored divergence.
+    self.reanchor_arm = (min(self.reanchor_arm + 1, CarControllerParams.REANCHOR_ARM_CAP_FRAMES)
+                         if driver_tq >= CarControllerParams.REANCHOR_ARM_NM
+                         else max(self.reanchor_arm - 1, 0))
+    # G2 review: re-arm EDGE — a fire consumes readiness, and only a genuine
+    # re-grip (driver_tq back above the arm level) restores it. A pure
+    # refractory let the dump repeat every 20 frames against a slow wheel
+    # (10° command sawtooth at 5 Hz in the closed-loop probe); the edge
+    # reduces that to one dump per grip while preserving the field event's
+    # t=3.01 catch (the driver genuinely re-gripped at t=2.55-2.90).
+    if driver_tq >= CarControllerParams.REANCHOR_ARM_NM:
+      self.reanchor_ready = True
+    self.anchor_recent_frames = max(self.anchor_recent_frames - 1, 0)
 
     # Driver override factor — the heavy-grip anchor gate and yield blend
     # coefficient (Phase 5a lineage). When the blinker is on, lower
@@ -771,8 +793,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # override_factor stays raw-domain deliberately: it is strictly more
     # permissive than driver_pressed, so the compensated term is the binding
     # gate of this AND.
+    # Phase 28: CS.out.steeringPressed restored as an anchor OR-arm — the
+    # 0x41 seg17 yank happened in the 350-490 raw curve band where the
+    # hold-comp cap pushes driver_pressed out of reach while the EPS flag
+    # held True the whole time; the flag anchored this exact regime for
+    # weeks pre-Phase-26 with no yank. The anchor's consequence (apply :=
+    # wheel) is benign, so the Phase 26 self-press concern (hard-curve
+    # hands-off tail) costs a wheel-follow there, not a control cut; a
+    # driver_tq magnitude arm cannot replace it (hands-off driver_tq p90 =
+    # 162.5 — review-measured; the v1 160 arm re-injected wheel noise on
+    # 7.5% of hands-off frames and was rejected).
     heavy_grip_anchor = (override_factor >= 0.9) and (
-      self.driver_pressed or self.blinker_anchor_on)
+      self.driver_pressed or bool(CS.out.steeringPressed) or self.blinker_anchor_on)
+    # G3 review: only the PRESSED arms count as grip evidence for the
+    # re-anchor memory — a blinker-arm anchor can arise hands-off and, as
+    # recency, produced 129 context-free hands-off dumps in corpus replay.
+    if heavy_grip_anchor and (self.driver_pressed or bool(CS.out.steeringPressed)):
+      self.anchor_recent_frames = CarControllerParams.REANCHOR_RECENT_FRAMES
 
     # Low-speed camera passthrough latch (kept-feature #11).
     # Phase 13a: the latch used to key on `hands_off` (override_factor <= 0.5),
@@ -945,6 +982,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(np.clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+      elif (self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES
+            and self.anchor_recent_frames > 0
+            and self.reanchor_ready
+            and driver_tq < CarControllerParams.REANCHOR_FIRE_NM
+            and abs(self.apply_angle_last - steer_angle_safe) > CarControllerParams.REANCHOR_MIN_DIV_DEG):
+        # Phase 28 release re-anchor (see values.py): the driver just let go
+        # after an override episode that included a real anchor-grade grip
+        # (anchor_recent), and apply carries a stored divergence — dump it
+        # to the wheel so ACIGain recovery cannot slam the wheel toward a
+        # stale command (0x41 seg17: -0.3° -> +8.8° at 86 km/h). op then
+        # re-approaches the plan VM-rate-limited. The fire consumes the
+        # re-arm edge (G2) but keeps the episode memory (F1: a disarm left
+        # the memory dead at the field event's actual t=3.01 release). The
+        # wound curve_trim is zeroed so it cannot recreate the divergence
+        # just dumped (F5).
+        self.apply_angle_last = float(np.clip(steer_angle_safe,
+                                              -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                                               self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+        self.reanchor_ready = False
+        self.curve_trim = 0.0
+        self.trim_resid_lp = 0.0
       desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
@@ -979,7 +1037,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Phase 26: gate on driver_pressed — the raw EPS flag self-triggers in
       # exactly the sustained curves the trim exists for (41% of pressed
       # frames sit at hold-model >= 300 Nm), so the delivery fix was being
-      # disabled where the delivery deficit lives.
+      # disabled where the delivery deficit lives. (A Phase 28 draft added
+      # the EPS flag back as an AND — G4 review measured that disabling the
+      # trim on 37.4% of curve-eligible frames; dropped. The F5 wound-trim
+      # problem is closed by zeroing curve_trim on a re-anchor fire instead.)
       trim_gate = (bool(CC.latActive) and not self.driver_pressed
                    and not self.parking_mode_active and not in_passthrough
                    and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate)
@@ -1322,7 +1383,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         blinker_on=blinker_on,
         grip_full=(gr_full if real_grip else ho_full),
         grip_floor=(gr_floor if real_grip else ho_floor),
-        suppress_error_boost=real_grip,
+        # Phase 28: boost held off only in the first ~0.25 s after an anchor
+        # frame (the recovery transient) — G1 review: the full 2 s memory
+        # suppressed 26.1% of hands-off drift-recovery frames, worse than
+        # the rejected v1 arm gate (14.6%); the short window lands at ~7-9%.
+        suppress_error_boost=(real_grip or
+                              self.anchor_recent_frames > (CarControllerParams.REANCHOR_RECENT_FRAMES -
+                                                           CarControllerParams.BOOST_HOLDOFF_FRAMES)),
       )
       self.aci_gain_last = effective_aci_gain
 

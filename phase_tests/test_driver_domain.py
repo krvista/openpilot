@@ -180,17 +180,118 @@ class TestAnglePassiveDomain:
 class TestIntentDisagreeDomain:
   def test_fires_on_real_opposing_push(self):
     # op holds cmd=20 while the driver pushes the wheel the other way at 10
-    # deg: raw -300 at hold ~124 -> driver_tq 176 >= 160 with opposing sign.
+    # deg: raw -300 at hold ~124 -> driver_tq 176 with opposing sign.
+    # Phase 28: the heavy-grip anchor (driver_tq >= 160 OR-arm) preempts the
+    # intent-disagree latch by pinning apply to the held wheel — either
+    # resolution means op stops pulling toward its own plan, which is the
+    # property under test.
     sim = Sim()
     settle(sim, v=8.0, wheel=10.0, cmd=20.0)
     run_signal(sim, 100, v=8.0, wheel=10.0, cmd=20.0, tq=-300.0)
-    assert sim.s.angle_passive_active
+    assert sim.s.angle_passive_active or abs(sim.s.apply_angle_last - 10.0) < 1.5
 
   def test_below_threshold_no_fire(self):
     sim = Sim()
     settle(sim, v=8.0, wheel=10.0, cmd=20.0)
     run_signal(sim, 100, v=8.0, wheel=10.0, cmd=20.0, tq=-270.0)  # driver ~146 < 160
     assert not sim.s.angle_passive_active
+
+
+class TestYankFix:
+  """Phase 28 v2: 0x41 field yank — EPS anchor restored, gated release re-anchor."""
+
+  def test_anchor_holds_in_350_490_band(self):
+    # v=24 m/s, wheel 8°: lat_acc ~1.8 -> comp at the 240 cap -> raw 460 is
+    # driver_tq ~220: driver_pressed can NOT fire, but the restored EPS
+    # pressed OR-arm must anchor apply to the held wheel instead of letting
+    # it track the diverging plan (the seg17 failure).
+    sim = Sim()
+    settle(sim, v=24.0, wheel=8.0, cmd=8.0)
+    run_signal(sim, 100, v=24.0, wheel=8.0, cmd=14.0, tq=460.0)
+    assert not sim.s.driver_pressed          # confirms we are in the gap band
+    assert abs(sim.s.apply_angle_last - 8.0) < 1.5
+
+  def test_release_reanchor_dumps_divergence(self):
+    # anchor dropout gap: a real grip (460, anchored) decays to 300 — EPS
+    # pressed and override both drop, the anchor disengages, and apply
+    # diverges toward the plan while the driver still holds. On the final
+    # let-go the stored divergence must be dumped to the wheel, not
+    # delivered, and the wound trim must be zeroed.
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)   # anchored grip
+    assert abs(sim.s.apply_angle_last) < 1.0
+    run_signal(sim, 150, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)   # dropout gap
+    assert sim.s.reanchor_arm >= 30                              # driver_tq ~202
+    assert abs(sim.s.apply_angle_last) > 2.0                     # divergence stored
+    sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # driver lets go
+    assert abs(sim.s.apply_angle_last) < 1.0                     # dumped to the wheel
+    assert not sim.s.reanchor_ready                              # edge consumed (G2)
+    assert sim.s.curve_trim == 0.0
+
+  def test_memory_survives_fire_for_refire(self):
+    # F1 review fix: the fire must NOT disarm the memory — a second
+    # divergence inside the same episode window must dump again after the
+    # refractory.
+    # timings stay inside the 2 s anchor_recent window (its expiry is the
+    # hands-off protection, covered by test_handsoff_release_cannot_fire)
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)
+    sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # first fire
+    assert sim.s.reanchor_arm >= 30                              # memory kept
+    run_signal(sim, 50, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)    # re-grip, diverge again
+    sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)
+    assert abs(sim.s.apply_angle_last) < 1.0                     # second dump
+
+  def test_reanchor_noop_when_tracking(self):
+    # normal hands-off tracking: no anchor episode, apply follows the plan
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 300, v=15.0, wheel=5.0, cmd=5.0, tq=0.0)
+    assert sim.s.anchor_recent_frames == 0
+    assert abs(sim.s.apply_angle_last - 5.0) < 1.0
+
+  def test_handsoff_release_cannot_fire(self):
+    # hands-off-indistinguishable torque (driver_tq ~111 arms the memory —
+    # corpus p75 = 111, unavoidable) with a static deficit divergence and NO
+    # anchor episode: the let-go must NOT dump apply (the v1 failure mode:
+    # 647 hands-off fires, p90 6.7°).
+    sim = Sim()
+    settle(sim, v=10.0, wheel=10.0, cmd=14.0)                    # static 4° divergence
+    run_signal(sim, 300, v=10.0, wheel=10.0, cmd=14.0, tq=250.0) # driver_tq ~111, no anchor
+    assert sim.s.reanchor_arm >= 30                              # memory arms (by design)
+    assert sim.s.anchor_recent_frames == 0                       # but no anchor episode
+    before = sim.s.apply_angle_last
+    sim.step(v=10.0, wheel=10.0, cmd=14.0, tq=0.0)
+    assert abs(sim.s.apply_angle_last - before) < 0.5            # no dump
+
+  def test_blinker_anchor_is_not_grip_evidence(self):
+    # G3: a blinker-arm anchor (no pressed arm) must NOT arm the re-anchor
+    # memory — otherwise hands-off blinker episodes enable context-free dumps
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    # blinker anchor fires (driver ~127 >= 120) but raw 225 < 325 keeps
+    # override < 0.9 half the time... drive it clearly: raw 340 -> override
+    # ~0.96, blinker anchor on, EPS pressed (350) off, driver_pressed off
+    run_signal(sim, 50, v=15.0, wheel=0.0, cmd=0.0, tq=340.0, blinker=True)
+    assert sim.s.blinker_anchor_on
+    assert sim.s.anchor_recent_frames == 0
+
+  def test_no_repeat_fire_without_regrip(self):
+    # G2: after a dump, a persisting divergence must NOT re-fire until the
+    # driver genuinely re-grips past the arm level
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)
+    sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # fire
+    assert not sim.s.reanchor_ready
+    tr = run_signal(sim, 60, v=15.0, wheel=0.0, cmd=8.0, tq=0.0) # stay released
+    # apply may re-approach the plan but must not sawtooth back to the wheel
+    assert not sim.s.reanchor_ready
+    assert min(abs(a) for a in tr['apply'][20:]) > 1.0
 
 
 class TestLatPassiveIndicated:
