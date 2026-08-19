@@ -294,6 +294,72 @@ class TestYankFix:
     assert min(abs(a) for a in tr['apply'][20:]) > 1.0
 
 
+class TestRecoveryTaper:
+  """Phase 29: gain recovery/boost must back off at delivery-scale errors."""
+
+  def test_rate_up_tapers_at_large_error_post_grip(self):
+    from opendbc.car.hyundai.carcontroller import compute_torque_reduction_gain as f
+    g_mid = f(0.0, 90.0, True, 0.10, 1.5, post_grip=True)   # drift-scale: fast
+    g_big = f(0.0, 90.0, True, 0.10, 5.0, post_grip=True)   # delivery-scale: reference
+    assert g_mid - 0.10 > 3 * (g_big - 0.10) > 0
+    # the floor must survive gain quantization (0.004 steps): a sub-quantum
+    # rate would freeze recovery outright and deadlock re-engagement
+    assert g_big - 0.10 >= 0.004 - 1e-9
+
+  def test_rate_up_legacy_without_grip_evidence(self):
+    # hands-off drift recovery (deficit curves sit at |err| p50 2.22°) must
+    # keep the full legacy fast path when there is no recent grip
+    from opendbc.car.hyundai.carcontroller import compute_torque_reduction_gain as f
+    g_big_ho = f(0.0, 90.0, True, 0.10, 5.0, post_grip=False)
+    g_big_pg = f(0.0, 90.0, True, 0.10, 5.0, post_grip=True)
+    assert g_big_ho - 0.10 > 5 * (g_big_pg - 0.10)
+
+  def test_boost_tapers_at_large_error_post_grip_only(self):
+    from opendbc.car.hyundai.carcontroller import compute_torque_reduction_gain as f
+    # near-steady gain so the returned value ~= target ceiling
+    g_drift = f(0.0, 90.0, True, 0.85, 1.0, post_grip=True)
+    g_big = f(0.0, 90.0, True, 0.85, 5.0, post_grip=True)
+    assert g_drift >= g_big                  # boost must not raise the big-error target
+    g_big_ho = f(0.0, 90.0, True, 0.85, 5.0, post_grip=False)
+    # STRICT: equal values would mean the taper applies regardless of the
+    # gate — the exact regression this test exists to catch
+    assert g_big_ho > g_big                  # hands-off keeps the boost
+
+
+class TestDivergenceLeash:
+  """Phase 29: post-anchor lingering-touch tail cannot re-diverge apply."""
+
+  def test_ease_tail_leashed(self):
+    sim = Sim()
+    settle(sim, v=25.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchored grip
+    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=250.0)    # ease: driver_tq ~152, leash off, div may build
+    tr = run_signal(sim, 120, v=25.0, wheel=0.0, cmd=8.0, tq=150.0)  # tail: driver_tq ~52 in [30,100) -> leash
+    assert max(abs(a) for a in tr['apply'][20:]) <= 2.6          # clamped to wheel +/- 2 (+1 VM step)
+    sim.step(v=25.0, wheel=0.0, cmd=8.0, tq=0.0)                 # final let-go: nothing stored
+    assert abs(sim.s.apply_angle_last) <= 2.6
+
+  def test_leash_expires_then_tracking_resumes(self):
+    # after a clean full release the leash holds apply near the wheel for
+    # its 2 s memory, then op re-approaches the plan freely
+    sim = Sim()
+    settle(sim, v=25.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchored: div pinned ~0
+    run_signal(sim, 190, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)     # inside the 2 s memory
+    assert abs(sim.s.apply_angle_last) <= 2.6
+    run_signal(sim, 250, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)     # memory expired
+    assert sim.s.apply_angle_last > 5.0                          # free to track the plan
+
+  def test_leash_inactive_without_anchor_episode(self):
+    # hands-off-indistinguishable touch with no anchor: leash must not pin
+    # apply (normal tracking preserved)
+    sim = Sim()
+    settle(sim, v=25.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 300, v=25.0, wheel=0.0, cmd=8.0, tq=80.0)    # driver_tq ~0
+    assert sim.s.anchor_recent_frames == 0
+    assert sim.s.apply_angle_last > 5.0
+
+
 class TestLatPassiveIndicated:
   def test_parking_mode_sets_flag(self):
     sim = Sim()

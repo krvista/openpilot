@@ -112,7 +112,8 @@ PARKING_CREEP_FRAMES   = 1000                    # 10 s @ 100 Hz
 
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
-                                  grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False):
+                                  grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
+                                  post_grip=False):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -184,7 +185,19 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # suppress_error_boost on real grip (debounced steeringPressed) to disable the
     # boost — hands-off drift recovery (the boost's purpose) is kept because the
     # caller leaves it enabled whenever the driver is not pressing.
-    error_mult = 1.0 if suppress_error_boost else (1.0 + (error_mult_raw - 1.0) * torque_suppress)
+    # Phase 29: taper the boost away at delivery-scale errors, but ONLY in
+    # the post-grip regime (caller passes post_grip = anchor_recent > 0).
+    # Review-measured hands-off drift |apply-wheel| is NOT small — p50 2.22 /
+    # p75 3.83 / p90 6.87° (dominated by the sustained-curve MDPS delivery
+    # deficit) — so a magnitude-only taper killed the boost on 42.5% of
+    # hands-off >=25 km/h frames, regressing exactly the curve-authority
+    # work of Phases 12a/22/23/25. Grip-evidence gating (recent pressed
+    # anchor OR armed episode memory) cuts the taper exposure to 24.3%
+    # (anchor-only would be 10.3% but misses the sub-anchor 150-300 Nm
+    # release class) while preserving the field-event catch (t=3.05
+    # release had anchor_recent = 103).
+    big_err_taper = np.interp(abs(steering_error), [2.5, 4.0], [1.0, 0.0]) if post_grip else 1.0
+    error_mult = 1.0 if suppress_error_boost else (1.0 + (error_mult_raw - 1.0) * torque_suppress * big_err_taper)
     dynamic_ceiling = min(1.0, base_ceiling * error_mult)
     # Phase 5d A2 (commit 4a4d29b): when the driver signals intent with
     # the blinker, force the MDPS ceiling down so a light-grip lane
@@ -231,7 +244,25 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
   # 0.04 cap matches the legacy err_boost shape verified against
   # drivelog 0000001f (drift event ACIGain mean 0.977 with the boost
   # vs 0.583 with only the reference rate_up).
-  rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
+  # Phase 29 (scenario-sweep finding): non-monotonic — the 10x
+  # fast recovery is for DRIFT-scale errors (0.5-2.5°); at delivery-scale
+  # errors (2.5°+ = a stored driver-made divergence being released, or a
+  # road kick) recovering authority fast slams the wheel toward the stale
+  # command. Back off to sub-reference rate there: converge first (wheel
+  # glides to the command at low authority), then recover.
+  # Phase 29: in the post-grip regime only (anchor_recent > 0), fast
+  # recovery is confined below the leash boundary (2.0°) — beyond it the
+  # rate drops to the reference 0.004, exactly one gain quantum, NOT lower
+  # (sub-quantum rates round away against the 0.004 quantizer and freeze
+  # the gain outright — a re-engagement deadlock). Outside the post-grip
+  # regime the legacy drift-recovery shape is kept unchanged: hands-off
+  # |apply-wheel| sits at p50 2.22° (deficit curves), so a magnitude-only
+  # taper cut the mean hands-off recovery rate to 28% of legacy — rejected
+  # in review.
+  if post_grip:
+    rate_up = float(np.interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, 0.004]))
+  else:
+    rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
   gain = last_gain + max(-rate_dn, min(rate_up, delta))
   return round(gain / 0.004) * 0.004
 
@@ -1003,6 +1034,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.reanchor_ready = False
         self.curve_trim = 0.0
         self.trim_resid_lp = 0.0
+      elif (self.anchor_recent_frames > 0
+            and driver_tq < CarControllerParams.REANCHOR_ARM_NM):
+        # Phase 29 divergence leash (see values.py): in the 2 s after a real
+        # anchor episode, an easing/lingering touch let apply re-diverge
+        # 5-7° that the one-shot's ready-edge could no longer dump —
+        # closed-loop sweep measured 119-148°/s delivery at 90 km/h on
+        # 1-3 s ease-out profiles (a ~70 Nm raw touch reads as driver_tq 0,
+        # so no lower torque bound can be used: a [30,100) band variant let
+        # the invisible tail re-diverge AND suppressed the one-shot's
+        # div>2 fire condition — sweep-rejected). Keep apply within
+        # +/-LEASH of the wheel: a clamp TOWARD the held wheel (safe
+        # direction), a no-op when tracking error is already small. The
+        # one-shot (previous elif) still takes the abrupt-release full
+        # dump; ease-outs beyond the 2 s window are covered by the recovery
+        # taper (sweep: 4 s ease yankP 0.74 with taper alone). Corpus
+        # hands-off binding upper bound: 5.5% of hands-off frames — post-
+        # grip 2 s windows in deficit curves, bounded to 2°; the freeze-
+        # decay variant (10%, unbounded duration) was rejected.
+        self.apply_angle_last = float(np.clip(
+          self.apply_angle_last,
+          steer_angle_safe - CarControllerParams.REANCHOR_LEASH_DEG,
+          steer_angle_safe + CarControllerParams.REANCHOR_LEASH_DEG))
       desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
@@ -1390,6 +1443,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         suppress_error_boost=(real_grip or
                               self.anchor_recent_frames > (CarControllerParams.REANCHOR_RECENT_FRAMES -
                                                            CarControllerParams.BOOST_HOLDOFF_FRAMES)),
+        # Phase 29: the recovery/boost tapers apply only with grip evidence
+        # (see compute_torque_reduction_gain) — hands-off drift recovery in
+        # deficit curves keeps the legacy fast path. Evidence = a recent
+        # pressed-anchor episode OR the armed episode memory: the arm term
+        # covers the sub-anchor 150-300 Nm release class (sweep: 70°/s
+        # delivery at 90 km/h with the anchor-only gate). The arm is NOT a
+        # touch guarantee — review-measured, of hands-off arm>=30 frames
+        # 49.2% follow a press within 3 s, 31.4% had none for 10+ s, the
+        # rest is the F2 identifiability limit (a sustained sub-350 hold
+        # and an under-compensated hands-off curve are indistinguishable in
+        # torque) — accepted deliberately: the collateral is a sub-second
+        # recovery lag on climbing gain only, vs a 70°/s wheel delivery.
+        post_grip=(self.anchor_recent_frames > 0
+                   or self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES),
       )
       self.aci_gain_last = effective_aci_gain
 

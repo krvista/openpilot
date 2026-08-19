@@ -417,6 +417,22 @@ class CarControllerParams:
   # 26.1% of hands-off frames (G1 review, worse than the rejected v1 gate);
   # 20-30 frames lands at ~7-9%.
   BOOST_HOLDOFF_FRAMES     = 25
+  # Phase 29 (closed-loop scenario sweep): slow-ease tail re-divergence.
+  # After the one-shot re-anchor's ready-edge locks, an easing tail lets
+  # apply re-diverge 5-7° before the final let-go — sweep measured
+  # 119-148°/s delivery at 90 km/h across 1-3 s ease profiles. Within the
+  # 2 s pressed-anchor memory, while below the arm level (driver_tq < 100
+  # — NO lower bound: a ~70 Nm raw lingering touch reads as driver_tq 0,
+  # and a [30,100) band variant both missed it and starved the one-shot's
+  # div>2 condition, sweep-rejected), apply stays on a LEASH within +/-2°
+  # of the wheel (continuous clamp toward the driver — the safe direction).
+  # Ease-outs beyond 2 s are covered by the recovery taper alone (sweep:
+  # 4 s ease yankP 0.74 pre-leash). Corpus hands-off binding upper bound:
+  # 5.5% of hands-off frames (post-grip 2 s windows in deficit curves,
+  # bounded to 2°; the unbounded freeze-decay variant measured 10% and was
+  # REJECTED for fighting the trim).
+  # Kill switch: 1e9 (leash never binds).
+  REANCHOR_LEASH_DEG       = 2.0
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip
