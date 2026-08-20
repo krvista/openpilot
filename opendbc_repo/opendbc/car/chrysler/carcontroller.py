@@ -84,7 +84,17 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt, Inte
       new_torque = int(round(CC.actuators.torque * self.params.STEER_MAX))
       apply_torque = apply_meas_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorqueEps, self.params)
       if not lkas_active or not lkas_control_bit:
-        apply_torque = 0
+        if lkas_control_bit and not CS.out.steeringPressed and self.apply_torque_last != 0:
+          # Assist deactivated without driver override (e.g. speed dropped below the
+          # min-steer-speed hold window mid-corner): wind torque down at STEER_DELTA_DOWN
+          # instead of cutting to zero in a single step. Driver override still cuts
+          # immediately, and once the LKAS control bit is down the EPS ignores torque anyway.
+          if self.apply_torque_last > 0:
+            apply_torque = max(self.apply_torque_last - self.params.STEER_DELTA_DOWN, 0)
+          else:
+            apply_torque = min(self.apply_torque_last + self.params.STEER_DELTA_DOWN, 0)
+        else:
+          apply_torque = 0
       self.apply_torque_last = apply_torque
 
       can_sends.append(chryslercan.create_lkas_command(self.packer, self.CP, int(apply_torque), lkas_control_bit))

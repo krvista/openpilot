@@ -50,6 +50,7 @@ class Controls(ControlsExt):
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.lat_active_prev = False
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -106,13 +107,26 @@ class Controls(ControlsExt):
     CC.enabled = self.sm['selfdriveState'].enabled
 
     # Check which actuators can be enabled
-    standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
+    # minSteerSpeed hysteresis: EPS units with a high minimum steer speed keep assisting
+    # below that speed once torque is already flowing (Chrysler HIGHER_MIN_STEERING_SPEED
+    # EPS engages at 17.5 m/s but holds assist on the way down — "17 on the way up, 13 on
+    # the way down once engaged" per opendbc, and the carcontroller already holds the LKAS
+    # bit to minSteerSpeed - 3). Cutting latActive exactly at minSteerSpeed removes all
+    # steering torque in a single step mid-corner (drivelog: 32/32 cuts at exactly
+    # minSteerSpeed, up to saturated torque). Once lateral is active, hold it down to
+    # minSteerSpeed - 2.5 (stays above the carcontroller's LKAS-bit drop at -3.0 so the
+    # wind-down happens while the EPS still accepts torque). Entry is unchanged.
+    min_lat_speed = max(self.CP.minSteerSpeed, 0.3)
+    if self.lat_active_prev and self.CP.brand == 'chrysler' and self.CP.minSteerSpeed > 10.:
+      min_lat_speed = max(self.CP.minSteerSpeed - 2.5, 0.3)
+    standstill = abs(CS.vEgo) <= min_lat_speed or CS.standstill
 
     # Get which state to use for active lateral control
     _lat_active = self.get_lat_active(self.sm)
 
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
+    self.lat_active_prev = CC.latActive
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
