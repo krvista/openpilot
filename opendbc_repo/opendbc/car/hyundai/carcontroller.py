@@ -426,6 +426,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.reanchor_arm = 0
     self.reanchor_ready = False
     self.anchor_recent_frames = 0
+    # Phase 29b: low-passed wheel reference for the LEASH boundary only
+    # (tau 0.3 s, snap on >4° real motion) — the raw wheel carries 2-8 Hz
+    # road jitter and a clamp boundary that follows it re-injects that
+    # jitter into apply while binding. Anchors keep the RAW wheel (their
+    # bump-free-resume semantics need exactness).
+    self.leash_wheel_lp = 0.0
     # Phase 27: display-only flag mirrored into carStateSP.lateralControlPaused
     # by card.py — True while op is intentionally passive (parking mode /
     # low-speed passthrough / angle-passive) with CC.latActive still set.
@@ -736,6 +742,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if driver_tq >= CarControllerParams.REANCHOR_ARM_NM:
       self.reanchor_ready = True
     self.anchor_recent_frames = max(self.anchor_recent_frames - 1, 0)
+    # Phase 29b: leash wheel reference — LP with a real-motion snap. The
+    # snap keeps the filter from lagging a genuine fast steer (jitter is
+    # +/-1-2°, real maneuvers cross 4° quickly); between snaps the 0.3 s
+    # tau attenuates the 2-8 Hz band by ~85%+ so a BINDING leash boundary
+    # does not carry road jitter into apply.
+    if abs(steer_angle_safe - self.leash_wheel_lp) > CarControllerParams.LEASH_WHEEL_SNAP_DEG:
+      self.leash_wheel_lp = steer_angle_safe
+    else:
+      self.leash_wheel_lp += CarControllerParams.LEASH_WHEEL_LP_ALPHA * (steer_angle_safe - self.leash_wheel_lp)
 
     # Driver override factor — the heavy-grip anchor gate and yield blend
     # coefficient (Phase 5a lineage). When the blinker is on, lower
@@ -1052,10 +1067,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # hands-off binding upper bound: 5.5% of hands-off frames — post-
         # grip 2 s windows in deficit curves, bounded to 2°; the freeze-
         # decay variant (10%, unbounded duration) was rejected.
+        # Phase 29b: the boundary follows the LOW-PASSED wheel (updated in
+        # the early block) so road jitter on the wheel is not re-injected
+        # into apply while the clamp binds — harness: 1:1 injection on the
+        # raw boundary vs 89% attenuation filtered; 0x42-0x45 post-grip
+        # low-speed windows measured 2-8 Hz RMS ~0.5° vs ~0.15° elsewhere.
+        # NOTE the LP lags a TURNING wheel, which shifts the band AGAINST
+        # the turn (op trails/resists the driver's motion — review-measured
+        # up to SNAP+LEASH = 6.25° un-clipped). The reference is therefore
+        # clipped to raw wheel +/- LEASH first, capping the total trailing
+        # offset at 2*LEASH = 4° while keeping the filtering intact during
+        # quiet jitter (corpus lp lag p50 0.39°). Self-limiting either way:
+        # pushing past the arm level disengages the leash entirely.
+        leash_ref = float(np.clip(self.leash_wheel_lp,
+                                  steer_angle_safe - CarControllerParams.REANCHOR_LEASH_DEG,
+                                  steer_angle_safe + CarControllerParams.REANCHOR_LEASH_DEG))
         self.apply_angle_last = float(np.clip(
           self.apply_angle_last,
-          steer_angle_safe - CarControllerParams.REANCHOR_LEASH_DEG,
-          steer_angle_safe + CarControllerParams.REANCHOR_LEASH_DEG))
+          leash_ref - CarControllerParams.REANCHOR_LEASH_DEG,
+          leash_ref + CarControllerParams.REANCHOR_LEASH_DEG))
       desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 

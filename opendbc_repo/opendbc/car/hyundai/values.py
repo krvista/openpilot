@@ -433,6 +433,16 @@ class CarControllerParams:
   # REJECTED for fighting the trim).
   # Kill switch: 1e9 (leash never binds).
   REANCHOR_LEASH_DEG       = 2.0
+  # Phase 29b: the leash boundary follows a low-passed wheel (tau 0.3 s =
+  # alpha 0.033 at 100 Hz; ~85%+ attenuation across 2-8 Hz) so a binding
+  # clamp does not re-inject road jitter into apply — 0x42-0x45 post-grip
+  # low-speed windows measured 2-8 Hz RMS ~0.5° vs ~0.15° elsewhere (n=6).
+  # The snap guard bypasses the filter on genuine fast steering (jitter is
+  # +/-1-2°; a real maneuver crosses 4° in ~0.1 s), so the boundary can
+  # never lag a moving wheel by more than SNAP+slew. Anchors and the
+  # one-shot dump keep the RAW wheel. Kill: ALPHA = 1.0 (no filtering).
+  LEASH_WHEEL_LP_ALPHA     = 0.033
+  LEASH_WHEEL_SNAP_DEG     = 4.0
 
   # Phase 6d angle-aware passive thresholds. Drivelog 0000002[01]
   # (94.7k frames, Phase 6c build b6e5842) showed sustained-grip

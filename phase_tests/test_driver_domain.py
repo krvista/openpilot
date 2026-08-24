@@ -350,6 +350,39 @@ class TestDivergenceLeash:
     run_signal(sim, 250, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)     # memory expired
     assert sim.s.apply_angle_last > 5.0                          # free to track the plan
 
+  def test_leash_boundary_filters_wheel_jitter(self):
+    # Phase 29b: with the leash BINDING (apply pinned at the boundary), 5 Hz
+    # wheel jitter must not pass into apply — the boundary follows the
+    # low-passed wheel, not the raw one.
+    # v=15 m/s: above the parking-mode enter band, so the S1b cold-start
+    # latch (whose own raw wheel-follow is authority-less and out of scope
+    # here) cannot arm and the leash path is what gets exercised
+    import math
+    import numpy as np
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 60, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchor episode
+    tr = run_signal(sim, 150, v=15.0, cmd=8.0, tq=150.0,         # leash tail, jittering wheel
+                    wheel=lambda i: 1.5 * math.sin(2 * math.pi * 5.0 * i * 0.01))
+    ap = np.array(tr['apply'][50:])
+    ap = ap - ap.mean()
+    f = np.fft.rfftfreq(len(ap), 0.01)
+    X = np.abs(np.fft.rfft(ap)) ** 2
+    band = np.sqrt(X[(f >= 2) & (f <= 8)].sum() / len(ap) ** 2 * 2)
+    assert band < 0.30          # wheel band RMS is ~1.06; >70% attenuation
+
+  def test_leash_trailing_offset_bounded(self):
+    # the LP boundary lags a turning wheel AGAINST the turn (op trails the
+    # driver's motion); the clipped reference must cap that trailing offset
+    # at 2*LEASH = 4° (+1 VM step) regardless of turn rate
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 60, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)
+    tr = run_signal(sim, 100, v=15.0, cmd=0.0, tq=150.0,
+                    wheel=lambda i: min(0.5 * i, 30.0))          # 50 deg/s turn
+    for w, a in zip([min(0.5 * i, 30.0) for i in range(100)][20:], tr['apply'][20:]):
+      assert a >= w - 5.0       # 2*LEASH(4) + VM-step margin
+
   def test_leash_inactive_without_anchor_episode(self):
     # hands-off-indistinguishable touch with no anchor: leash must not pin
     # apply (normal tracking preserved)
