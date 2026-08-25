@@ -687,15 +687,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # zero on the torsion bar until it exceeds ~2x the hold level.
     lat_acc_est = (v_ego_safe ** 2) * abs(math.tan(math.radians(
       steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
-    hold_target = min(CarControllerParams.ACIGAIN_HOLD_SCALE *
-                      (CarControllerParams.ACIGAIN_HOLD_BASE_NM +
-                       CarControllerParams.ACIGAIN_HOLD_PER_LATACC * lat_acc_est),
-                      CarControllerParams.ACIGAIN_HOLD_MAX_NM)
+    # Phase 31 refit (see values.py): speed-dependent baseline + saturating
+    # lat_acc term with speed-dependent gain, fitted on the corpus p45.
+    hold_target = min(
+      float(np.interp(v_ego_safe, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
+                      CarControllerParams.ACIGAIN_HOLD_BASE_V)) +
+      float(np.interp(v_ego_safe, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
+                      CarControllerParams.ACIGAIN_HOLD_LAGAIN_V)) *
+      float(np.interp(lat_acc_est, CarControllerParams.ACIGAIN_HOLD_LA_BP,
+                      CarControllerParams.ACIGAIN_HOLD_LA_S)),
+      CarControllerParams.ACIGAIN_HOLD_MAX_NM)
     # Phase 26b (review fix): the hold model describes op's OWN torque, which
     # exists only while op actuates. In the passive states (angle-passive /
     # passthrough / parking / faults) STEER_REQ=0 and ACIGain has decayed to
-    # zero — the entire bar reading is the driver's, and subtracting up to
-    # 240 Nm there under-read a holding driver: the passive-exit tests could
+    # zero — the entire bar reading is the driver's, and subtracting the
+    # full compensation there under-read a holding driver: the passive-exit tests could
     # release against a 300-370 Nm grip and re-engage op on a wheel the
     # driver was holding (harness measured a ~1.2 Hz STEER_REQ limit cycle
     # at a steady 360 Nm). Gate the compensation on the PREVIOUS frame's

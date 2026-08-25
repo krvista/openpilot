@@ -30,10 +30,11 @@ class TestDriverPressed:
     assert sim.s.driver_pressed
 
   def test_straight_line_equivalence_no_fire(self):
-    # raw 330 in a straight = driver_tq ~232 < 250: not pressed (old flag: also no at <350)
+    # Phase 31 comp at 54 km/h straight is ~73.5: raw 290 = driver_tq ~216
+    # < 230 -> not pressed (the pressed raw-equivalence point is now ~303)
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0)
-    run_signal(sim, 100, v=15.0, wheel=0.0, tq=330.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, tq=290.0)
     assert not sim.s.driver_pressed
 
   def test_curve_hold_immunity(self):
@@ -58,9 +59,9 @@ class TestDriverPressed:
     settle(sim, v=15.0, wheel=0.0)
     run_signal(sim, 20, v=15.0, wheel=0.0, tq=360.0)
     assert sim.s.driver_pressed
-    run_signal(sim, 20, v=15.0, wheel=0.0, tq=310.0)   # driver ~212 > 200: held
+    run_signal(sim, 20, v=15.0, wheel=0.0, tq=270.0)   # driver ~196 > 184: held
     assert sim.s.driver_pressed
-    run_signal(sim, 20, v=15.0, wheel=0.0, tq=280.0)   # driver ~182 < 200: releases
+    run_signal(sim, 20, v=15.0, wheel=0.0, tq=245.0)   # driver ~171 < 184: releases
     assert not sim.s.driver_pressed
 
   def test_engagement_instant_reads_full_driver_torque(self):
@@ -88,13 +89,13 @@ class TestHoldSlewGuard:
     sim = Sim()
     settle(sim, v=10.0, wheel=0.0)
     run_signal(sim, 100, v=10.0, wheel=30.0)
-    assert sim.s.hold_comp_last > 200.0     # reached the ~222 target
+    assert sim.s.hold_comp_last > 175.0     # reached the Phase 31 ~188 target
 
   def test_passive_state_gates_compensation_to_zero(self):
     # Phase 26b: once op is passive (parking mode), hold_comp bleeds to 0
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0)
-    assert sim.s.hold_comp_last > 90.0
+    assert sim.s.hold_comp_last > 65.0      # Phase 31: ~73.5 at 54 km/h straight
     run_signal(sim, 320, v=5.0, cmd=0.0, wheel=280.0)   # parking mode -> passive
     assert sim.s.parking_mode_active
     run_signal(sim, 100, v=5.0, cmd=0.0, wheel=280.0)
@@ -112,7 +113,7 @@ class TestBlinkerAnchorDomain:
   def test_straight_below_threshold(self):
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0)
-    run_signal(sim, 50, v=15.0, wheel=0.0, tq=210.0, blinker=True)  # driver ~112 < 120
+    run_signal(sim, 50, v=15.0, wheel=0.0, tq=185.0, blinker=True)  # driver ~112 < 120 (comp ~73.5)
     assert not sim.s.blinker_anchor_on
 
   def test_curve_self_fire_removed(self):
@@ -187,7 +188,7 @@ class TestIntentDisagreeDomain:
     # property under test.
     sim = Sim()
     settle(sim, v=8.0, wheel=10.0, cmd=20.0)
-    run_signal(sim, 100, v=8.0, wheel=10.0, cmd=20.0, tq=-300.0)
+    run_signal(sim, 100, v=8.0, wheel=10.0, cmd=20.0, tq=-350.0)
     assert sim.s.angle_passive_active or abs(sim.s.apply_angle_last - 10.0) < 1.5
 
   def test_below_threshold_no_fire(self):
@@ -207,7 +208,7 @@ class TestYankFix:
     # it track the diverging plan (the seg17 failure).
     sim = Sim()
     settle(sim, v=24.0, wheel=8.0, cmd=8.0)
-    run_signal(sim, 100, v=24.0, wheel=8.0, cmd=14.0, tq=460.0)
+    run_signal(sim, 100, v=24.0, wheel=8.0, cmd=14.0, tq=400.0)
     assert not sim.s.driver_pressed          # confirms we are in the gap band
     assert abs(sim.s.apply_angle_last - 8.0) < 1.5
 
@@ -260,7 +261,7 @@ class TestYankFix:
     # 647 hands-off fires, p90 6.7°).
     sim = Sim()
     settle(sim, v=10.0, wheel=10.0, cmd=14.0)                    # static 4° divergence
-    run_signal(sim, 300, v=10.0, wheel=10.0, cmd=14.0, tq=250.0) # driver_tq ~111, no anchor
+    run_signal(sim, 300, v=10.0, wheel=10.0, cmd=14.0, tq=300.0) # driver_tq ~111 (comp ~188), no anchor
     assert sim.s.reanchor_arm >= 30                              # memory arms (by design)
     assert sim.s.anchor_recent_frames == 0                       # but no anchor episode
     before = sim.s.apply_angle_last
@@ -271,11 +272,14 @@ class TestYankFix:
     # G3: a blinker-arm anchor (no pressed arm) must NOT arm the re-anchor
     # memory — otherwise hands-off blinker episodes enable context-free dumps
     sim = Sim()
-    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
-    # blinker anchor fires (driver ~127 >= 120) but raw 225 < 325 keeps
-    # override < 0.9 half the time... drive it clearly: raw 340 -> override
-    # ~0.96, blinker anchor on, EPS pressed (350) off, driver_pressed off
-    run_signal(sim, 50, v=15.0, wheel=0.0, cmd=0.0, tq=340.0, blinker=True)
+    # Phase 31: at 54 km/h straight the pressed raw-equivalent (~303) sits
+    # below the override-0.9 point (325), so the G3 property is exercised in
+    # a mild curve (comp ~195 -> pressed equiv ~425, blinker fire ~315).
+    # Settle AT the curve so comp is at steady state before torque applies
+    # (an instant 0->20 wheel step with comp still ramping transiently
+    # crosses driver_pressed — a scenario artifact, not the property).
+    settle(sim, v=15.0, wheel=20.0, cmd=20.0)
+    run_signal(sim, 50, v=15.0, wheel=20.0, cmd=20.0, tq=340.0, blinker=True)
     assert sim.s.blinker_anchor_on
     assert sim.s.anchor_recent_frames == 0
 

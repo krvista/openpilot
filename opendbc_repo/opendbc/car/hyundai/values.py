@@ -339,10 +339,46 @@ class CarControllerParams:
   ACIGAIN_FLOOR_SPEEDS_KPH  = [80.0, 140.0]
   ACIGAIN_HANDSOFF_FLOOR_V  = [0.15, 0.10]
   ACIGAIN_GRIP_FLOOR_V      = [0.08, 0.05]
-  ACIGAIN_HOLD_BASE_NM    = 122.0
-  ACIGAIN_HOLD_PER_LATACC = 132.0
-  ACIGAIN_HOLD_SCALE      = 0.8
-  ACIGAIN_HOLD_MAX_NM     = 240.0
+  # Phase 31: hold-torque model refit. The Phase 22 linear fit
+  # (0.8*(122 + 132*lat_acc), cap 240) had no speed term and a slope the
+  # binned corpus contradicts — settling measurement (1.1M hands-off
+  # frames): the STRAIGHT-line baseline is speed-dependent (p50 raw 140 at
+  # 11-29 km/h down to ~81 at 54-90) and the lat_acc term SATURATES by
+  # ~0.3 m/s2 with a speed-dependent gain (EPS assist mapping). The old
+  # under-compensation at low speed is the measured root of the hands-off
+  # driver_tq inflation (p50 40.6 / p75 111) behind three review cycles of
+  # threshold defects (Phase 26 premise, 29 taper premise, 30 timeout).
+  # New form: comp(v, la) = B(v) + G(v) * S(la), fitted on the p45 of the
+  # !pressed population per (v, la) cell (p45 splits the light-touch
+  # contamination above from the true hands-off mass below). Residuals:
+  # most populated cells within +/-20 Nm, but NOT all — review-measured
+  # outliers: (8-15 m/s, la>=1.2) -97; (30-42, la 0.2-0.3) -71; (3-8,
+  # la>=2.0) -69; (30-42, la 0.1-0.2) -66; (22-30, straight) +31 — and six
+  # cells where this model is worse than the old linear one. Net corpus
+  # |comp error| still drops 34.8 -> 14.6 Nm (58%). The p45 choice is a
+  # DELIBERATE direction trade: over-compensating frames (masking real
+  # light input) rise 26% -> 58% while phantom torque halves — acceptable
+  # only because the EPS raw-350 arm is the anchor backstop, so the
+  # safety-critical consumer does not depend on driver_pressed.
+  # B(v) below 5.5 m/s is a flat extrapolation with NO fitting data (crawl
+  # is dominated by passive states where 26b gates comp to 0; parked true
+  # hold is ~0) — collect a lot-drive data point before trusting it.
+  # B(36) is set to 62 (the 130 km/h STRAIGHT cell p45 = 72), not the
+  # joint-fit 38 which the sparse mid-la cells dragged down — measured
+  # effect: 25-45 m/s hands-off blinker-fire false rate 12.5% -> 10.7%
+  # (old model 11.7%). DRIVER-DOMAIN THRESHOLDS
+  # ARE UNCHANGED by design: they were always defined against the true
+  # driver contribution — this makes them read closer to it. Raw-torque
+  # equivalence points shift with speed as a consequence (e.g. pressed
+  # 250 == raw ~323 at 54 km/h vs ~390 at 20 km/h) — verified against the
+  # corpus for false-fire rates in the Phase 31 replay.
+  # Kill: BASE_V and LAGAIN_V all-zero (comp 0 -> raw domain everywhere).
+  ACIGAIN_HOLD_BASE_SPEEDS_MS = [5.5, 10.5, 16.5, 25.0, 36.0]
+  ACIGAIN_HOLD_BASE_V         = [140.0, 102.0, 64.0, 62.0, 62.0]
+  ACIGAIN_HOLD_LAGAIN_V       = [53.0, 86.0, 133.0, 123.0, 87.0]
+  ACIGAIN_HOLD_LA_BP          = [0.0, 0.1, 0.3]
+  ACIGAIN_HOLD_LA_S           = [0.0, 0.5, 1.0]
+  ACIGAIN_HOLD_MAX_NM     = 220.0   # Phase 31: model self-caps ~200; was 240
   # Phase 26: slew guard on hold_comp (per 10 ms frame). A single-frame
   # angle/speed sensor spike would otherwise jump the compensation by up to
   # +142 Nm and mask a real driver input for that window; genuine curve
@@ -364,7 +400,18 @@ class CarControllerParams:
   # OVER-compensates there and self-fire risk does not grow with lat_acc.
   # The >1.5 m/s2 band is thin in the replay set (~7.3k frames) — verify
   # hands-off driver_pressed episodes at high lat_acc on future spirited logs.
-  DRIVER_PRESSED_NM     = 250.0
+  # Phase 31: 250 -> 230. The refit raises low-speed compensation (98 ->
+  # 140 at the straight baseline), which pushed marginal real grips
+  # (episode peaks 250-290 driver-domain under the old comp) below the
+  # threshold: corpus real-grip retention 87.7% -> 75.9% at 250. 230
+  # restores 83.9%; the 6-frame machine's hands-off false rate measured
+  # 0.00% on the comp-on population (instantaneous >=230 tail 0.52%,
+  # debounced away). Review upper bound WITHOUT modeling the 26b passive
+  # gate: 0.108%, clustered at crawl speeds in passive states where comp
+  # is correctly 0 and raw>=230 IS a grip — i.e. the residual is the
+  # gated population, not a false fire.
+  # The EPS raw-350 arm remains the anchor backstop either way.
+  DRIVER_PRESSED_NM     = 230.0
   DRIVER_PRESSED_FRAMES = 5
   # Phase 28 (0x41 yank fix). Field failure at 86 km/h (route 0x41 seg 16-17,
   # build 126c0ca): a 430-500 Nm grip in an 8° curve put hold_comp at its

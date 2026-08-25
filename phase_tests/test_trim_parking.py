@@ -47,7 +47,7 @@ class TestTrimInvariants:
     sim = Sim()
     self._build_trim(sim)
     t0 = abs(sim.s.curve_trim)
-    tr = run_signal(sim, 200, v=15.0, cmd=10.0, wheel=5.0, tq=420.0)  # pressed
+    tr = run_signal(sim, 200, v=15.0, cmd=10.0, wheel=5.0, tq=480.0)  # driver_pressed (Phase 31 comp ~195)
     assert all(abs(t) <= t0 + 1e-9 for t in tr['trim'])
     assert abs(sim.s.curve_trim) < t0
 
