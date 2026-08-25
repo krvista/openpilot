@@ -326,71 +326,41 @@ class TestRecoveryTaper:
     assert g_big_ho > g_big                  # hands-off keeps the boost
 
 
-class TestDivergenceLeash:
-  """Phase 29: post-anchor lingering-touch tail cannot re-diverge apply."""
+class TestHandover:
+  """Phase 30: after the driver releases, op must resume plan tracking
+  promptly — the Phase 29 leash that pinned apply to the released wheel was
+  removed (36 corpus urgent-regrab windows, field lane-departure 0x47)."""
 
-  def test_ease_tail_leashed(self):
+  def test_release_resumes_plan_tracking_promptly(self):
+    # the 0x47 seg15 class: anchored grip holds the wheel off-plan, driver
+    # fully releases -> apply must move toward the plan well inside the old
+    # 2 s leash window instead of staying pinned at the wheel
     sim = Sim()
     settle(sim, v=25.0, wheel=0.0, cmd=0.0)
-    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchored grip
-    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=250.0)    # ease: driver_tq ~152, leash off, div may build
-    tr = run_signal(sim, 120, v=25.0, wheel=0.0, cmd=8.0, tq=150.0)  # tail: driver_tq ~52 in [30,100) -> leash
-    assert max(abs(a) for a in tr['apply'][20:]) <= 2.6          # clamped to wheel +/- 2 (+1 VM step)
-    sim.step(v=25.0, wheel=0.0, cmd=8.0, tq=0.0)                 # final let-go: nothing stored
-    assert abs(sim.s.apply_angle_last) <= 2.6
+    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchored: apply pinned ~0
+    run_signal(sim, 100, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)     # released, 1.0 s
+    assert sim.s.apply_angle_last > 4.0                          # already en route to the plan
 
-  def test_leash_expires_then_tracking_resumes(self):
-    # after a clean full release the leash holds apply near the wheel for
-    # its 2 s memory, then op re-approaches the plan freely
+  def test_release_with_lingering_touch_still_resumes(self):
+    # an invisible lingering touch (raw 150 -> driver_tq ~52) must not pin
+    # apply either — the one-shot + taper own the residual slam risk
     sim = Sim()
     settle(sim, v=25.0, wheel=0.0, cmd=0.0)
-    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchored: div pinned ~0
-    run_signal(sim, 190, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)     # inside the 2 s memory
-    assert abs(sim.s.apply_angle_last) <= 2.6
-    run_signal(sim, 250, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)     # memory expired
-    assert sim.s.apply_angle_last > 5.0                          # free to track the plan
+    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)
+    run_signal(sim, 150, v=25.0, wheel=0.0, cmd=8.0, tq=150.0)   # tail: old leash pinned here
+    assert sim.s.apply_angle_last > 4.0                          # no pinning
 
-  def test_leash_boundary_filters_wheel_jitter(self):
-    # Phase 29b: with the leash BINDING (apply pinned at the boundary), 5 Hz
-    # wheel jitter must not pass into apply — the boundary follows the
-    # low-passed wheel, not the raw one.
-    # v=15 m/s: above the parking-mode enter band, so the S1b cold-start
-    # latch (whose own raw wheel-follow is authority-less and out of scope
-    # here) cannot arm and the leash path is what gets exercised
-    import math
-    import numpy as np
-    sim = Sim()
-    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
-    run_signal(sim, 60, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)    # anchor episode
-    tr = run_signal(sim, 150, v=15.0, cmd=8.0, tq=150.0,         # leash tail, jittering wheel
-                    wheel=lambda i: 1.5 * math.sin(2 * math.pi * 5.0 * i * 0.01))
-    ap = np.array(tr['apply'][50:])
-    ap = ap - ap.mean()
-    f = np.fft.rfftfreq(len(ap), 0.01)
-    X = np.abs(np.fft.rfft(ap)) ** 2
-    band = np.sqrt(X[(f >= 2) & (f <= 8)].sum() / len(ap) ** 2 * 2)
-    assert band < 0.30          # wheel band RMS is ~1.06; >70% attenuation
-
-  def test_leash_trailing_offset_bounded(self):
-    # the LP boundary lags a turning wheel AGAINST the turn (op trails the
-    # driver's motion); the clipped reference must cap that trailing offset
-    # at 2*LEASH = 4° (+1 VM step) regardless of turn rate
-    sim = Sim()
-    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
-    run_signal(sim, 60, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)
-    tr = run_signal(sim, 100, v=15.0, cmd=0.0, tq=150.0,
-                    wheel=lambda i: min(0.5 * i, 30.0))          # 50 deg/s turn
-    for w, a in zip([min(0.5 * i, 30.0) for i in range(100)][20:], tr['apply'][20:]):
-      assert a >= w - 5.0       # 2*LEASH(4) + VM-step margin
-
-  def test_leash_inactive_without_anchor_episode(self):
-    # hands-off-indistinguishable touch with no anchor: leash must not pin
-    # apply (normal tracking preserved)
+  def test_release_approach_is_rate_bounded(self):
+    # the resumed approach must stay inside the VM comfort envelope: apply
+    # moves toward the plan monotonically with no single-frame jump beyond
+    # the VM step (no slam re-introduced by the removal)
     sim = Sim()
     settle(sim, v=25.0, wheel=0.0, cmd=0.0)
-    run_signal(sim, 300, v=25.0, wheel=0.0, cmd=8.0, tq=80.0)    # driver_tq ~0
-    assert sim.s.anchor_recent_frames == 0
-    assert sim.s.apply_angle_last > 5.0
+    run_signal(sim, 60, v=25.0, wheel=0.0, cmd=8.0, tq=460.0)
+    tr = run_signal(sim, 150, v=25.0, wheel=0.0, cmd=8.0, tq=0.0)
+    steps = [b - a for a, b in zip(tr['apply'], tr['apply'][1:])]
+    assert max(abs(s) for s in steps) < 1.2                      # per-frame VM bound
+    assert all(s > -0.2 for s in steps)                          # monotone toward the plan
 
 
 class TestLatPassiveIndicated:

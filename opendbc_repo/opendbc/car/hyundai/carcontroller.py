@@ -426,12 +426,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.reanchor_arm = 0
     self.reanchor_ready = False
     self.anchor_recent_frames = 0
-    # Phase 29b: low-passed wheel reference for the LEASH boundary only
-    # (tau 0.3 s, snap on >4° real motion) — the raw wheel carries 2-8 Hz
-    # road jitter and a clamp boundary that follows it re-injects that
-    # jitter into apply while binding. Anchors keep the RAW wheel (their
-    # bump-free-resume semantics need exactness).
-    self.leash_wheel_lp = 0.0
+    # Phase 30: release-edge timer for the one-shot (init large: no edge yet).
+    self.frames_since_drv_release = 1000
     # Phase 27: display-only flag mirrored into carStateSP.lateralControlPaused
     # by card.py — True while op is intentionally passive (parking mode /
     # low-speed passthrough / angle-passive) with CC.latActive still set.
@@ -742,15 +738,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if driver_tq >= CarControllerParams.REANCHOR_ARM_NM:
       self.reanchor_ready = True
     self.anchor_recent_frames = max(self.anchor_recent_frames - 1, 0)
-    # Phase 29b: leash wheel reference — LP with a real-motion snap. The
-    # snap keeps the filter from lagging a genuine fast steer (jitter is
-    # +/-1-2°, real maneuvers cross 4° quickly); between snaps the 0.3 s
-    # tau attenuates the 2-8 Hz band by ~85%+ so a BINDING leash boundary
-    # does not carry road jitter into apply.
-    if abs(steer_angle_safe - self.leash_wheel_lp) > CarControllerParams.LEASH_WHEEL_SNAP_DEG:
-      self.leash_wheel_lp = steer_angle_safe
-    else:
-      self.leash_wheel_lp += CarControllerParams.LEASH_WHEEL_LP_ALPHA * (steer_angle_safe - self.leash_wheel_lp)
+    # Phase 30: frames since driver torque was last at/above the fire level —
+    # the one-shot dump only makes sense at the release edge.
+    self.frames_since_drv_release = (0 if driver_tq >= CarControllerParams.REANCHOR_FIRE_NM
+                                     else min(self.frames_since_drv_release + 1, 1000))
 
     # Driver override factor — the heavy-grip anchor gate and yield blend
     # coefficient (Phase 5a lineage). When the blinker is on, lower
@@ -1032,6 +1023,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             and self.anchor_recent_frames > 0
             and self.reanchor_ready
             and driver_tq < CarControllerParams.REANCHOR_FIRE_NM
+            # Phase 30: only at the release EDGE (torque above the fire level
+            # within the last 0.2 s). Without this, a cleanly released op
+            # re-approaching the plan builds its OWN 2° of progress and the
+            # dump yanked it back to the wheel once per release — the fire
+            # exists for divergence stored DURING the grip, which by
+            # definition is present at the instant torque collapses.
+            and self.frames_since_drv_release <= CarControllerParams.REANCHOR_EDGE_FRAMES
             and abs(self.apply_angle_last - steer_angle_safe) > CarControllerParams.REANCHOR_MIN_DIV_DEG):
         # Phase 28 release re-anchor (see values.py): the driver just let go
         # after an override episode that included a real anchor-grade grip
@@ -1049,43 +1047,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.reanchor_ready = False
         self.curve_trim = 0.0
         self.trim_resid_lp = 0.0
-      elif (self.anchor_recent_frames > 0
-            and driver_tq < CarControllerParams.REANCHOR_ARM_NM):
-        # Phase 29 divergence leash (see values.py): in the 2 s after a real
-        # anchor episode, an easing/lingering touch let apply re-diverge
-        # 5-7° that the one-shot's ready-edge could no longer dump —
-        # closed-loop sweep measured 119-148°/s delivery at 90 km/h on
-        # 1-3 s ease-out profiles (a ~70 Nm raw touch reads as driver_tq 0,
-        # so no lower torque bound can be used: a [30,100) band variant let
-        # the invisible tail re-diverge AND suppressed the one-shot's
-        # div>2 fire condition — sweep-rejected). Keep apply within
-        # +/-LEASH of the wheel: a clamp TOWARD the held wheel (safe
-        # direction), a no-op when tracking error is already small. The
-        # one-shot (previous elif) still takes the abrupt-release full
-        # dump; ease-outs beyond the 2 s window are covered by the recovery
-        # taper (sweep: 4 s ease yankP 0.74 with taper alone). Corpus
-        # hands-off binding upper bound: 5.5% of hands-off frames — post-
-        # grip 2 s windows in deficit curves, bounded to 2°; the freeze-
-        # decay variant (10%, unbounded duration) was rejected.
-        # Phase 29b: the boundary follows the LOW-PASSED wheel (updated in
-        # the early block) so road jitter on the wheel is not re-injected
-        # into apply while the clamp binds — harness: 1:1 injection on the
-        # raw boundary vs 89% attenuation filtered; 0x42-0x45 post-grip
-        # low-speed windows measured 2-8 Hz RMS ~0.5° vs ~0.15° elsewhere.
-        # NOTE the LP lags a TURNING wheel, which shifts the band AGAINST
-        # the turn (op trails/resists the driver's motion — review-measured
-        # up to SNAP+LEASH = 6.25° un-clipped). The reference is therefore
-        # clipped to raw wheel +/- LEASH first, capping the total trailing
-        # offset at 2*LEASH = 4° while keeping the filtering intact during
-        # quiet jitter (corpus lp lag p50 0.39°). Self-limiting either way:
-        # pushing past the arm level disengages the leash entirely.
-        leash_ref = float(np.clip(self.leash_wheel_lp,
-                                  steer_angle_safe - CarControllerParams.REANCHOR_LEASH_DEG,
-                                  steer_angle_safe + CarControllerParams.REANCHOR_LEASH_DEG))
-        self.apply_angle_last = float(np.clip(
-          self.apply_angle_last,
-          leash_ref - CarControllerParams.REANCHOR_LEASH_DEG,
-          leash_ref + CarControllerParams.REANCHOR_LEASH_DEG))
+      # Phase 30: the Phase 29/29b divergence leash that followed this
+      # one-shot was REMOVED. It clamped apply to wheel±2° for 2 s after an
+      # anchor episode to stop slow-ease tail re-divergence — but torque
+      # cannot distinguish a lightly-resting hand from a fully-released one
+      # (hands-off driver_tq p50 40.6 / p75 111), so it equally pinned apply
+      # to a FREE, caster-unwinding wheel and abandoned the plan: corpus
+      # audit found 36 urgent-regrab windows in the pinned state across 13
+      # routes, including a field lane-departure at the Namsan-3 tunnel
+      # approach (0x47 seg15: wheel unwound +21°->+8° with apply pinned to
+      # it while the plan sat 25-30° away). The class it guarded (rigid
+      # slow-ease slam) was model-only, never field-observed, and remains
+      # covered by the one-shot dump above (release-instant divergence = 0)
+      # plus the post-grip recovery taper (authority restored gently) plus
+      # the VM rate limits (the designed comfort bound for the approach).
+      # Neither torque-gated variant could fix it (silence-timeout: 50%
+      # coverage, arm-budget: 53% — both defeated by hands-off torque noise
+      # re-arming the state). Handover latency is the safety-dominant side.
       desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
