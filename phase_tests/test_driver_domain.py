@@ -1,10 +1,15 @@
-"""Phase 26/26b/27: hold-compensated driver-torque domain for latches, and
-the intentional-passive UI flag.
+"""Phase 26/26b/27/31: hold-compensated driver-torque domain for latches,
+and the intentional-passive UI flag.
 
-Geometry (Ioniq 6 N: steerRatio ~14.96, wheelbase 2.965):
-  straight (op active)  -> hold_comp settles at 0.8*122 ~ 97.6 Nm
-  wheel 30 @ 10 m/s     -> lat_acc 1.18 -> hold_comp ~ 222 Nm
-  wheel 45 @  8 m/s     -> lat_acc 1.14 -> hold_comp ~ 218 Nm
+Phase 31 model comp(v, la) = B(v) + G(v)*S(la) — reference points used by
+the tests below (Ioniq 6 N: steerRatio ~14.96, wheelbase 2.965):
+  straight @ 15 m/s (54 km/h)  -> comp ~ 73.5 Nm
+  straight @ 25 m/s+           -> comp ~ 62
+  straight @ crawl (<5.5 m/s)  -> comp ~ 140
+  wheel 30 @ 10 m/s (la 1.18)  -> comp ~ 188
+  wheel 45 @  8 m/s (la 1.14)  -> comp ~ 189
+  wheel  8 @ 24 m/s (la 1.81)  -> comp ~ 180
+driver_pressed: 230 comp-on, raw 250 when comp is gated off (31b).
 
 Phase 26b: hold compensation applies ONLY while op was actuating on the
 previous frame (effective_lat_active). In passive states the bar reading is
@@ -23,7 +28,7 @@ def settle(sim, n=120, **kw):
 
 class TestDriverPressed:
   def test_straight_line_equivalence_fires(self):
-    # raw 360 in a straight = driver_tq ~262 > 250: pressed, like the old raw-350 flag
+    # raw 360 in a straight = driver_tq ~286 > 230: pressed
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0)
     run_signal(sim, 20, v=15.0, wheel=0.0, tq=360.0)
@@ -54,7 +59,7 @@ class TestDriverPressed:
     assert sim.s.driver_pressed
 
   def test_release_hysteresis(self):
-    # enter at >250 driver-domain, hold at >0.8*250=200, release below it
+    # enter at >230 driver-domain (comp-on), hold at >0.8*230=184, release below
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0)
     run_signal(sim, 20, v=15.0, wheel=0.0, tq=360.0)
@@ -71,6 +76,42 @@ class TestDriverPressed:
     sim = Sim()
     run_signal(sim, 20, v=15.0, wheel=0.0, tq=330.0)
     assert sim.s.driver_pressed
+
+
+class TestHoldModel:
+  # Phase 31b: the model as a pure function (compute_hold_torque).
+
+  def test_reference_points(self):
+    from opendbc.car.hyundai.carcontroller import compute_hold_torque as h
+    assert abs(h(15.0, 0.0) - 73.5) < 2.0
+    assert abs(h(3.0, 0.0) - 140.0) < 0.1      # crawl clamp (no data < ~3 m/s)
+    assert abs(h(10.0, 1.18) - 188.5) < 2.0    # saturated curve
+
+  def test_monotone_in_lat_acc(self):
+    from opendbc.car.hyundai.carcontroller import compute_hold_torque as h
+    for v in (5.0, 12.0, 20.0, 33.0):
+      vals = [h(v, la) for la in (0.0, 0.05, 0.1, 0.2, 0.3, 1.0, 3.0)]
+      assert all(b >= a - 1e-9 for a, b in zip(vals, vals[1:]))
+
+  def test_cap_has_headroom(self):
+    # the 220 cap is a table-edit guard: it must NOT bind for the current
+    # tables (structural max 197). If this fails, a table edit started
+    # clipping silently -- make that a conscious decision.
+    import numpy as np
+    from opendbc.car.hyundai.carcontroller import compute_hold_torque as h
+    peak = max(h(v, 5.0) for v in np.arange(0.0, 45.0, 0.25))
+    assert peak < P.ACIGAIN_HOLD_MAX_NM - 10.0
+
+  def test_kill_switch_reaches_raw_domain(self):
+    import numpy as np
+    from opendbc.car.hyundai import carcontroller as cc
+    oldB, oldG = P.ACIGAIN_HOLD_BASE_V, P.ACIGAIN_HOLD_LAGAIN_V
+    try:
+      P.ACIGAIN_HOLD_BASE_V = np.zeros(5)
+      P.ACIGAIN_HOLD_LAGAIN_V = np.zeros(5)
+      assert cc.compute_hold_torque(15.0, 1.0) == 0.0
+    finally:
+      P.ACIGAIN_HOLD_BASE_V, P.ACIGAIN_HOLD_LAGAIN_V = oldB, oldG
 
 
 class TestHoldSlewGuard:
@@ -189,7 +230,9 @@ class TestIntentDisagreeDomain:
     sim = Sim()
     settle(sim, v=8.0, wheel=10.0, cmd=20.0)
     run_signal(sim, 100, v=8.0, wheel=10.0, cmd=20.0, tq=-350.0)
-    assert sim.s.angle_passive_active or abs(sim.s.apply_angle_last - 10.0) < 1.5
+    # pinned to the intent arm specifically (31b review: the or-form could
+    # silently pass via the anchor within 1 Nm of harness inequality)
+    assert sim.s.angle_passive_active
 
   def test_below_threshold_no_fire(self):
     sim = Sim()
@@ -212,18 +255,38 @@ class TestYankFix:
     assert not sim.s.driver_pressed          # confirms we are in the gap band
     assert abs(sim.s.apply_angle_last - 8.0) < 1.5
 
+  def test_anchor_holds_at_field_event_torque(self):
+    # 0x41 seg17 measured 430-500 Nm: at 460 driver_pressed fires (driver_tq
+    # ~274 > 230) and, since 31b, anchors on its own -- apply stays on the
+    # held wheel at the documented field torque
+    sim = Sim()
+    settle(sim, v=24.0, wheel=8.0, cmd=8.0)
+    run_signal(sim, 100, v=24.0, wheel=8.0, cmd=14.0, tq=460.0)
+    assert sim.s.driver_pressed
+    assert abs(sim.s.apply_angle_last - 8.0) < 1.5
+
+  def test_anchor_from_driver_pressed_alone_midband(self):
+    # 31b review fix: a steady 300 Nm one-hand hold at ~100 km/h (raw-equiv
+    # band 292-325 where override_factor < 0.9) must still anchor
+    sim = Sim()
+    settle(sim, v=28.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=28.0, wheel=0.0, cmd=6.0, tq=300.0)
+    assert sim.s.driver_pressed
+    assert abs(sim.s.apply_angle_last) < 1.5   # anchored to the held wheel
+
   def test_release_reanchor_dumps_divergence(self):
-    # anchor dropout gap: a real grip (460, anchored) decays to 300 — EPS
-    # pressed and override both drop, the anchor disengages, and apply
-    # diverges toward the plan while the driver still holds. On the final
-    # let-go the stored divergence must be dumped to the wheel, not
-    # delivered, and the wound trim must be zeroed.
+    # anchor dropout gap: a real grip (460, anchored) decays to 250 — 31b
+    # widened the anchor into the pressed-hysteresis band (raw >= ~258
+    # keeps it latched), so the true gap now starts below that: pressed
+    # exits, the arm holds, and apply diverges toward the plan while the
+    # driver still lightly holds. On the final let-go the stored divergence
+    # must be dumped to the wheel, not delivered, and the trim zeroed.
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0, cmd=0.0)
     run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)   # anchored grip
     assert abs(sim.s.apply_angle_last) < 1.0
-    run_signal(sim, 150, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)   # dropout gap
-    assert sim.s.reanchor_arm >= 30                              # driver_tq ~202
+    run_signal(sim, 150, v=15.0, wheel=0.0, cmd=8.0, tq=250.0)   # dropout gap (driver_tq ~176)
+    assert sim.s.reanchor_arm >= 30
     assert abs(sim.s.apply_angle_last) > 2.0                     # divergence stored
     sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # driver lets go
     assert abs(sim.s.apply_angle_last) < 1.0                     # dumped to the wheel
@@ -239,10 +302,10 @@ class TestYankFix:
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0, cmd=0.0)
     run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)
-    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=250.0)   # below the 31b anchor band
     sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # first fire
     assert sim.s.reanchor_arm >= 30                              # memory kept
-    run_signal(sim, 50, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)    # re-grip, diverge again
+    run_signal(sim, 50, v=15.0, wheel=0.0, cmd=8.0, tq=250.0)    # re-grip, diverge again
     sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)
     assert abs(sim.s.apply_angle_last) < 1.0                     # second dump
 
@@ -289,7 +352,7 @@ class TestYankFix:
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0, cmd=0.0)
     run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)
-    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=300.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=250.0)   # below the 31b anchor band
     sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # fire
     assert not sim.s.reanchor_ready
     tr = run_signal(sim, 60, v=15.0, wheel=0.0, cmd=8.0, tq=0.0) # stay released

@@ -1,5 +1,7 @@
 import re
 from dataclasses import dataclass, field
+
+import numpy as np
 from enum import IntFlag
 
 from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds
@@ -326,7 +328,8 @@ class CarControllerParams:
   # speed-scheduled floors. Past full-yield the felt residual force IS the
   # floor, so highway relief for firm-grip spirited driving goes there;
   # city floors keep tracking authority. Kill: FLOOR_V tables flat at
-  # [0.15,0.15]/[0.08,0.08], HANDSOFF_FULL 140 -> 350 + HOLD_SCALE=0 (raw).
+  # [0.15,0.15]/[0.08,0.08], HANDSOFF_FULL 140 -> 350 + HOLD_BASE_V/
+  # LAGAIN_V all-zero (raw domain).
   # Phase 25: full-yield points speed-scheduled — at speed the taper completes
   # earlier so a given driver push yields proportionally MORE than in town
   # (city calibration at/below 40 km/h unchanged; floors keep the Phase 23
@@ -360,7 +363,8 @@ class CarControllerParams:
   # light input) rise 26% -> 58% while phantom torque halves — acceptable
   # only because the EPS raw-350 arm is the anchor backstop, so the
   # safety-critical consumer does not depend on driver_pressed.
-  # B(v) below 5.5 m/s is a flat extrapolation with NO fitting data (crawl
+  # B(v) below 5.5 m/s is anchored on the 11-29 km/h straight cell and held
+  # flat; there is no data below ~3 m/s (crawl
   # is dominated by passive states where 26b gates comp to 0; parked true
   # hold is ~0) — collect a lot-drive data point before trusting it.
   # B(36) is set to 62 (the 130 km/h STRAIGHT cell p45 = 72), not the
@@ -370,15 +374,23 @@ class CarControllerParams:
   # ARE UNCHANGED by design: they were always defined against the true
   # driver contribution — this makes them read closer to it. Raw-torque
   # equivalence points shift with speed as a consequence (e.g. pressed
-  # 250 == raw ~323 at 54 km/h vs ~390 at 20 km/h) — verified against the
+  # 230 == raw ~303 at 54 km/h vs ~370 at 20 km/h) — verified against the
   # corpus for false-fire rates in the Phase 31 replay.
   # Kill: BASE_V and LAGAIN_V all-zero (comp 0 -> raw domain everywhere).
-  ACIGAIN_HOLD_BASE_SPEEDS_MS = [5.5, 10.5, 16.5, 25.0, 36.0]
-  ACIGAIN_HOLD_BASE_V         = [140.0, 102.0, 64.0, 62.0, 62.0]
-  ACIGAIN_HOLD_LAGAIN_V       = [53.0, 86.0, 133.0, 123.0, 87.0]
-  ACIGAIN_HOLD_LA_BP          = [0.0, 0.1, 0.3]
-  ACIGAIN_HOLD_LA_S           = [0.0, 0.5, 1.0]
-  ACIGAIN_HOLD_MAX_NM     = 220.0   # Phase 31: model self-caps ~200; was 240
+  # NOTE units: these speed breakpoints are m/s (= 20/38/59/90/130 km/h) —
+  # unlike every other ACIGAIN_* speed table in this class, which is KPH.
+  # np.array (31b): avoids a list->ndarray coercion on every 100 Hz frame.
+  ACIGAIN_HOLD_BASE_SPEEDS_MS = np.array([5.5, 10.5, 16.5, 25.0, 36.0])
+  ACIGAIN_HOLD_BASE_V         = np.array([140.0, 102.0, 64.0, 62.0,
+                                          62.0])  # <- hand-set (fit said 38); see note above
+  ACIGAIN_HOLD_LAGAIN_V       = np.array([53.0, 86.0, 133.0, 123.0, 87.0])
+  ACIGAIN_HOLD_LA_BP          = np.array([0.0, 0.1, 0.3])
+  ACIGAIN_HOLD_LA_S           = np.array([0.0, 0.5, 1.0])
+  # 31b (review): guard only — the tables' structural maximum is 197 Nm
+  # (max over knots of B+G), so this cap CANNOT bind today. It exists to
+  # catch a future table edit that would silently start clipping; a unit
+  # test pins model-max < cap so that edit becomes a conscious decision.
+  ACIGAIN_HOLD_MAX_NM     = 220.0
   # Phase 26: slew guard on hold_comp (per 10 ms frame). A single-frame
   # angle/speed sensor spike would otherwise jump the compensation by up to
   # +142 Nm and mask a real driver input for that window; genuine curve
@@ -396,8 +408,8 @@ class CarControllerParams:
   # ~1.5 m/s2 would predict hands-off torque above every threshold here, but
   # MEASURED hands-off |tq| saturates instead of following the fit (p50 by
   # lat_acc bin: 0.3-1.2 -> ~222, 1.2-1.6 -> 187, 1.6-2.2 -> 204, 2.2-5.0 ->
-  # 133 Nm; >=350 tail flat at ~5% across all bins), so the 240 cap slightly
-  # OVER-compensates there and self-fire risk does not grow with lat_acc.
+  # 133 Nm; >=350 tail flat at ~5% across all bins), so the capped model
+  # slightly OVER-compensates there and self-fire risk does not grow with la.
   # The >1.5 m/s2 band is thin in the replay set (~7.3k frames) — verify
   # hands-off driver_pressed episodes at high lat_acc on future spirited logs.
   # Phase 31: 250 -> 230. The refit raises low-speed compensation (98 ->
@@ -412,6 +424,11 @@ class CarControllerParams:
   # gated population, not a false fire.
   # The EPS raw-350 arm remains the anchor backstop either way.
   DRIVER_PRESSED_NM     = 230.0
+  # 31b (review): raw-domain threshold used when the 26b gate has comp OFF
+  # (passive states) — there driver_tq == raw and 230/184 sat inside the
+  # measured rolling-passive band (p50 147-233); 250/200 is the
+  # weeks-validated raw operating point.
+  DRIVER_PRESSED_RAW_NM = 250.0
   DRIVER_PRESSED_FRAMES = 5
   # Phase 28 (0x41 yank fix). Field failure at 86 km/h (route 0x41 seg 16-17,
   # build 126c0ca): a 430-500 Nm grip in an 8° curve put hold_comp at its

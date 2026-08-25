@@ -134,7 +134,8 @@ class TestInteractions:
     # parking + scenario gate + cam latch all at once.
     # Phase 26b: parking mode is already passive here, so hold compensation
     # is gated off (op contributes nothing to the bar) — raw 420 is all
-    # driver and correctly reads as driver_tq 420 >= 250 -> pressed.
+    # driver and correctly reads as driver_tq 420 >= 250 (raw threshold in
+    # passive frames, 31b) -> pressed.
     run_signal(sim, 320, v=5.0, cmd=0.0, wheel=280.0)
     run_signal(sim, 30, v=4.0, cmd=50.0, wheel=280.0, tq=420.0)
     assert sim.s.parking_mode_active and sim.s.low_speed_cam_latched

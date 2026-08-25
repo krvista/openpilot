@@ -32,7 +32,8 @@ def rate_per_s(trace):
 class TestFlapResistance:
   def test_low_speed_cam_latch_no_flap_under_offset_noise(self):
     # 100-300 Nm band at 4 m/s while op is actively steering: hold_comp sits
-    # at ~98 so driver_tq peaks ~202 < 250 — pressed never fires, latch never
+    # at ~140 (Phase 31 crawl base) so driver_tq peaks ~160 < 230 — pressed
+    # never fires, latch never
     # enters. (Phase 26b: at a COLD start the same band would correctly read
     # as genuine driver torque and latch fail-passive, hence the settle.)
     for seed in range(3):

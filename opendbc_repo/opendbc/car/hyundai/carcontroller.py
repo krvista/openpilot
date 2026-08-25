@@ -111,6 +111,21 @@ PARKING_CREEP_FRAMES   = 1000                    # 10 s @ 100 Hz
 
 
 
+def compute_hold_torque(v_ego, lat_acc):
+  """Phase 31 hold-torque model (values.py ACIGAIN_HOLD_*): op's own
+  torsion-bar contribution while actively steering, comp(v, la) =
+  B(v) + G(v) * S(la). Pure function so the model is unit-testable in
+  isolation (review 31b) — the kill switch (BASE_V/LAGAIN_V all-zero) and
+  the cap headroom are pinned in phase_tests/test_driver_domain.py."""
+  base = float(np.interp(v_ego, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
+                         CarControllerParams.ACIGAIN_HOLD_BASE_V))
+  gain = float(np.interp(v_ego, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
+                         CarControllerParams.ACIGAIN_HOLD_LAGAIN_V))
+  shape = float(np.interp(lat_acc, CarControllerParams.ACIGAIN_HOLD_LA_BP,
+                          CarControllerParams.ACIGAIN_HOLD_LA_S))
+  return min(base + gain * shape, CarControllerParams.ACIGAIN_HOLD_MAX_NM)
+
+
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
                                   post_grip=False):
@@ -123,8 +138,8 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
   # breakpoints 30->140 (hands-off) / values.py 110 (pressed) are replay-
   # calibrated to keep 21b's felt resist on GENUINE driver input (+/-0%)
   # while restoring 100% hands-off curve authority (was 56%).
-  # Kill: restore 90/300/0.15 here, 220 in values, and HOLD_SCALE=0 —
-  # all three together (the domains are coupled).
+  # Kill: restore 90/300/0.15 here, 220 in values, and ACIGAIN_HOLD_BASE_V/
+  # LAGAIN_V all-zero — all together (the domains are coupled).
   # Reference sunnypilot 17-line ACIGain shape (Phase 1 commit 54ab570),
   # augmented across Phase 5 and Phase 6 by stateless hooks that each
   # take a single per-frame signal as input:
@@ -670,7 +685,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 26: hold-compensated driver-torque domain, computed ONCE here and
     # consumed by every latch/grip test below (the ACIGain caller reuses it).
     # Phase 22 established that the torsion-bar reading while op steers is
-    # mostly op's OWN holding torque (hold ~ 122 + 132*lat_acc Nm; parked
+    # mostly op's OWN holding torque (Phase 31 model: compute_hold_torque —
+    # speed-dependent baseline + saturating lat_acc term; parked
     # |tq| p99 = 3 Nm). The yield curve was converted then, but the latches
     # stayed raw-domain and could self-trigger on the hold torque in curves:
     # routes 0x36-0x3d measure hands-off |tq| >= 220 Nm on ~50% of
@@ -679,35 +695,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # grip and relinquish control mid-curve (blinker-anchor self-fire: 464
     # candidate episodes; angle-passive geo-entry: 202). driver_tq subtracts
     # the predicted hold so thresholds see the DRIVER's contribution only;
-    # straight-line behaviour is preserved by construction (hold_comp ~ 98 Nm
-    # in a straight — every converted threshold moved down by exactly that
-    # baseline, see the Phase 26 notes in values.py).
+    # straight-line raw equivalences are speed-dependent since Phase 31
+    # (comp ~140 at 20 km/h down to ~62 at highway — see values.py).
     # Known blind spot (pre-existing — shared with the raw domain and the EPS
     # pressed flag): a counter-push that cancels the hold torque reads near
     # zero on the torsion bar until it exceeds ~2x the hold level.
-    lat_acc_est = (v_ego_safe ** 2) * abs(math.tan(math.radians(
-      steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
-    # Phase 31 refit (see values.py): speed-dependent baseline + saturating
-    # lat_acc term with speed-dependent gain, fitted on the corpus p45.
-    hold_target = min(
-      float(np.interp(v_ego_safe, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
-                      CarControllerParams.ACIGAIN_HOLD_BASE_V)) +
-      float(np.interp(v_ego_safe, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
-                      CarControllerParams.ACIGAIN_HOLD_LAGAIN_V)) *
-      float(np.interp(lat_acc_est, CarControllerParams.ACIGAIN_HOLD_LA_BP,
-                      CarControllerParams.ACIGAIN_HOLD_LA_S)),
-      CarControllerParams.ACIGAIN_HOLD_MAX_NM)
     # Phase 26b (review fix): the hold model describes op's OWN torque, which
     # exists only while op actuates. In the passive states (angle-passive /
     # passthrough / parking / faults) STEER_REQ=0 and ACIGain has decayed to
     # zero — the entire bar reading is the driver's, and subtracting the
-    # full compensation there under-read a holding driver: the passive-exit tests could
-    # release against a 300-370 Nm grip and re-engage op on a wheel the
-    # driver was holding (harness measured a ~1.2 Hz STEER_REQ limit cycle
-    # at a steady 360 Nm). Gate the compensation on the PREVIOUS frame's
-    # effective_lat_active; the 4 Nm/frame slew smooths both edges (~0.6 s
-    # worst-case ramp, roughly matching the ACIGain ramp itself).
-    if not self.prev_eff_lat_active:
+    # full compensation there under-read a holding driver: the passive-exit
+    # tests could release against a 300-370 Nm grip and re-engage op on a
+    # wheel the driver was holding (harness measured a ~1.2 Hz STEER_REQ
+    # limit cycle at a steady 360 Nm). Gate on the PREVIOUS frame's
+    # effective_lat_active; the 4 Nm/frame slew smooths both edges.
+    # Phase 31b (review): computation hoisted inside the gate — it was
+    # evaluated and discarded on every passive frame.
+    if self.prev_eff_lat_active:
+      lat_acc_est = (v_ego_safe ** 2) * abs(math.tan(math.radians(
+        steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
+      # Phase 31 refit (see values.py and compute_hold_torque).
+      hold_target = compute_hold_torque(v_ego_safe, lat_acc_est)
+    else:
       hold_target = 0.0
     # Slew guard: a single-frame angle/speed sensor spike would otherwise jump
     # hold_comp by up to +142 Nm and mask a real driver input for that window.
@@ -719,11 +728,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     driver_tq = max(0.0, abs(steer_torque_safe) - hold_comp)
     # driver_pressed: hold-compensated equivalent of CS.out.steeringPressed
     # (raw 350 enter / 280 exit hysteresis, 5-frame up/down counter — see
-    # carstate.py R4). 250 driver-domain == raw ~350 in a straight; in a
-    # curve the raw requirement rises with the hold estimate instead of the
-    # flag self-triggering on op's own effort. The EPS flag itself is left
-    # untouched for core openpilot override/alert semantics.
-    pressed_thr = CarControllerParams.DRIVER_PRESSED_NM * (0.8 if self.driver_pressed else 1.0)
+    # carstate.py R4). Phase 31: 230 driver-domain (raw-equivalent shifts
+    # with the speed-dependent baseline, e.g. ~303 at 54 km/h / ~370 at
+    # 20 km/h comp-on); in a curve the raw requirement rises with the hold
+    # estimate instead of the flag self-triggering on op's own effort. The
+    # EPS flag itself is left untouched for core override/alert semantics.
+    # Phase 31b (review): in comp-OFF frames driver_tq == raw, so the 230
+    # threshold degraded to a raw 230/184 test — inside the measured
+    # rolling-passive hands-off band (p50 147-233, sustained floor 158),
+    # worsening passive self-latch/sticky-release by 20/16 Nm. Use the
+    # raw-calibrated 250 (exit 200, the weeks-validated point) whenever the
+    # compensation is gated off; 230 applies only where it was fitted.
+    pressed_base = (CarControllerParams.DRIVER_PRESSED_NM if self.prev_eff_lat_active
+                    else CarControllerParams.DRIVER_PRESSED_RAW_NM)
+    pressed_thr = pressed_base * (0.8 if self.driver_pressed else 1.0)
     self.driver_pressed_cnt = int(np.clip(self.driver_pressed_cnt + (1 if driver_tq > pressed_thr else -1),
                                           0, 2 * CarControllerParams.DRIVER_PRESSED_FRAMES + 1))
     self.driver_pressed = self.driver_pressed_cnt > CarControllerParams.DRIVER_PRESSED_FRAMES
@@ -846,8 +864,24 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # driver_tq magnitude arm cannot replace it (hands-off driver_tq p90 =
     # 162.5 — review-measured; the v1 160 arm re-injected wheel noise on
     # 7.5% of hands-off frames and was rejected).
-    heavy_grip_anchor = (override_factor >= 0.9) and (
-      self.driver_pressed or bool(CS.out.steeringPressed) or self.blinker_anchor_on)
+    # Phase 31b (review): driver_pressed now anchors ON ITS OWN. The
+    # override_factor>=0.9 AND was justified by "override is strictly more
+    # permissive than driver_pressed" — the Phase 31 baseline drop inverted
+    # that from ~54 km/h up (pressed raw-equivalent 303.5 at 15 m/s, 292 at
+    # >=25 m/s vs the override point 325; margin was -22.6 Nm pre-31,
+    # +21.5..+33 after), opening a band where a steady one-hand ~300 Nm
+    # correction got deep yield (real_grip floor 0.05) with NO anchor and
+    # NO anchor_recent — divergence building unanchored, the 0x41 slam
+    # preconditions. NOTE the earlier review claim "the EPS raw-350 arm is
+    # the anchor backstop" was WRONG as stated: that arm is co-gated by
+    # override>=0.9, so in the gap band neither arm fired — a backstop
+    # claim must be checked at ITS OWN gating conditions in the regime
+    # where the primary fails. Corrected invariant: driver_pressed anchors
+    # unconditionally (hands-off machine false rate 0.00% corpus; newly
+    # anchored-alone frames measure 13.5 s / 2.8 h, hands-off 0.005%);
+    # the EPS/blinker arms keep the raw override gate.
+    heavy_grip_anchor = self.driver_pressed or (
+      (override_factor >= 0.9) and (bool(CS.out.steeringPressed) or self.blinker_anchor_on))
     # G3 review: only the PRESSED arms count as grip evidence for the
     # re-anchor memory — a blinker-arm anchor can arise hands-off and, as
     # recency, produced 129 context-free hands-off dumps in corpus replay.
@@ -869,9 +903,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 26: ENTER keys on the hold-compensated driver_pressed. The
     # release comparison keeps the raw-domain 260 threshold: it only runs
     # while the latch is passive, where 26b gates hold_comp to 0 so
-    # driver_tq == raw — bit-identical to the validated 14-1 release
-    # (rolling-passive hands-off bar measures p50 147-233 Nm, see values.py).
-    if v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS and self.driver_pressed:
+    # driver_tq == raw (rolling-passive hands-off bar p50 147-233 Nm).
+    # Phase 31b (review): the EPS flag is restored as an entry OR-arm — the
+    # Phase 31 crawl baseline (B=140, unfitted below ~3 m/s) pushed the
+    # driver_pressed raw-equivalent to ~370, ABOVE the raw-350 EPS flag this
+    # latch was designed to mirror (13a), leaving a 350-370 dead band where
+    # EPS says pressed but the shake-fix latch would not enter. EPS-350 is
+    # itself hand-validated grip evidence at these speeds.
+    if v_ego_safe < LOW_SPEED_PASSTHROUGH_ENTER_MS and (self.driver_pressed
+                                                        or bool(CS.out.steeringPressed)):
       self.low_speed_cam_latched = True
       self.lowv_release_frames = 0
     elif self.low_speed_cam_latched:
@@ -1421,8 +1461,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # grip branch and suppressing the error boost exactly where sustained-
       # curve delivery needs it.
       real_grip = self.driver_pressed
-      # Phase 22: driver_tq / hold_comp (hold ~ 122 + 132*lat_acc at 80%,
-      # capped; parked-car data proved the true sensor offset ~ 0) are now
+      # Phase 22/31: driver_tq / hold_comp (compute_hold_torque model;
+      # parked-car data proved the true sensor offset ~ 0) are now
       # computed once at the top of update() — Phase 26 — and shared with
       # every latch above.
       # Phase 23: the hands-off else-branch used to pass the LEGACY raw-domain
