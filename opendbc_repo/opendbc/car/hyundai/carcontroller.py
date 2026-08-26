@@ -169,6 +169,18 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # transmission scales with this ceiling. Doubles as the requested softer
     # low-speed hold. The 40/120 km/h points stay: highway authority carries
     # the tracking/trim work. Kill: [0.25,0.40,...] (24a) / [0.32,0.5,...] (19a).
+    # Phase 32 (0x4a-0x4b): low-speed 0.8-2.5 Hz shake returned (+47% p50)
+    # after the Phase 31 phantom-yield removal. Review-corrected mechanism
+    # accounting: mean low-speed authority rose only +10% (0.251 -> 0.275;
+    # at-ceiling fraction 52 -> 67%), transmission wheel/TX +17%, source
+    # churn ~unchanged — which explains roughly HALF the RMS rise; the
+    # remainder is an OPEN item (see values.py CMD_HYSTERESIS note). The
+    # fix shipped is therefore the source-side hysteresis lever ONLY; the
+    # ceiling ladder step below is measured and HELD IN RESERVE — a
+    # [0,20,30,40,120]->[0.14,0.24,0.38,0.75,0.95] table measured 0.88x of
+    # the pre-31 mean authority (overshoot) and would land on top of a
+    # half-characterized cause. Reach for it only if the hysteresis lever
+    # alone leaves residual shake on the next drive.
     base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
@@ -1118,7 +1130,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # inside +/-CMD_HYSTERESIS_DEG (model replan churn, 6.5-7.7 direction
       # flips/10s on 0x10-0x28) are absorbed instead of being sent to the MDPS.
       # When inactive, track the raw desired so engagement starts band-centered.
-      hyst = CarControllerParams.CMD_HYSTERESIS_DEG
+      # Phase 32: speed-scheduled — the flat 0.15° band is ~3% of the
+      # measured low-speed plan churn (0.5° RMS at 0.8-2.5 Hz), so nearly
+      # all of it reached TX. 0.5° below 25 km/h absorbs the churn at the
+      # SOURCE (complementing the ceiling cut, which reduces transmission);
+      # tapers to the legacy 0.15 by 43 km/h so curve tracking above town
+      # speed is untouched.
+      hyst = float(np.interp(v_ego_safe, CarControllerParams.CMD_HYSTERESIS_SPEEDS_MS,
+                             CarControllerParams.CMD_HYSTERESIS_V))
       if CC.latActive and hyst > 0.0:
         self.cmd_hyst = float(np.clip(self.cmd_hyst, desired_angle - hyst, desired_angle + hyst))
         desired_angle = self.cmd_hyst

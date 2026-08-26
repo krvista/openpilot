@@ -234,7 +234,22 @@ class CarControllerParams:
   # follows 4.3-5.8 of those (routes 0x10-0x28). A +/-0.15° backlash band absorbs
   # micro-reversals with ZERO added lag for any move larger than the band
   # (0.15° is ~2% of a typical 9° curve command). Kill switch: 0.0.
-  CMD_HYSTERESIS_DEG = 0.15
+  CMD_HYSTERESIS_DEG = 0.15   # legacy flat value (kept for reference/kill)
+  # Phase 32 (0x4a-0x4b 저속 떨림 복귀): speed-scheduled band. Measured
+  # low-speed plan churn ~0.5° RMS at 0.8-2.5 Hz; the flat 0.15 band passed
+  # nearly all of it to TX, and Phase 31 raised delivery (mean low-speed
+  # authority +10%, transmission wheel/TX 0.48->0.56). 0.5° below ~25 km/h
+  # absorbs the churn at the SOURCE (harness closed-loop: 79-94% wheel-band
+  # cut alone) with bounded lag (deadband lateral cost peaks 0.012 m/s2
+  # mid-taper — negligible); tapers to legacy 0.15 by ~43 km/h. m/s bkpts.
+  # OPEN ITEM (review): source(+5%) x transmission(+17%) predicts only
+  # ~+23% of the measured +47% RMS rise — a second contributor is
+  # uncharacterized. This hysteresis-only ship isolates it: residual shake
+  # on the next drive = the missing half, and the measured-but-reserved
+  # ceiling step (see base_ceiling comment) is the next lever.
+  # Kill: V = [0.15, 0.15] (legacy flat).
+  CMD_HYSTERESIS_SPEEDS_MS = np.array([7.0, 12.0])
+  CMD_HYSTERESIS_V         = np.array([0.50, 0.15])
   # Phase 13a: low-speed (<20 km/h) scenario gate + offset-proof grip signal.
   # Routes 0x2a-0x2d (first build with Phase 11): below 20 km/h the passthrough
   # latch keyed on `hands_off` (override_factor <= 0.5), whose low-V full-override

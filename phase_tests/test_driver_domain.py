@@ -430,6 +430,41 @@ class TestHandover:
     assert all(s > -0.2 for s in steps)                          # monotone toward the plan
 
 
+class TestPhase32LowSpeedShake:
+  # 0x4a-0x4b regression fix: churn absorption + ceiling ladder step
+
+  def test_low_speed_churn_absorbed(self):
+    # 0.4 deg 1.5 Hz plan churn at 14 km/h must not reach TX (band 0.5 deg)
+    import math
+    import numpy as np
+    sim = Sim()
+    settle(sim, v=4.0, wheel=0.0, cmd=0.0)
+    ap = []
+    for i in range(600):
+      sim.step(v=4.0, tq=0.0, wheel=0.0,
+               cmd=0.4 * math.sin(2 * math.pi * 1.5 * i * 0.01))
+      if i > 200: ap.append(sim.s.apply_angle_last)
+    x = np.array(ap); x = x - x.mean()
+    f = np.fft.rfftfreq(len(x), 0.01); X = np.abs(np.fft.rfft(x)) ** 2
+    band = float(np.sqrt(X[(f >= 0.8) & (f <= 2.5)].sum() / len(x) ** 2 * 2))
+    assert band < 0.06
+
+  def test_highway_hysteresis_unchanged(self):
+    # at 54 km/h the band is the legacy 0.15: a 0.4 deg move passes through
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=15.0, wheel=0.0, cmd=0.4, tq=0.0)
+    assert sim.s.apply_angle_last > 0.2
+
+  def test_large_low_speed_turn_not_lagged(self):
+    # intersection-scale command (30 deg) at low speed: the 0.5 band is
+    # negligible, apply must keep advancing normally
+    sim = Sim()
+    settle(sim, v=4.0, wheel=0.0, cmd=0.0)
+    tr = run_signal(sim, 300, v=4.0, wheel=lambda i: min(0.15 * i, 30.0), cmd=30.0, tq=0.0)
+    assert sim.s.apply_angle_last > 20.0
+
+
 class TestLatPassiveIndicated:
   def test_parking_mode_sets_flag(self):
     sim = Sim()
