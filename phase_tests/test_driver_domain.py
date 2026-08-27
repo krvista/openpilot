@@ -465,6 +465,50 @@ class TestPhase32LowSpeedShake:
     assert sim.s.apply_angle_last > 20.0
 
 
+class TestBlindspotCorrectionGate:
+  # Phase 33: a large pending correction toward an occupied lane recovers
+  # at the tapered rate; a clear side keeps the legacy fast recovery.
+
+  def _recovery_gain(self, bs_l=False, bs_r=False, cmd=8.0):
+    # grip to drop the gain, then release with the plan far LEFT (err > 0)
+    sim = Sim()
+    settle(sim, v=25.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=25.0, wheel=0.0, cmd=cmd, tq=460.0)   # gain at floor
+    run_signal(sim, 250, v=25.0, wheel=0.0, cmd=cmd, tq=0.0,     # release, recover
+               bs_l=bs_l, bs_r=bs_r)
+    return sim.s.aci_gain_last
+
+  def test_occupied_side_slows_recovery(self):
+    g_clear = self._recovery_gain()
+    g_occ = self._recovery_gain(bs_l=True)      # err>0 pulls LEFT, left occupied
+    assert g_occ < g_clear - 0.1
+
+  def test_opposite_side_occupied_is_ignored(self):
+    g_clear = self._recovery_gain()
+    g_opp = self._recovery_gain(bs_r=True)      # pending swing is LEFT; right car
+    assert abs(g_opp - g_clear) < 0.05
+
+  def test_small_error_not_gated(self):
+    # err < 3 deg: normal recovery even with the side occupied
+    sim = Sim()
+    settle(sim, v=25.0, wheel=0.0, cmd=0.0)
+    run_signal(sim, 100, v=25.0, wheel=0.0, cmd=1.5, tq=460.0)
+    run_signal(sim, 250, v=25.0, wheel=0.0, cmd=1.5, tq=0.0, bs_l=True)
+    sim2 = Sim()
+    settle(sim2, v=25.0, wheel=0.0, cmd=0.0)
+    run_signal(sim2, 100, v=25.0, wheel=0.0, cmd=1.5, tq=460.0)
+    run_signal(sim2, 250, v=25.0, wheel=0.0, cmd=1.5, tq=0.0)
+    assert abs(sim.s.aci_gain_last - sim2.s.aci_gain_last) < 0.05
+
+  def test_hold_decays(self):
+    sim = Sim()
+    settle(sim, v=25.0, wheel=0.0, cmd=0.0)
+    sim.step(v=25.0, wheel=0.0, cmd=0.0, tq=0.0, bs_l=True)
+    assert sim.s.blind_left_hold == P.BLIND_HOLD_FRAMES
+    run_signal(sim, 120, v=25.0, wheel=0.0, cmd=0.0, tq=0.0)
+    assert sim.s.blind_left_hold == 0
+
+
 class TestLatPassiveIndicated:
   def test_parking_mode_sets_flag(self):
     sim = Sim()

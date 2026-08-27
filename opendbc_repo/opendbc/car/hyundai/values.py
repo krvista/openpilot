@@ -250,6 +250,15 @@ class CarControllerParams:
   # Kill: V = [0.15, 0.15] (legacy flat).
   CMD_HYSTERESIS_SPEEDS_MS = np.array([7.0, 12.0])
   CMD_HYSTERESIS_V         = np.array([0.50, 0.15])
+  # Phase 33: blindspot-gated large-correction softening. A pending swing
+  # of >= BLIND_CORR_ERR_DEG toward a side whose BSM radar reports occupied
+  # (held BLIND_HOLD_FRAMES past the last active frame) recovers at the
+  # tapered rate with the error boost off — never a snap toward an occupied
+  # lane, never a refusal to correct (rate floor = reference 0.004).
+  # Kill: BLIND_CORR_ERR_DEG = 1e9.
+  BLIND_CORR_ERR_DEG         = 3.0
+  BLIND_CORR_ERR_RELEASE_DEG = 2.0   # hysteresis: engage 3.0, hold to 2.0
+  BLIND_HOLD_FRAMES          = 100
   # Phase 13a: low-speed (<20 km/h) scenario gate + offset-proof grip signal.
   # Routes 0x2a-0x2d (first build with Phase 11): below 20 km/h the passthrough
   # latch keyed on `hands_off` (override_factor <= 0.5), whose low-V full-override

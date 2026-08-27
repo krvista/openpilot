@@ -94,7 +94,7 @@ class Sim:
   def step(self, v=15.0, tq=0.0, wheel=0.0, cmd=0.0, lat_active=True,
            pressed=None, blinker=False, lead_dist=None, gear='drive',
            door=False, belt=False, standstill=None, cruise_available=True,
-           v_raw=None, enabled=None):
+           v_raw=None, enabled=None, bs_l=False, bs_r=False):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -103,6 +103,8 @@ class Sim:
     out.steeringTorque = float(tq)
     out.steeringAngleDeg = float(wheel)
     out.leftBlinker = bool(blinker)
+    out.leftBlindspot = bool(bs_l)
+    out.rightBlindspot = bool(bs_r)
     out.doorOpen = bool(door)
     out.seatbeltUnlatched = bool(belt)
     out.standstill = bool(standstill if standstill is not None else (np.isfinite(v) and v < 0.1))

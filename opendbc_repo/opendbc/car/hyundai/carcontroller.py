@@ -175,13 +175,15 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # at-ceiling fraction 52 -> 67%), transmission wheel/TX +17%, source
     # churn ~unchanged — which explains roughly HALF the RMS rise; the
     # remainder is an OPEN item (see values.py CMD_HYSTERESIS note). The
-    # fix shipped is therefore the source-side hysteresis lever ONLY; the
-    # ceiling ladder step below is measured and HELD IN RESERVE — a
-    # [0,20,30,40,120]->[0.14,0.24,0.38,0.75,0.95] table measured 0.88x of
-    # the pre-31 mean authority (overshoot) and would land on top of a
-    # half-characterized cause. Reach for it only if the hysteresis lever
-    # alone leaves residual shake on the next drive.
-    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
+    # fix shipped first was the source-side hysteresis lever alone; 0x4c/4e
+    # measured it recovering about half the regression (p50 0.356 -> 0.302,
+    # >=0.3° 61 -> 50%) with tracking IMPROVED (|plan-wheel| p50 2.47,
+    # curve-following 0.73 = best recorded) — confirming the un-explained
+    # second contributor. Phase 33 deploys the measured reserve step (user-
+    # accepted overshoot: 0.88x of pre-31 mean low-speed authority):
+    # [0.18,0.30,(0.52),0.75] -> [0.14,0.24,0.38,0.75]; 40/120 km/h stay.
+    # Kill: [0.18,0.30,0.52,0.75,0.95] on the 5-knot axis (24a-equivalent).
+    base_ceiling = np.interp(v_ego_kph, [0, 20, 30, 40, 120], [0.14, 0.24, 0.38, 0.75, 0.95])
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
@@ -448,6 +450,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 26b (review fix): previous frame's effective_lat_active — the
     # hold compensation only applies while op was actually actuating.
     self.prev_eff_lat_active = False
+    # Phase 33: BSM occupancy holds (debounce radar flicker, 1 s).
+    self.blind_left_hold = 0
+    self.blind_right_hold = 0
+    self.blind_caution_on = False
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
     # re-arm edge for the release re-anchor / boost hold-off.
     self.reanchor_arm = 0
@@ -774,6 +780,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if driver_tq >= CarControllerParams.REANCHOR_ARM_NM:
       self.reanchor_ready = True
     self.anchor_recent_frames = max(self.anchor_recent_frames - 1, 0)
+    # Phase 33: BSM occupancy hold — radar flags flicker at lane edges, so
+    # an occupied report holds for 1 s past the last active frame.
+    self.blind_left_hold = (CarControllerParams.BLIND_HOLD_FRAMES if bool(CS.out.leftBlindspot)
+                            else max(self.blind_left_hold - 1, 0))
+    self.blind_right_hold = (CarControllerParams.BLIND_HOLD_FRAMES if bool(CS.out.rightBlindspot)
+                             else max(self.blind_right_hold - 1, 0))
     # Phase 30: frames since driver torque was last at/above the fire level —
     # the one-shot dump only makes sense at the release edge.
     self.frames_since_drv_release = (0 if driver_tq >= CarControllerParams.REANCHOR_FIRE_NM
@@ -1503,6 +1515,31 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                 CarControllerParams.ACIGAIN_HANDSOFF_FULL_V))
       gr_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
                                 CarControllerParams.ACIGAIN_GRIP_FULL_V))
+      # Phase 33: blindspot-gated large-correction softening. When op is
+      # about to close a LARGE error (a swing that moves the car laterally
+      # toward one side), and the BSM radar reports that side occupied
+      # (debounced 1 s hold), recover at the tapered rate with the boost
+      # off — the correction still happens (rate_up floor = reference
+      # 0.004, full authority in ~2.4 s; VM limits bound the move) but
+      # never as a snap toward an occupied lane. NOTE the gate keys on the
+      # SWING DIRECTION only, not predicted lane incursion — a leftward
+      # centering correction with a car in the left blindspot is softened
+      # the same as a leftward swing into that lane (separating them needs
+      # lane position, which this gate does not consume; cost is bounded:
+      # slower, never refused). Sign chain review-verified: positive angle
+      # = left; error = apply - wheel > 0 pulls the wheel LEFT. Cars
+      # without BSM: flags always False -> inert. Error threshold carries
+      # 3.0/2.0 hysteresis — review-measured, a gate chattering at the
+      # knee realizes only ~13% of the softening (the ungated 10x rate
+      # frames dominate the ratchet); engage-and-hold makes it effective.
+      if self.blind_caution_on:
+        err_gate = abs(steering_error) >= CarControllerParams.BLIND_CORR_ERR_RELEASE_DEG
+      else:
+        err_gate = abs(steering_error) >= CarControllerParams.BLIND_CORR_ERR_DEG
+      blind_caution = (err_gate
+                       and ((self.blind_left_hold > 0) if steering_error > 0
+                            else (self.blind_right_hold > 0)))
+      self.blind_caution_on = blind_caution
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
@@ -1513,7 +1550,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # frame (the recovery transient) — G1 review: the full 2 s memory
         # suppressed 26.1% of hands-off drift-recovery frames, worse than
         # the rejected v1 arm gate (14.6%); the short window lands at ~7-9%.
-        suppress_error_boost=(real_grip or
+        # Phase 33: also held off while a large correction points at an
+        # occupied adjacent lane.
+        suppress_error_boost=(real_grip or blind_caution or
                               self.anchor_recent_frames > (CarControllerParams.REANCHOR_RECENT_FRAMES -
                                                            CarControllerParams.BOOST_HOLDOFF_FRAMES)),
         # Phase 29: the recovery/boost tapers apply only with grip evidence
@@ -1529,7 +1568,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # torque) — accepted deliberately: the collateral is a sub-second
         # recovery lag on climbing gain only, vs a 70°/s wheel delivery.
         post_grip=(self.anchor_recent_frames > 0
-                   or self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES),
+                   or self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES
+                   # Phase 33: tapered recovery whenever the pending swing
+                   # points at an occupied adjacent lane
+                   or blind_caution),
       )
       self.aci_gain_last = effective_aci_gain
 
