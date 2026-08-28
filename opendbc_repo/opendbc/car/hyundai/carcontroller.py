@@ -175,15 +175,22 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # at-ceiling fraction 52 -> 67%), transmission wheel/TX +17%, source
     # churn ~unchanged — which explains roughly HALF the RMS rise; the
     # remainder is an OPEN item (see values.py CMD_HYSTERESIS note). The
-    # fix shipped first was the source-side hysteresis lever alone; 0x4c/4e
-    # measured it recovering about half the regression (p50 0.356 -> 0.302,
-    # >=0.3° 61 -> 50%) with tracking IMPROVED (|plan-wheel| p50 2.47,
-    # curve-following 0.73 = best recorded) — confirming the un-explained
-    # second contributor. Phase 33 deploys the measured reserve step (user-
-    # accepted overshoot: 0.88x of pre-31 mean low-speed authority):
-    # [0.18,0.30,(0.52),0.75] -> [0.14,0.24,0.38,0.75]; 40/120 km/h stay.
-    # Kill: [0.18,0.30,0.52,0.75,0.95] on the 5-knot axis (24a-equivalent).
-    base_ceiling = np.interp(v_ego_kph, [0, 20, 30, 40, 120], [0.14, 0.24, 0.38, 0.75, 0.95])
+    # Phase 33b (0x4f/0x50): the reserve ceiling step was deployed and then
+    # ROLLED BACK by its own kill criterion. Measured on-road: shake effect
+    # ZERO (p50 0.302 -> 0.308) while low-speed curve-following collapsed
+    # 0.73 -> 0.41 wheel/plan — the pre-agreed tracking-degradation trigger.
+    # The zero shake effect closed the residual-shake investigation
+    # (review-measured, CLOSED not open): the 0.30-vs-0.242 aggregate gap
+    # vs the 29b baseline is a COMPOSITION ARTIFACT — shake per unit of
+    # wheel motion is IDENTICAL across builds (0.346 vs 0.346, matched
+    # plan-band), and the baseline's advantage exists only while its
+    # dead-quiet windows (phantom deep-yield had op effectively off,
+    # driver_tq>140 on 17.6% of low-speed frames) are included: gate the
+    # windows on wheelStd>=0.4 and the gap INVERTS (base 0.352 vs 0.328).
+    # Lesson: the aggregate quiet-window shake metric cannot distinguish
+    # "less shake" from "less steering" — normalize by motion before it
+    # drives another change. 24a ladder restored:
+    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
