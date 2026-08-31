@@ -6,6 +6,9 @@ the tests below (Ioniq 6 N: steerRatio ~14.96, wheelbase 2.965):
   straight @ 15 m/s (54 km/h)  -> comp ~ 73.5 Nm
   straight @ 25 m/s+           -> comp ~ 62
   straight @ crawl (<5.5 m/s)  -> comp ~ 140
+    (Phase 34b: EXCEPT still-straight crawl — v<3 m/s AND |ang|<5 AND
+    |rate|<10 deg/s -> comp 70, raw pressed equiv 300; eff-active fit
+    point is 28 (0x51-0x54), 70 chosen above it for the light-hand tail)
   wheel 30 @ 10 m/s (la 1.18)  -> comp ~ 188
   wheel 45 @  8 m/s (la 1.14)  -> comp ~ 189
   wheel  8 @ 24 m/s (la 1.81)  -> comp ~ 180
@@ -112,6 +115,113 @@ class TestHoldModel:
       assert cc.compute_hold_torque(15.0, 1.0) == 0.0
     finally:
       P.ACIGAIN_HOLD_BASE_V, P.ACIGAIN_HOLD_LAGAIN_V = oldB, oldG
+
+
+class TestPhase34CrawlGate:
+  # Still-straight crawl override (values.py CRAWL_STILL_*). The comp is only
+  # ON where op effectively actuates, and at v<3 that is traffic-following
+  # stop-and-go creep (Phase 18 passthroughs lead-less creep — the garage
+  # attempt 0x55-0x57 measured 100% PAUSED, a released wheel, and was
+  # discarded). Eff-active commute frames (0x51-0x54) read p45=28 Nm on a
+  # centred non-moving wheel vs the extrapolated B=140, which belongs to the
+  # MOVING/turned dry-friction states. All scenarios below therefore carry a
+  # near lead (lead_dist=6 < TRAFFIC_FOLLOW_NEAR 8 m) so op stays active at
+  # v=2 like the real regime. Gate lives at the compute_hold_torque CALL
+  # SITE only; the pure function is untouched.
+
+  def test_still_straight_crawl_comp_drops(self):
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)                       # comp on, ~73.5
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)
+    assert abs(sim.s.hold_comp_last - P.ACIGAIN_CRAWL_STILL_COMP_NM) < 1.0
+
+  def test_straight_crawl_grip_sensitivity_restored(self):
+    # raw 310 straight at crawl: driver_tq ~240 > 230 -> pressed (the
+    # user-set raw-300 recognition point). Under the old flat 140 this read
+    # ~170 and pressed needed raw ~370 (behind the EPS hardware flag at 350).
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)
+    run_signal(sim, 20, v=2.0, wheel=0.0, tq=310.0, lead_dist=6.0)
+    assert sim.s.driver_pressed
+
+  def test_straight_crawl_light_touch_stays_unpressed(self):
+    # a light resting hand (raw 260 < the 300 recognition point) must NOT
+    # read as a grip — the 70 override absorbs the light-touch tail
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)
+    run_signal(sim, 100, v=2.0, wheel=0.0, tq=260.0, lead_dist=6.0)
+    assert not sim.s.driver_pressed
+
+  def test_gate_exits_on_angle(self):
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)
+    run_signal(sim, 120, v=2.0, wheel=10.0, tq=0.0, lead_dist=6.0)  # |ang| >= 5
+    assert sim.s.hold_comp_last > 130.0
+
+  def test_gate_exits_on_rate(self):
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0, wheel_rate=20.0)
+    assert sim.s.hold_comp_last > 130.0                  # moving-friction regime
+
+  def test_rate_hysteresis_no_flap(self):
+    # the derived wheel rate is quantized in 10 deg/s steps with p90 exactly
+    # ON 10.0 — a single threshold measured 4.2 toggles/s (verify round).
+    # In the 10-14 band the gate must HOLD its current state, both ways.
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)   # gate on
+    run_signal(sim, 60, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0, wheel_rate=12.0)
+    assert abs(sim.s.hold_comp_last - P.ACIGAIN_CRAWL_STILL_COMP_NM) < 1.0  # held on
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0, wheel_rate=20.0)
+    assert sim.s.hold_comp_last > 130.0                              # exited (>14)
+    run_signal(sim, 60, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0, wheel_rate=12.0)
+    assert sim.s.hold_comp_last > 130.0                              # held off (needs <10)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0, wheel_rate=0.0)
+    assert abs(sim.s.hold_comp_last - P.ACIGAIN_CRAWL_STILL_COMP_NM) < 1.0  # re-entered
+
+  def test_gate_off_above_speed(self):
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 150, v=4.0, wheel=0.0, tq=0.0, lead_dist=6.0)  # 4 m/s: no gate
+    assert sim.s.hold_comp_last > 130.0
+
+  def test_leadless_creep_stays_passthrough(self):
+    # WITHOUT a lead, Phase 18 passthroughs creep: comp gates to 0 (26b) and
+    # the raw 250 pressed base applies — the Phase 34 gate must not resurrect
+    # compensation there.
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 200, v=2.0, wheel=0.0, tq=0.0)
+    assert sim.s.hold_comp_last < 1.0
+
+  def test_kill_switch(self):
+    old = P.CRAWL_STILL_SPEED_MS
+    try:
+      P.CRAWL_STILL_SPEED_MS = 0.0
+      sim = Sim()
+      settle(sim, v=15.0, wheel=0.0)
+      run_signal(sim, 150, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0)
+      assert sim.s.hold_comp_last > 130.0                # Phase 31 behaviour
+    finally:
+      P.CRAWL_STILL_SPEED_MS = old
+
+  def test_nan_rate_fails_sensitive(self):
+    # a NaN rate frame must not crash and lands on the SENSITIVE side (gate
+    # on -> comp low -> a gripping driver is seen sooner, never later)
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 120, v=2.0, wheel=0.0, tq=0.0, lead_dist=6.0,
+               wheel_rate=float('nan'))
+    assert abs(sim.s.hold_comp_last - P.ACIGAIN_CRAWL_STILL_COMP_NM) < 1.0
+
+  def test_pure_function_untouched(self):
+    from opendbc.car.hyundai.carcontroller import compute_hold_torque as h
+    assert abs(h(2.0, 0.0) - 140.0) < 0.1
 
 
 class TestHoldSlewGuard:

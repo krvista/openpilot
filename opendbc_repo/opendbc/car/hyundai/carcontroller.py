@@ -452,6 +452,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Starts at 0: op is not actuating at init, so the bar reading (if any)
     # is entirely the driver's.
     self.hold_comp_last = 0.0
+    # Phase 34b: still-straight crawl gate state (rate hysteresis 10/14).
+    self.crawl_still_on = False
     self.driver_pressed_cnt = 0
     self.driver_pressed = False
     # Phase 26b (review fix): previous frame's effective_lat_active — the
@@ -741,7 +743,33 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         steer_angle_safe / max(self.CP.steerRatio, 1.0)))) / max(self.CP.wheelbase, 1.0)
       # Phase 31 refit (see values.py and compute_hold_torque).
       hold_target = compute_hold_torque(v_ego_safe, lat_acc_est)
+      # Phase 34: still-straight crawl override (see values.py CRAWL_STILL_*).
+      # Below 3 m/s the fitted model extrapolates B=140, but on the domain
+      # where this comp actually applies — traffic-following stop-and-go
+      # creep, measured eff-active on 0x51-0x54 — a centred, non-moving
+      # wheel reads only p45=28 Nm; the 140 belongs to the dry-friction
+      # MOVING/turned states (117-198, well matched). The override value
+      # (70, raw pressed equiv 300) sits deliberately above the 28 fit
+      # point to absorb the light-resting-hand tail — see values.py for
+      # the measured trade table. Gate on measured
+      # angle AND rate so the override drops out the moment op (or the
+      # driver) starts turning; the gate only lowers comp, so a gripping
+      # driver is seen sooner, never later.
+      steer_rate_safe = (float(CS.out.steeringRateDeg)
+                         if np.isfinite(CS.out.steeringRateDeg) else 0.0)
+      # Rate hysteresis (enter <10 / exit >14 deg/s): a single threshold on
+      # a 10 deg/s-quantized rate signal measured p50 4.2 toggles/s in-domain
+      # with dwells long enough for full 140<->70 comp swings = a new 2-4 Hz
+      # authority modulation in the cleaned shake band. See values.py.
+      rate_thr = (CarControllerParams.CRAWL_STILL_RATE_EXIT_DPS if self.crawl_still_on
+                  else CarControllerParams.CRAWL_STILL_RATE_DPS)
+      self.crawl_still_on = (v_ego_safe < CarControllerParams.CRAWL_STILL_SPEED_MS
+                             and abs(steer_angle_safe) < CarControllerParams.CRAWL_STILL_ANG_DEG
+                             and abs(steer_rate_safe) < rate_thr)
+      if self.crawl_still_on:
+        hold_target = CarControllerParams.ACIGAIN_CRAWL_STILL_COMP_NM
     else:
+      self.crawl_still_on = False
       hold_target = 0.0
     # Slew guard: a single-frame angle/speed sensor spike would otherwise jump
     # hold_comp by up to +142 Nm and mask a real driver input for that window.

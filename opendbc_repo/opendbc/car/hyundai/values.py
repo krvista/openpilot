@@ -415,6 +415,66 @@ class CarControllerParams:
   # catch a future table edit that would silently start clipping; a unit
   # test pins model-max < cap so that edit becomes a conscious decision.
   ACIGAIN_HOLD_MAX_NM     = 220.0
+  # Phase 34: still-straight crawl override. The fitted tables have no data
+  # below ~3 m/s, so B extrapolated flat at 140. Measurement history matters
+  # here: a dedicated garage run (0x55-0x57) FIRST suggested this fix, but
+  # carStateSP.lateralControlPaused showed 100% of its free-crawl frames were
+  # PASSTHROUGH (Phase 18 creep gate: no lead below ~10 km/h) — op never
+  # actuated, so that table described a RELEASED wheel, not op hold torque.
+  # The domain where this comp actually applies is TRAFFIC-FOLLOWING
+  # stop-and-go creep, and the commute corpus (0x51-0x54) has it: 27.5k
+  # eff-active (!paused) & !EPS-pressed & !standstill & v<3 frames:
+  #   still-straight (|ang|<5, |rate|<10; 72%)   p45 = 28 Nm   <- B says 140
+  #   straight, wheel moving (dry friction)      p45 = 117
+  #   5-30 deg (still / moving)                  p45 = 125 / 148
+  #   >= 30 deg                                  p45 = 198
+  # i.e. crawl hold torque is MOTION/ANGLE-modal, and flat 140 is right for
+  # every state EXCEPT still-straight, where it over-compensates by ~112 and
+  # pushes the pressed raw equivalent to 370 — BEHIND the EPS hardware flag
+  # (~350). Override only that state. The still-straight tq distribution has
+  # a heavy tail (p45 28 / p75 104 / p95 226) — sub-350 LIGHT HANDS resting
+  # on the wheel in stop-and-go contaminate the "hands-off" population — so
+  # the override value is a sensitivity/false-pressed trade, measured on the
+  # 19.7k still-straight frames (single-frame >=230 / >=100 rates):
+  #   comp 140 (old):  0.04% / 4.0%   pressed raw equiv 370 (behind EPS)
+  #   comp  70 (SHIP): 0.83% / 10.1%  pressed raw equiv 300  <- user-set point
+  #   comp  28 (p45):  2.66% / 19.2%  pressed raw equiv 258 (reads resting
+  #                                   hands as grips ~2.3% of creep time)
+  # 70 is deliberately ABOVE the 28 p45 fit point: the +42 headroom absorbs
+  # most of the light-touch band while still moving grip recognition ahead
+  # of the EPS hardware flag (300 < 350). The gate only LOWERS comp (raises
+  # sensitivity), so per the asymmetry design rule its cost lands on the
+  # hands-off side; the 4 Nm/frame slew absorbs both edges (140<->70 ~0.2 s).
+  # Adjacent band 3.0-5.5 m/s is intentionally NOT gated: the same
+  # over-compensation exists there (still-straight raw p45 = 39 vs comp 140,
+  # pressed raw equiv 370 > EPS 350 — the 31b defect-3 dead band stays open
+  # in that band), and it is acceptable NOT because the user's setpoint was
+  # crawl-only but because the EPS arms carry the safety-critical consumers
+  # there (verified gate-by-gate, not asserted): at v < 8 m/s the
+  # heavy_grip_anchor EPS arm needs override>=0.9 == raw >= 172, far below
+  # the EPS-350 flag, so the arm is live (no repeat of the 31b highway
+  # inversion); and 31b fix 3 put the EPS OR directly on the low-speed
+  # latch entry. Uncovered residue: real_grip yield depth and trim_gate —
+  # both minor.
+  # Arm-chain note (verification round): the +3.4pp arm-sustained time is
+  # harmless ALONE (anchor_recent arms only on pressed), but driver_pressed
+  # is ITSELF a pressed arm and rose 12x (0.05 -> 0.63% machine ON-time).
+  # Accepted because the one-shot additionally needs div > 2 deg plus a
+  # release edge, and the crawl consequence (apply := wheel at <5 deg,
+  # curve_trim zeroed when already ~0) is bounded.
+  # Rate gate hysteresis (verification round, MANDATORY): the derived wheel
+  # rate at 100 Hz with 0.1 deg resolution is quantized in 10 deg/s steps
+  # and its still-straight p90 sits exactly ON 10.0 — a single-threshold
+  # gate measured p50 4.2 toggles/s with mean dwell ~24 frames > the 17.5
+  # the slew needs for a full 140<->70 swing, i.e. a NEW 2-4 Hz authority
+  # modulation in the exact band Phases 32/33b cleaned. Enter below 10,
+  # exit above 14 (off the quantization levels).
+  # Kill switch: CRAWL_STILL_SPEED_MS = 0.0 (gate never true -> Phase 31).
+  ACIGAIN_CRAWL_STILL_COMP_NM = 70.0
+  CRAWL_STILL_SPEED_MS        = 3.0    # m/s (NOT kph — matches HOLD tables)
+  CRAWL_STILL_ANG_DEG         = 5.0
+  CRAWL_STILL_RATE_DPS        = 10.0   # enter below
+  CRAWL_STILL_RATE_EXIT_DPS   = 14.0   # exit above (hysteresis, see note)
   # Phase 26: slew guard on hold_comp (per 10 ms frame). A single-frame
   # angle/speed sensor spike would otherwise jump the compensation by up to
   # +142 Nm and mask a real driver input for that window; genuine curve
