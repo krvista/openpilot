@@ -50,11 +50,45 @@ PRED_RATIO_TAU = 0.3
 # Phase 6h-1: speed-dependent command low-pass with MATCHED lead, replacing the
 # heavy low-speed angle-domain EMA. Offline pre-validation (ccnc-drivelog 0x40/0x42,
 # 8 segs): total tau 0.10->0.20 cuts <30 km/h 3-7 Hz desiredCurvature RMS 3.2x
-# (1.80e-4 -> 5.62e-5 1/m); tau 0.30 adds nothing. Lead is matched per-speed so
-# net phase stays ~0 (same principle as 6f-4). Kill switch: TAU_V = [0.10]*3,
-# i.e. constant 0.10 == pre-6h-1.
+# (1.80e-4 -> 5.62e-5 1/m); tau 0.30 adds nothing IN THAT 3-7 Hz BAND. Lead is
+# matched per-speed so net phase stays ~0 (same principle as 6f-4).
+# Phase 34: low-speed node 0.20 -> 0.30. The felt low-speed shake band is
+# 0.8-2.5 Hz (not 3-7), and there tau 0.30 DOES help: offline replay of the
+# full pipeline (LP + matched lead + 6h-2 bound) on 0x51-0x54 + 0x4c/0x4e
+# model streams measures, vs 0.20 —
+#   quasi-straight 3-30 km/h 0.8-2.5 Hz command churn:  -14%
+#   1 s windows punching through the 0.5 deg TX hysteresis: 71% -> 52%
+#   turn-initiation t63, plan-foreseen (lead active):    ~0 (slightly leads)
+#   turn-initiation t63, lead-off (plan did not foresee): +0.245 s (was +0.175)
+#   S-reversal zero-cross lag / peak retention:          +0.07 s / 0.93 (was 0.96)
+# HONESTY NOTES (verification round):
+# (a) the onset bracket is wide (-0.060..+0.245 = 305 ms) and lead-off is a
+#     FLOOR on the replan worst case, not the worst case — right after a
+#     replan the lead points at the OLD future and must unwind first, which
+#     is worse than no lead. Margin to the 7a-5/33b failure region is
+#     therefore smaller than the table reads.
+# (b) 7c entry assist is NOT tau-independent: it consumes the leaded
+#     new_desired_curvature, and at 7-8 m/s the tau-driven dk_max growth
+#     (+0.0011..0.0014) exceeds the whole ENTRY_ASSIST_CAP (0.001). Benign
+#     by substitution — lead and assist add in the SAME direction at entry,
+#     so net entry command does not drop — but corner-onset t63 above is
+#     slightly optimistic for it.
+# (c) dist_ahead grows ~21% at low speed, so the x[-1] < dist_ahead fallback
+#     (raw model curvature, no lead — safe degradation) fires somewhat more
+#     often on stop approaches; rate unmeasured (corpus lacks position.x),
+#     distiller now records it for the next rounds.
+# tau 0.40/0.50 rejected: reversal retention 0.90/0.87 and replan +140/+200 ms
+# approach the 7a-5/33b failure territory for -6/-11%p more churn. A
+# gate-release variant (fast-tau when |input-output| large) measured 96-108%
+# of current churn = no gain, but that TESTED VARIANT was invalid by
+# construction: it released the LP while the lead horizon stayed sized for
+# the slow tau, so net lead > lag re-injected band energy. A correctly
+# matched gate (t_ahead recomputed from the instantaneous tau) is UNTESTED
+# and remains the natural mitigation if the replan lag surfaces on-road —
+# it would need its own validation (switching transient).
+# Kill switch: TAU_V = [0.10]*3 (pre-6h-1); previous behaviour: [0.20, 0.12, 0.08].
 LAT_CMD_SMOOTH_TAU_BP = [8.0, 13.0, 18.0]   # m/s
-LAT_CMD_SMOOTH_TAU_V  = [0.20, 0.12, 0.08]
+LAT_CMD_SMOOTH_TAU_V  = [0.30, 0.12, 0.08]
 
 # Phase 6h-2: the lookahead lead is ADDITIVE and BOUNDED on top of the model plan
 # instead of replacing it. The budget is the curvature equivalent of this much
