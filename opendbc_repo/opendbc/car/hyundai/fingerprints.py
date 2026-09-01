@@ -1141,6 +1141,20 @@ FW_VERSIONS = {
       b'\xf1\x00CE  MFC  AT CAN LHD 1.00 1.06 99211-KL000 230915',
     ],
   },
+  CAR.HYUNDAI_IONIQ_6_N: {
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00CE__ RDR -----      1.00 1.01 99110-JD000         ',
+    ],
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00CE  MFC  AT KOR LHD 1.00 1.00 99211-JD000 250716',
+    ],
+    (Ecu.adas, 0x730, None): [
+      b'\xf1\x00CENFFBL6 1.00 1.01 250925',
+    ],
+    (Ecu.hvac, 0x7b3, None): [
+      b"\xf1\x00CE1   97255-JD000CONTROL ASS'Y-DATC  1.01.10_R2.0_v24.11.01   ",
+    ],
+  },
   CAR.HYUNDAI_IONIQ_9: {
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00MEev RDR -----      1.00 1.00 99110-GO000         ',
