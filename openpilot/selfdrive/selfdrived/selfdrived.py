@@ -245,7 +245,7 @@ class SelfdriveD(CruiseHelper):
     # steerAngleLimit / cameraDataStale) and the curveSpeedAdvisory heads-up are
     # i6n cereal extensions — they need EventName enum members + CarOutput
     # *Tripped flags (opendbc car.capnp) + ControlsState.predictedLatAccelRatio,
-    # none of which exist in the 04-10 base cereal schema. Reading co.vmLimitTripped
+    # none of which exist in the 04-10 base cereal schema (re-checked on the cfb38312 rebase: still absent — enabling now means ADDING the schema fields, feasible since opendbc/cereal are vendored; queued as an i6nv3 follow-up so the Phase 5e/F1 alert counters finally reach the driver). Reading co.vmLimitTripped
     # or EventName.lateralAccelLimit here would AttributeError-crash selfdrived on
     # engage ("system unresponsive"). These are telemetry/advisory alerts only — the
     # actual angle/lateral-accel limiting still happens in carcontroller + panda —
