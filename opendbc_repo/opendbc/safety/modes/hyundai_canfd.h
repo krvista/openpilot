@@ -44,9 +44,9 @@
 // *** Addresses checked in rx hook ***
 // EV, ICE, HYBRID: ACCELERATOR (0x35), ACCELERATOR_BRAKE_ALT (0x100), ACCELERATOR_ALT (0x105)
 #define HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                          \
-  {.msg = {{0x35, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true},     \
-           {0x100, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true},    \
-           {0x105, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true}}},  \
+  {.msg = {{0x35, (pt_bus), 32, 100U, .max_counter = 0xffU, .ignore_quality_flag = true},                  \
+           {0x100, (pt_bus), 32, 100U, .max_counter = 0xffU, .ignore_quality_flag = true},                 \
+           {0x105, (pt_bus), 32, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}}},               \
   {.msg = {{0x175, (pt_bus), 24, 50U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0xa0, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0xea, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
@@ -59,6 +59,27 @@
   HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                                                         \
   {.msg = {{0x1aa, (pt_bus), 16, 50U, .ignore_checksum = true, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
+// i6n port (CCNC gateway measurement): the ACCELERATOR family arrives at
+// ~50 Hz with no rolling counter on this platform — the standard 100 Hz /
+// counter spec permanently invalidates rx and op never engages. Scoped to
+// CCNC ONLY (regression fix: the earlier port relaxed the COMMON macro for
+// every Hyundai CANFD car and broke upstream steer-req recovery tests).
+#define HYUNDAI_CANFD_COMMON_RX_CHECKS_CCNC(pt_bus)                                                                     \
+  {.msg = {{0x35, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true},     \
+           {0x100, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true},    \
+           {0x105, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true}}},  \
+  {.msg = {{0x175, (pt_bus), 24, 50U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0xa0, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0xea, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+
+#define HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS_CCNC(pt_bus)                                                                                       \
+  HYUNDAI_CANFD_COMMON_RX_CHECKS_CCNC(pt_bus)                                                                                                  \
+  {.msg = {{0x1cf, (pt_bus), 8, 50U, .ignore_checksum = true, .max_counter = 0xfU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+
+#define HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS_CCNC(pt_bus)                                                                                         \
+  HYUNDAI_CANFD_COMMON_RX_CHECKS_CCNC(pt_bus)                                                                                                    \
+  {.msg = {{0x1aa, (pt_bus), 16, 50U, .ignore_checksum = true, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+
 // SCC_CONTROL (from ADAS unit or camera)
 #define HYUNDAI_CANFD_SCC_ADDR_CHECK(scc_bus)                                                                            \
   {.msg = {{0x1a0, (scc_bus), 32, 50U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
@@ -67,6 +88,10 @@ static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_angle_steering = false;
 static bool hyundai_canfd_lka_steer_msg_alt = false;
 static uint8_t hyundai_canfd_angle_model_id = HYUNDAI_ANGLE_MODEL_BASELINE;
+
+// i6n port: CCNC platform state (BLOCKER-1 fix — dropped by a
+// theirs-side silent hunk in the 3-way merge; verified sole compile break)
+static bool hyundai_ccnc = false;
 
 static bool get_hyundai_ccnc(void) {
   return hyundai_ccnc;
@@ -419,8 +444,24 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
       };
 
-      // i6n port: the CCNC car is LKA-msg steering AND uses ALT buttons
-      if (hyundai_canfd_alt_buttons) {
+      static RxCheck hyundai_canfd_lka_steer_msg_ccnc_rx_checks[] = {
+        HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS_CCNC(1)
+      };
+
+      static RxCheck hyundai_canfd_lka_steer_msg_alt_buttons_ccnc_rx_checks[] = {
+        HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS_CCNC(1)
+        HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
+      };
+
+      // i6n port: the CCNC car is LKA-msg steering AND uses ALT buttons;
+      // its gateway needs the relaxed accelerator rx spec (see macro note)
+      if (get_hyundai_ccnc()) {
+        if (hyundai_canfd_alt_buttons) {
+          SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_alt_buttons_ccnc_rx_checks, ret);
+        } else {
+          SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_ccnc_rx_checks, ret);
+        }
+      } else if (hyundai_canfd_alt_buttons) {
         SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_alt_buttons_rx_checks, ret);
       } else {
         SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_rx_checks, ret);
@@ -483,7 +524,23 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
       }
 
-      if (hyundai_canfd_alt_buttons) {
+      static RxCheck hyundai_canfd_ccnc_rx_checks[] = {
+        HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS_CCNC(0)
+        HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
+      };
+
+      static RxCheck hyundai_canfd_alt_buttons_ccnc_rx_checks[] = {
+        HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS_CCNC(0)
+        HYUNDAI_CANFD_SCC_ADDR_CHECK(2)
+      };
+
+      if (get_hyundai_ccnc()) {
+        if (hyundai_canfd_alt_buttons) {
+          SET_RX_CHECKS(hyundai_canfd_alt_buttons_ccnc_rx_checks, ret);
+        } else {
+          SET_RX_CHECKS(hyundai_canfd_ccnc_rx_checks, ret);
+        }
+      } else if (hyundai_canfd_alt_buttons) {
         SET_RX_CHECKS(hyundai_canfd_alt_buttons_rx_checks, ret);
       } else {
         SET_RX_CHECKS(hyundai_canfd_rx_checks, ret);
