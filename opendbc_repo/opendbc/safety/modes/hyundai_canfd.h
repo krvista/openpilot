@@ -17,6 +17,23 @@
   {0x110, a_can, 32, .check_relay = (a_can) == 0},  /* LKAS_ALT */  \
   {0x362, a_can, 32, .check_relay = (a_can) == 0},  /* CAM_0x362 */ \
 
+// HDA2-ALT + CCNC (Ioniq 6 N): CCNC_0x161/0x162 alert-suppression
+// feature DISABLED (2026-04-15). On this platform the ADAS gateway
+// natively publishes 0x161/0x162 on bus 1 (not camera-forwarded — see
+// c6a33de), so any TX from openpilot creates a dual-publisher fault on
+// bus 1: CCNC sees alternating frames, ADAS icon flickers, error
+// counters latch. We no longer TX these addresses from carcontroller
+// (see the `ccnc_non_hda2`-only branch around line 501 of
+// `opendbc/car/hyundai/carcontroller.py`) and therefore drop them from
+// the panda TX whitelist as well — matching the capture-side revert in
+// carstate.py (see the `CANFD_LKA_STEER_MSG` guard around line 293 of
+// `opendbc/car/hyundai/carstate.py`). The non-HDA2 CCNC path still TXs
+// 0x161/0x162 on bus 0 with full alert suppression (addresses are
+// camera-forwarded there, check_relay=true keeps the stock source
+// blocked).
+#define HYUNDAI_CANFD_LKA_STEER_MSG_ALT_CCNC_COMMON_TX_MSGS(a_can, e_can) \
+  HYUNDAI_CANFD_LKA_STEER_MSG_ALT_COMMON_TX_MSGS(a_can, e_can)
+
 #define HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(e_can)  \
   {0x12A, e_can, 16, .check_relay = (e_can) == 0},  /* LFA */            \
   {0x1E0, e_can, 16, .check_relay = (e_can) == 0},  /* LFAHDA_CLUSTER */ \
@@ -27,9 +44,9 @@
 // *** Addresses checked in rx hook ***
 // EV, ICE, HYBRID: ACCELERATOR (0x35), ACCELERATOR_BRAKE_ALT (0x100), ACCELERATOR_ALT (0x105)
 #define HYUNDAI_CANFD_COMMON_RX_CHECKS(pt_bus)                                                                          \
-  {.msg = {{0x35, (pt_bus), 32, 100U, .max_counter = 0xffU, .ignore_quality_flag = true},                  \
-           {0x100, (pt_bus), 32, 100U, .max_counter = 0xffU, .ignore_quality_flag = true},                 \
-           {0x105, (pt_bus), 32, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}}},               \
+  {.msg = {{0x35, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true},     \
+           {0x100, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true},    \
+           {0x105, (pt_bus), 32, 50U, .ignore_counter = true, .max_counter = 0U, .ignore_quality_flag = true}}},  \
   {.msg = {{0x175, (pt_bus), 24, 50U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0xa0, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0xea, (pt_bus), 24, 100U, .max_counter = 0xffU, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
@@ -50,6 +67,10 @@ static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_angle_steering = false;
 static bool hyundai_canfd_lka_steer_msg_alt = false;
 static uint8_t hyundai_canfd_angle_model_id = HYUNDAI_ANGLE_MODEL_BASELINE;
+
+static bool get_hyundai_ccnc(void) {
+  return hyundai_ccnc;
+}
 
 static unsigned int hyundai_canfd_get_lka_addr(void) {
   return hyundai_canfd_lka_steer_msg_alt ? 0x110U : 0x50U;
@@ -76,15 +97,17 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *msg) {
   const unsigned int scc_bus = hyundai_camera_scc ? 2U : pt_bus;
 
   if (msg->bus == pt_bus) {
-    // driver torque
+    // driver torque + steering angle
     if (msg->addr == 0xeaU) {
       int torque_driver_new = ((msg->data[11] & 0x1fU) << 8U) | msg->data[10];
       torque_driver_new -= 4095;
       update_sample(&torque_driver, torque_driver_new);
 
-      int angle_meas_new = (msg->data[17] << 8) | msg->data[16];
-      angle_meas_new = to_signed(angle_meas_new, 16);
-      update_sample(&angle_meas, angle_meas_new);
+      if (hyundai_canfd_angle_steering) {
+        int angle_meas_new = (msg->data[17] << 8) | msg->data[16];
+        angle_meas_new = to_signed(angle_meas_new, 16);
+        update_sample(&angle_meas, angle_meas_new);
+      }
     }
 
     // cruise buttons
@@ -148,7 +171,7 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *msg) {
 }
 
 static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
-  const TorqueSteeringLimits HYUNDAI_CANFD_TORQUE_STEERING_LIMITS = {
+  const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS = {
     .max_torque = 270,
     .max_rt_delta = 112,
     .max_rate_up = 2,
@@ -186,7 +209,6 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
       int desired_angle = (msg->data[11] << 6U) | (msg->data[10] >> 2U);
       desired_angle = to_signed(desired_angle, 14);
 
-      // ADAS_ACIAnglTqRedcGainVal: bit 96, 8 bits, unsigned. Raw 0-250 valid, 251-255 reserved.
       const uint8_t gain_raw = msg->data[12];
       bool gain_violation = gain_raw > 250U;
       if (!steer_angle_req && (gain_raw != 0U)) {
@@ -200,7 +222,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
       int desired_torque = (((msg->data[6] & 0xFU) << 7U) | (msg->data[5] >> 1U)) - 1024U;
       bool steer_req = GET_BIT(msg, 52U);
 
-      if (steer_torque_cmd_checks(desired_torque, steer_req, HYUNDAI_CANFD_TORQUE_STEERING_LIMITS)) {
+      if (steer_torque_cmd_checks(desired_torque, steer_req, HYUNDAI_CANFD_STEERING_LIMITS)) {
         tx = false;
       }
     }
@@ -263,6 +285,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   const uint16_t HYUNDAI_PARAM_CANFD_LKA_STEER_MSG_ALT = 128;
   const uint16_t HYUNDAI_PARAM_CANFD_ALT_BUTTONS = 32;
   const uint16_t HYUNDAI_PARAM_CANFD_ANGLE_STEERING = 1024;
+  // i6n port: moved off 1024 (upstream CANFD_ANGLE_STEERING took it).
+  // BENCH-GATED: this firmware must pass bench validation before road use.
+  const uint16_t HYUNDAI_PARAM_CCNC = 2048;  // also implies angle steering
 
   static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_TX_MSGS[] = {
     HYUNDAI_CANFD_LKA_STEER_MSG_COMMON_TX_MSGS(0, 1)
@@ -270,6 +295,10 @@ static safety_config hyundai_canfd_init(uint16_t param) {
 
   static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_ALT_TX_MSGS[] = {
     HYUNDAI_CANFD_LKA_STEER_MSG_ALT_COMMON_TX_MSGS(0, 1)
+  };
+
+  static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_ALT_CCNC_TX_MSGS[] = {
+    HYUNDAI_CANFD_LKA_STEER_MSG_ALT_CCNC_COMMON_TX_MSGS(0, 1)
   };
 
   static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_LONG_TX_MSGS[] = {
@@ -307,6 +336,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
     {0x160, 0, 16, .check_relay = (longitudinal)}, /* ADRV_0x160 */ \
 
+#define HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_CCNC_TX_MSGS(longitudinal) \
+    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2) \
+    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0) \
+    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
+    {0x161, 0, 32, .check_relay = true}, /* CCNC_0x161 */ \
+    {0x162, 0, 32, .check_relay = true}, /* CCNC_0x162 */ \
+    {0x7C4, 2, 8, .check_relay = true}, /* 0x7C4 */ \
+    {0xEA, 2, 24, .check_relay = true}, /* MDPS */ \
+
   hyundai_common_init(param);
 
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
@@ -315,6 +353,12 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   hyundai_canfd_angle_model_id = hyundai_get_angle_model_id(current_safety_param_sp);
   // TODO: test this restriction
   hyundai_canfd_lka_steer_msg_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEER_MSG_ALT);
+  // i6n port: the CCNC platform implies angle steering (Ioniq 6 N model id
+  // must also be set via safety_param_sp so the per-model params resolve).
+  hyundai_ccnc = GET_FLAG(param, HYUNDAI_PARAM_CCNC);
+  if (hyundai_ccnc) {
+    hyundai_canfd_angle_steering = true;
+  }
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -339,6 +383,10 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS(true)
       };
 
+      static CanMsg hyundai_canfd_lfa_steering_camera_scc_ccnc_tx_msgs[] = {
+        HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_CCNC_TX_MSGS(true)
+      };
+
       if (hyundai_canfd_alt_buttons) {
         SET_RX_CHECKS(hyundai_canfd_alt_buttons_long_rx_checks, ret);
       } else {
@@ -346,7 +394,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
       }
 
       if (hyundai_camera_scc) {
-        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+        if (get_hyundai_ccnc()) {
+          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_ccnc_tx_msgs, ret);
+        } else {
+          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+        }
       } else {
         SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
       }
@@ -362,9 +414,23 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
       };
 
-      SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_rx_checks, ret);
+      static RxCheck hyundai_canfd_lka_steer_msg_alt_buttons_rx_checks[] = {
+        HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS(1)
+        HYUNDAI_CANFD_SCC_ADDR_CHECK(1)
+      };
+
+      // i6n port: the CCNC car is LKA-msg steering AND uses ALT buttons
+      if (hyundai_canfd_alt_buttons) {
+        SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_alt_buttons_rx_checks, ret);
+      } else {
+        SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_rx_checks, ret);
+      }
       if (hyundai_canfd_lka_steer_msg_alt) {
-        SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_ALT_TX_MSGS, ret);
+        if (get_hyundai_ccnc()) {
+          SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_ALT_CCNC_TX_MSGS, ret);
+        } else {
+          SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_ALT_TX_MSGS, ret);
+        }
       } else {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_TX_MSGS, ret);
       }
@@ -407,7 +473,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS(false)
       };
 
-      SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+      static CanMsg hyundai_canfd_lfa_steering_camera_scc_ccnc_tx_msgs[] = {
+        HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_CCNC_TX_MSGS(false)
+      };
+
+      if (get_hyundai_ccnc()) {
+        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_ccnc_tx_msgs, ret);
+      } else {
+        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+      }
 
       if (hyundai_canfd_alt_buttons) {
         SET_RX_CHECKS(hyundai_canfd_alt_buttons_rx_checks, ret);

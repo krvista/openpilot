@@ -1,6 +1,8 @@
 from opendbc.car import Bus, get_safety_config, structs, uds
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, \
+                                                   CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
+                                                   UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
@@ -46,11 +48,7 @@ class CarInterface(CarInterfaceBase):
         # this needs to be figured out for cars without an ADAS ECU
         ret.alphaLongitudinalAvailable = False
 
-      # no longitudinal for all lka_steering angle steering
-      if lka_steering and ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-        ret.alphaLongitudinalAvailable = False
-
-      ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN]
+      ret.enableBsm = 0x1e5 in fingerprint[CAN.ECAN]
 
       # Check if the car is hybrid. Only HEV/PHEV cars have 0xFA on E-CAN.
       if 0xFA in fingerprint[CAN.ECAN]:
@@ -59,14 +57,23 @@ class CarInterface(CarInterfaceBase):
       if lka_steering:
         # detect LKA steering
         ret.flags |= HyundaiFlags.CANFD_LKA_STEER_MSG.value
+        # i6nv3 (i6n port): presence of LKAS_ALT (0x110) on the camera bus is
+        # also the CCNC angle-control architecture marker — combined with
+        # HyundaiFlags.CCNC from the car's static config this auto-enables
+        # the Ioniq 6 N angle stack (rate limiter, hysteresis, ACI gain
+        # policy, low-speed passthrough) with no per-car code.
         if 0x110 in fingerprint[CAN.CAM]:
           ret.flags |= HyundaiFlags.CANFD_LKA_STEER_MSG_ALT.value
       else:
         # no LKA steering
-        if 0x1cf not in fingerprint[CAN.ECAN]:
-          ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
         if not ret.flags & HyundaiFlags.CANFD_RADAR_SCC:
           ret.flags |= HyundaiFlags.CANFD_CAMERA_SCC.value
+
+      # CANFD_ALT_BUTTONS detection applies to BOTH LKA and non-LKA variants
+      # (i6n port: the CCNC car is LKA-steering AND uses ALT buttons — upstream
+      # only checks this in the non-LKA branch).
+      if 0x1cf not in fingerprint[CAN.ECAN]:
+        ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
 
       # Some LKA steering cars have alternative messages for gear checks
       # ICE cars do not have 0x130; GEARS message on 0x40 or 0x70 instead
@@ -89,13 +96,23 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ALT_BUTTONS.value
       if ret.flags & HyundaiFlags.CANFD_CAMERA_SCC:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
-      if ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-        ret.steerControlType = structs.CarParams.SteerControlType.angle
-        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_ANGLE_STEERING.value
+      # CCNC safety flag: required for panda to allow 0x161/0x162 TX on
+      # any member of the HDA2-ALT + CCNC angle-control platform (Ioniq
+      # 6 N and future 2025+ Hyundai/Kia/Genesis cars that share the
+      # CCNC | CANFD_LKA_STEER_MSG_ALT flag combo), so we can suppress
+      # spurious hands-on / HDP takeover alerts while openpilot steers.
+      # Note: on HDA2-ALT the 0x161/0x162 publisher is native on bus 1
+      # (not camera-forwarded), so panda cannot block the stock source;
+      # suppression is best-effort (see c6a33de for the safety-side
+      # check_relay=false requirement on this platform).
+      if ret.flags & HyundaiFlags.CCNC and (
+        not (ret.flags & HyundaiFlags.CANFD_LKA_STEER_MSG) or (ret.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT)
+      ):
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CCNC.value
 
     else:
       # Shared configuration for non CAN-FD cars
-      ret.alphaLongitudinalAvailable = not (ret.flags & (HyundaiFlags.LEGACY | HyundaiFlags.UNSUPPORTED_LONGITUDINAL))
+      ret.alphaLongitudinalAvailable = candidate not in UNSUPPORTED_LONGITUDINAL_CAR
       ret.enableBsm = 0x58b in fingerprint[0]
 
       # Send LFA message on cars with HDA
@@ -125,7 +142,27 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.1
     ret.steerLimitTimer = 0.4
 
-    if not (ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING):
+    # HDA2-ALT + CCNC angle-control platform (Ioniq 6 N 2026 and future
+    # 2025+ Hyundai/Kia/Genesis cars with CCNC | CANFD_LKA_STEER_MSG_ALT)
+    # uses angle-based control via LKAS_ALT's ADAS_StrAnglReqVal field.
+    # LatControlAngle provides live steerRatio, angleOffsetDeg, and roll
+    # compensation from liveParameters, which are critical for accurate
+    # angle commands.
+    if ret.flags & HyundaiFlags.CCNC and ret.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT:
+      ret.steerControlType = structs.CarParams.SteerControlType.angle
+      # Phase 11: 20 km/h -> 5 km/h. controlsd's standstill gate
+      # (vEgo <= minSteerSpeed) silently killed CC.latActive below 20 km/h:
+      # routes 0x10-0x28 measured 27% of MADS-enabled time (1.4 h) with the
+      # UI green but no steering, 31 silent dropouts/h in city stop-and-go.
+      # The carcontroller's own low-speed machinery (LOW_SPEED_PASSTHROUGH
+      # 20/22 km/h latch, traffic_following hold, parking-mode latch) was
+      # built to manage exactly this regime and never ran because this gate
+      # sits upstream of it. 5 km/h keeps a floor at walking pace (angle
+      # control while nearly stopped serves no purpose; resume is wheel-
+      # anchored) and lets the low-speed latches own 5-20 km/h as designed.
+      # Kill switch: 20.0 / 3.6 restores the pre-Phase-11 gate.
+      ret.minSteerSpeed = 5.0 / 3.6
+    else:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     if ret.flags & HyundaiFlags.ALT_LIMITS:
@@ -224,7 +261,7 @@ class CarInterface(CarInterfaceBase):
     ret.intelligentCruiseButtonManagementAvailable = not (stock_cp.flags & HyundaiFlags.CANFD_ALT_BUTTONS)
 
     # Encode angle steering vehicle model ID so the panda can use per-vehicle physics
-    if stock_cp.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
+    if stock_cp.flags & (HyundaiFlags.CANFD_ANGLE_STEERING | HyundaiFlags.CCNC):
       angle_model_id = ANGLE_STEERING_MODEL_BY_CAR.get(candidate, 0)
       ret.safetyParam |= encode_angle_model_id(angle_model_id)
 

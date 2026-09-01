@@ -166,3 +166,6 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
+  # i6n Phase 27: mirrored from the CarController by card.py (not set by
+  # carstate) — True while lateral is intentionally passive with latActive on.
+  lateralControlPaused: bool = auto_field()

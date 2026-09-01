@@ -27,6 +27,7 @@ enum {
   HYUNDAI_ANGLE_MODEL_KIA_SORENTO_HEV_4TH_LFA2, // 8
   HYUNDAI_ANGLE_MODEL_GENESIS_GV70_E_2ND_GEN,    // 9
   HYUNDAI_ANGLE_MODEL_HYUNDAI_AZERA_HEV_7TH,     // 10
+  HYUNDAI_ANGLE_MODEL_HYUNDAI_IONIQ_6_N,         // 11 (i6n port)
 
   HYUNDAI_ANGLE_MODEL_COUNT,  // must be last — used for bounds checking
 };
@@ -53,6 +54,17 @@ static const AngleSteeringParams *hyundai_get_angle_params(uint8_t model_id) {
   static const AngleSteeringParams HYUNDAI_ANGLE_MODELS[] = {
     // [0] BASELINE (fallback) — same as KIA_SPORTAGE_HEV_2026
     [HYUNDAI_ANGLE_MODEL_BASELINE] = {
+      .slip_factor = -0.0006085930193026732,
+      .steer_ratio = 13.7,
+      .wheelbase = 2.756,
+    },
+
+    // [11] HYUNDAI_IONIQ_6_N (i6n port) — intentionally IDENTICAL to the
+    // baseline: the road-validated i6nv2 firmware hardcoded exactly these
+    // values, so this entry preserves that safety envelope bit-for-bit.
+    // Switching to the true CarSpecs (wb 2.965 / sr 14.96) is a deliberate
+    // BENCH-PHASE decision, not a port side effect.
+    [HYUNDAI_ANGLE_MODEL_HYUNDAI_IONIQ_6_N] = {
       .slip_factor = -0.0006085930193026732,
       .steer_ratio = 13.7,
       .wheelbase = 2.756,
