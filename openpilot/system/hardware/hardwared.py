@@ -328,6 +328,11 @@ def hardware_thread(end_event, hw_queue) -> None:
       # we want to cool down first before increasing load
       thermal_status = ThermalStatus.critical
     else:
+      # Phase 20a-fix: never index the band dict with a status outside it —
+      # the exact failure mode that took hardwared down when the mici dict
+      # dropped the yellow band. Snap to the nearest valid band instead.
+      if thermal_status not in THERMAL_BANDS:
+        thermal_status = next(iter(THERMAL_BANDS))
       current_band = THERMAL_BANDS[thermal_status]
       band_idx = list(THERMAL_BANDS.keys()).index(thermal_status)
       if current_band.min_temp is not None and all_comp_temp < current_band.min_temp:

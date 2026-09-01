@@ -7,7 +7,7 @@ import pytest
 
 from phase_tests.harness_noncontrol import FakeParams
 
-from cereal import log, custom
+from openpilot.cereal import log, custom
 from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
 from openpilot.selfdrive.selfdrived.events import Events
@@ -42,6 +42,9 @@ def mk_mads(main_cruise_allowed=False, steering_mode=None):
     events=Events(), events_sp=EventsSP(),
     state_machine=SSStateMachine(),
     CS_prev=structs.CarState(),
+    # i6nv3: upstream mads now cross-checks panda controlsAllowedLateral via
+    # selfdrived.sm; empty list = no mismatch in these unit scenarios.
+    sm={'pandaStates': []},
   )
   return ModularAssistiveDrivingSystem(sd), sd
 

@@ -129,6 +129,7 @@ class SelfdriveD(CruiseHelper):
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
     self.events = Events()
+    self.curve_advisory_active = False
 
     self.initialized = False
     self.enabled = False
@@ -237,6 +238,19 @@ class SelfdriveD(CruiseHelper):
     if self.sm.updated['userBookmark']:
       self.events.add(EventName.userBookmark)
 
+    if self.sm.updated['audioFeedback']:
+      self.events.add(EventName.audioFeedback)
+
+    # i6nv2: the CCNC angle-control silent-failure alerts (lateralAccelLimit /
+    # steerAngleLimit / cameraDataStale) and the curveSpeedAdvisory heads-up are
+    # i6n cereal extensions — they need EventName enum members + CarOutput
+    # *Tripped flags (opendbc car.capnp) + ControlsState.predictedLatAccelRatio,
+    # none of which exist in the 04-10 base cereal schema. Reading co.vmLimitTripped
+    # or EventName.lateralAccelLimit here would AttributeError-crash selfdrived on
+    # engage ("system unresponsive"). These are telemetry/advisory alerts only — the
+    # actual angle/lateral-accel limiting still happens in carcontroller + panda —
+    # so the block is disabled until i6nv2 carries i6n's cereal (needs a rebuild).
+
     # Don't add any more events while in dashcam mode
     if self.CP.passive:
       return
@@ -323,6 +337,14 @@ class SelfdriveD(CruiseHelper):
         self.events.add(EventName.calibrationInvalid)
 
     # Lane departure warning
+    # The IsLdwEnabled toggle gates the user-facing warning for BOTH the
+    # manual-driving (desirePrediction) and the op-active (ldw.py 6g-4) paths.
+    # Phase 6h-6 forced the alert on whenever lateral was active ("flags fired
+    # but no event on 0x4a seg31"), but that misdiagnosis bypassed the toggle:
+    # on a device with the toggle OFF the warning still surfaced during every
+    # op-active drift (confirmed on ccnc-drivelog 0x50/0x51). Respect the toggle
+    # here; the camera-ECU lane-departure steering suppression in controlsd
+    # (a separate, always-on safety behaviour) is unaffected.
     if self.is_ldw_enabled and self.sm.valid['driverAssistance']:
       if self.sm['driverAssistance'].leftLaneDeparture or self.sm['driverAssistance'].rightLaneDeparture:
         self.events.add(EventName.ldw)
@@ -467,6 +489,8 @@ class SelfdriveD(CruiseHelper):
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
       cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      if self.mads.enabled:
+        cruise_mismatch = False
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)

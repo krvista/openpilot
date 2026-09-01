@@ -1083,6 +1083,7 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=1630, wheelbase=2.756, steerRatio=13.7, tireStiffnessFactor=0.385),
   )
+
   HYUNDAI_TUCSON_2025 = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Tucson (without HDA II) 2025-26", car_parts=CarParts.common([CarHarness.hyundai_n]))],
     CarSpecs(mass=1630, wheelbase=2.756, steerRatio=13.7, tireStiffnessFactor=0.385),
@@ -1408,6 +1409,63 @@ class CAR(Platforms):
     GENESIS_G70_2020.specs,
     flags=HyundaiFlags.CHECKSUM_CRC8,
     sp_flags=HyundaiFlagsSP.NON_SCC_RADAR_FCA,
+  )
+
+  # upstream hkg-angle-steering-2025 platforms (restored after 3-way merge drop)
+  GENESIS_GV70_ELECTRIFIED_2ND_GEN = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Genesis GV70 Electrified 2026", "All", car_parts=CarParts.common([CarHarness.hyundai_m])),
+    ],
+    GENESIS_GV70_ELECTRIFIED_1ST_GEN.specs,
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
+  )
+  GENESIS_GV80_2025 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Genesis GV80 (3.5T Prestige Trim, with HDA II & LFA2) 2025", "Highway Driving Assist II & Lane Follow Assist 2",
+                     car_parts=CarParts.common([CarHarness.hyundai_q])),
+      HyundaiCarDocs("Genesis GV80 Coupe (with HDA II & LFA2) 2025", "Highway Driving Assist II & Lane Follow Assist 2",
+                     car_parts=CarParts.common([CarHarness.hyundai_q])),
+    ],
+    GENESIS_GV80.specs,
+    flags=HyundaiFlags.CANFD_ANGLE_STEERING,
+  )
+  HYUNDAI_IONIQ_5_PE = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Hyundai Ioniq 5 PE (with HDA II & LFA2) 2025-26", "Highway Driving Assist II & Lane Follow Assist 2",
+                     car_parts=CarParts.common([CarHarness.hyundai_q]))
+    ],
+    HYUNDAI_IONIQ_5.specs,
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
+  )
+  HYUNDAI_IONIQ_9 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Hyundai Ioniq 9 (with HDA II & LFA2) 2025-26", "Highway Driving Assist II & Lane Follow Assist 2",
+                     car_parts=CarParts.common([CarHarness.hyundai_m]))
+    ],
+    CarSpecs(mass=2700, wheelbase=3.13, steerRatio=16.02),
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
+  )
+  HYUNDAI_SANTA_FE_HEV_5TH_GEN = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Hyundai Santa Fe Hybrid (with HDA II & LFA2) 2024-25", "Highway Driving Assist II & Lane Follow Assist 2",
+                     car_parts=CarParts.common([CarHarness.hyundai_p])),
+    ],
+    CarSpecs(mass=2035, wheelbase=2.81, steerRatio=13.72),
+    flags=HyundaiFlags.CANFD_ANGLE_STEERING,
+  )
+  KIA_EV6_2025 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Kia EV6 (with HDA I) 2025", "Highway Driving Assist I", car_parts=CarParts.common([CarHarness.hyundai_p]))
+    ],
+    CarSpecs(mass=2055, wheelbase=2.9, steerRatio=16, tireStiffnessFactor=0.65),
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
+  )
+  KIA_EV9 = HyundaiCanFDPlatformConfig(
+    [
+      HyundaiCarDocs("Kia EV9 2025-26", car_parts=CarParts.common([CarHarness.hyundai_r]))
+    ],
+    CarSpecs(mass=2664, wheelbase=3.1, steerRatio=16),
+    flags=HyundaiFlags.EV | HyundaiFlags.CANFD_ANGLE_STEERING,
   )
 
 
