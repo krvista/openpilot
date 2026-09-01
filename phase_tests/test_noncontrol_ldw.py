@@ -4,7 +4,7 @@ import types
 
 from phase_tests.harness_noncontrol import FakeParams  # noqa: F401 (stub install side effect)
 
-from cereal import log
+from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib import ldw as ldw_mod
 from openpilot.selfdrive.controls.lib.ldw import (
   LaneDepartureWarning, OP_LDW_WINDOW, OP_LDW_CLR_M, OP_LDW_MIN_PROB,

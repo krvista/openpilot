@@ -12,7 +12,7 @@ import sys
 import types
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for p in (os.path.join(REPO, 'opendbc_repo'), REPO):
+for p in (os.path.join(REPO, 'opendbc_repo'), os.path.join(REPO, 'tinygrad_repo'), os.path.join(REPO, 'msgq_repo'), REPO):
   if p not in sys.path:
     sys.path.insert(0, p)
 

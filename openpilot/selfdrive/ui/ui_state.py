@@ -189,7 +189,11 @@ class UIState(UIStateSP):
       else:
         self.status = UIStatus.ENGAGED if ss.enabled else UIStatus.DISENGAGED
 
-      self.status = UIStatus(UIStateSP.update_status(ss, self.sm["selfdriveStateSP"], self.sm["onroadEvents"]))
+      # carStateSP.lateralControlPaused must not freeze the paused
+      # presentation if card stops publishing — require a live, valid message.
+      cs_sp = (self.sm["carStateSP"]
+               if (self.sm.alive["carStateSP"] and self.sm.valid["carStateSP"]) else None)
+      self.status = UIStatus(UIStateSP.update_status(ss, self.sm["selfdriveStateSP"], self.sm["onroadEvents"], cs_sp))
 
     # Check for engagement state changes
     if self.engaged != self._engaged_prev:

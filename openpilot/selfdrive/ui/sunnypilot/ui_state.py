@@ -109,7 +109,7 @@ class UIStateSP:
     return self.onroad_brightness in (OnroadBrightness.AUTO, OnroadBrightness.AUTO_DARK)
 
   @staticmethod
-  def update_status(ss, ss_sp, onroad_evt) -> str:
+  def update_status(ss, ss_sp, onroad_evt, cs_sp=None) -> str:
     state = ss.state
     mads = ss_sp.mads
     mads_state = mads.state
@@ -125,6 +125,13 @@ class UIStateSP:
         return "override"
 
     if mads_state in (MADSState.paused, MADSState.overriding):
+      return "override"
+
+    # i6n Phase 27: the carcontroller is intentionally holding lateral passive
+    # (parking mode / low-speed passthrough / angle-passive) while MADS stays
+    # engaged — show the same paused/override presentation so the driver is
+    # never left believing op is steering when it deliberately is not.
+    if cs_sp is not None and mads.available and mads.enabled and cs_sp.lateralControlPaused:
       return "override"
 
     # MADS specific statuses

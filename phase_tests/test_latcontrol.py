@@ -8,7 +8,7 @@ import pytest
 
 from phase_tests.harness import make_cp  # path setup + real CP
 from opendbc.car.vehicle_model import VehicleModel
-import selfdrive.controls.lib.latcontrol_angle as lca
+import openpilot.selfdrive.controls.lib.latcontrol_angle as lca
 
 DT = 0.01
 

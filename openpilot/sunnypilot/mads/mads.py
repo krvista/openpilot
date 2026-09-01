@@ -57,6 +57,13 @@ class ModularAssistiveDrivingSystem:
     self.steering_mode_on_brake = read_steering_mode_param(self.CP, self.CP_SP, self.params)
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
 
+    # Boot-time auto-enable retry: the initial cruiseState.available rising
+    # edge often fires while selfdriveInitializing or commIssue (both
+    # NO_ENTRY) are active, blocking the MADS state transition. This flag
+    # keeps retrying silently until MADS successfully enables or the user
+    # explicitly disables via LFA button.
+    self._boot_enable_pending = True
+
   def read_params(self):
     self.main_enabled_toggle = self.params.get_bool("MadsMainCruiseAllowed")
     self.unified_engagement_mode = self.params.get_bool("MadsUnifiedEngagementMode")
@@ -166,6 +173,25 @@ class ModularAssistiveDrivingSystem:
       if self.main_enabled_toggle:
         if CS.cruiseState.available and not self.selfdrive.CS_prev.cruiseState.available:
           self.events_sp.add(EventNameSP.lkasEnable)
+      # Boot-enable: retry silently every frame until MADS engages.
+      # Separated from main_enabled_toggle so it fires regardless of
+      # MadsMainCruiseAllowed — covers the race condition where vehicle
+      # boots before comma (cruiseState.available already True, rising
+      # edge fires during NO_ENTRY window and is never retried).
+      # For allow_always platforms (CANFD Hyundai), this guarantees MADS
+      # auto-enables on boot even if MadsMainCruiseAllowed=False.
+      # Respect the configured brake-pedal behavior while retrying: the
+      # PAUSE/DISENGAGE modes gate user-initiated enables on the pedal
+      # (should_silent_lkas_enable / the lkasEnable removal below), and the
+      # silent retry must not slip past that gate — otherwise MADS enables
+      # against the pedal for one frame and immediately disengages again
+      # (enable/disable flap + alert churn with the brake held at boot).
+      # The retry simply resumes once the pedal is released.
+      if self._boot_enable_pending and CS.cruiseState.available and not self.enabled and \
+         (self.main_enabled_toggle or self.allow_always) and \
+         self.should_silent_lkas_enable(CS) and \
+         not (self.steering_mode_on_brake == MadsSteeringModeOnBrake.DISENGAGE and self.pedal_pressed_non_gas_pressed(CS)):
+        self.events_sp.add(EventNameSP.silentLkasEnable)
 
     for be in CS.buttonEvents:
       if be.type == ButtonType.cancel:
@@ -177,6 +203,7 @@ class ModularAssistiveDrivingSystem:
             self.events_sp.add(EventNameSP.manualSteeringRequired)
           else:
             self.events_sp.add(EventNameSP.lkasDisable)
+            self._boot_enable_pending = False
         else:
           self.events_sp.add(EventNameSP.lkasEnable)
 
@@ -217,6 +244,9 @@ class ModularAssistiveDrivingSystem:
 
     if not self.CP.passive and self.selfdrive.initialized:
       self.enabled, self.active = self.state_machine.update()
+
+    if self.enabled:
+      self._boot_enable_pending = False
 
     # Copy of previous SelfdriveD states for MADS events handling
     self.selfdrive.enabled_prev = self.selfdrive.enabled

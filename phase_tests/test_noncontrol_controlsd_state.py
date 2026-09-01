@@ -13,7 +13,8 @@ import pytest
 
 from phase_tests.harness_noncontrol import FakeParams  # noqa: F401 (stub install side effect)
 
-from cereal import car, log
+from opendbc.car.structs import car
+from openpilot.cereal import log
 import openpilot.selfdrive.controls.controlsd as cd
 
 N_PTS = 20
@@ -40,7 +41,7 @@ def mk_model(fallback=K, lane_nan_idx=None):
 
 class _SM(dict):
   valid = {'driverAssistance': True}
-  updated = {'liveCalibration': False, 'livePose': False}
+  updated = {'extrinsicsCalibration': False, 'deviceMotion': False}
   logMonoTime: dict = {}
 
   def all_checks(self, s=None):
@@ -85,8 +86,8 @@ def mk_controls():
                                       steerFaultTemporary=False, steerFaultPermanent=False,
                                       leftBlinker=False, rightBlinker=False, vCruise=100.0,
                                       vCruiseCluster=100.0, canValid=True, steeringPressed=False),
-    'liveParameters': types.SimpleNamespace(stiffnessFactor=1.0, steerRatio=15.0, angleOffsetDeg=0.0, roll=0.0),
-    'liveDelay': types.SimpleNamespace(lateralDelay=0.2),
+    'vehicleParameters': types.SimpleNamespace(stiffnessFactor=1.0, steerRatio=15.0, angleOffsetDeg=0.0, roll=0.0),
+    'lateralDelay': types.SimpleNamespace(lateralDelay=0.2),
     'longitudinalPlan': types.SimpleNamespace(aTarget=0.0, shouldStop=False, hasLead=False),
     'modelV2': mk_model(),
     'selfdriveState': types.SimpleNamespace(enabled=True, active=True, personality=None, alertHudVisual=None),

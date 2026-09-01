@@ -446,6 +446,11 @@ struct BackupManagerSP @0xf98d843bfd7004a3 {
 
 struct CarStateSP @0xb86e6369214c01c8 {
   speedLimit @0 :Float32;
+  # i6n Phase 27: True while the carcontroller intentionally holds lateral
+  # passive (parking mode / low-speed passthrough / angle-passive) with
+  # latActive still set — mirrored from the CarController by card.py so the
+  # UI can show the paused presentation instead of "engaged".
+  lateralControlPaused @1 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
