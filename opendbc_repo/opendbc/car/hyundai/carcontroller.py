@@ -128,7 +128,7 @@ def compute_hold_torque(v_ego, lat_acc):
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
-                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False):
+                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -191,6 +191,14 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # "less shake" from "less steering" — normalize by motion before it
     # drives another change. 24a ladder restored:
     base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
+    # Phase 36: continuous curve-conditional raise at low speed (see
+    # values.py ACIGAIN_CURVE_*). curve_deg is the caller's fast-rise /
+    # slow-fall EMA of |commanded angle|; w ramps 0 -> 1 over 3 -> 12 deg,
+    # no threshold.
+    curve_ceiling = np.interp(v_ego_kph, CarControllerParams.ACIGAIN_CURVE_CEILING_SPEEDS_KPH,
+                              CarControllerParams.ACIGAIN_CURVE_CEILING_V)
+    curve_w = np.interp(curve_deg, CarControllerParams.ACIGAIN_CURVE_RAMP_DEG, [0.0, 1.0])
+    base_ceiling = base_ceiling + curve_w * (curve_ceiling - base_ceiling)
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
     error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
     error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
@@ -480,6 +488,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.reanchor_arm = 0
     # Phase 35b: frames since apply was last pinned to the wheel
     self.frames_since_apply_anchor = 10**6
+    # Phase 36: asymmetric EMA (rise 0.15 s / fall 0.5 s) of |commanded angle|
+    # driving the curve ceiling ramp
+    self.curve_meas_lp = 0.0
     self.reanchor_ready = False
     self.anchor_recent_frames = 0
     # Phase 30: release-edge timer for the one-shot (init large: no edge yet).
@@ -827,6 +838,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                          if driver_tq >= CarControllerParams.REANCHOR_ARM_NM
                          else max(self.reanchor_arm - 1, 0))
     self.frames_since_apply_anchor = min(self.frames_since_apply_anchor + 1, 10**6)
+    # Phase 36: curve measure — asymmetric EMA of |commanded angle| (plan,
+    # not apply_angle_last, so anchors cannot contaminate it). Fast rise so
+    # the raise reaches the curve entry (plan ramps 3 -> 8 deg in ~0.3 s),
+    # slow fall so the exit stays clean; runs unconditionally.
+    _c_in = abs(op_curv_safe)
+    _c_tau = (CarControllerParams.ACIGAIN_CURVE_MEAS_TAU_RISE_S if _c_in > self.curve_meas_lp
+              else CarControllerParams.ACIGAIN_CURVE_MEAS_TAU_FALL_S)
+    _c_step = (DT_CTRL / (_c_tau + DT_CTRL)) * (_c_in - self.curve_meas_lp)
+    # rise slew cap: a bound on the ceiling slew for plan steps faster than
+    # anything on the corpus (fall is already slower than the gain's rate_dn)
+    self.curve_meas_lp += min(_c_step, CarControllerParams.ACIGAIN_CURVE_MEAS_MAX_RISE_DPS * DT_CTRL)
     # G2 review: re-arm EDGE — a fire consumes readiness, and only a genuine
     # re-grip (driver_tq back above the arm level) restores it. A pure
     # refractory let the dump repeat every 20 frames against a slow wheel
@@ -1630,6 +1652,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # Phase 35a: fast descent only on grip evidence (see values.py GATE_NM)
         rate_dn_floor=(grip_rate_dn_floor if (real_grip or driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM)
                        else 0.0),
+        curve_deg=self.curve_meas_lp,                # Phase 36
         anchored_recovery=anchored_recovery,         # Phase 35b
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
         # frame (the recovery transient) — G1 review: the full 2 s memory

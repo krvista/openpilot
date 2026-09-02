@@ -783,3 +783,77 @@ class TestPhase35AnchoredRecovery:
       assert k is None or k > 70
     finally:
       P.ANCHORED_RECOVERY_FRAMES = old
+
+
+class TestPhase36CurveCeiling:
+  # low-speed curve-conditional hands-off ceiling with a continuous 3->12 deg ramp
+  def _steady(self, v, cmd, n=400):
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)                              # boot window at speed (S1b parking latch)
+    tr = run_signal(sim, n, v=v, wheel=cmd, cmd=cmd, tq=0.0)   # wheel on plan: no error boost
+    return tr['gain'][-1], tr['gain']
+
+  def test_straight_unchanged_at_16kph(self):
+    g, _ = self._steady(v=4.4, cmd=0.0)
+    assert abs(g - 0.28) <= 0.02, g                              # 24a rung at 16 km/h
+
+  def test_curve_raises_ceiling_at_16kph(self):
+    g, _ = self._steady(v=4.4, cmd=15.0)
+    assert g >= 0.45, g                                          # ~0.50 in a 15 deg curve
+
+  def test_ramp_is_continuous_and_monotone(self):
+    gs = [self._steady(v=4.4, cmd=c)[0] for c in (2.0, 5.0, 7.5, 10.0, 13.0)]
+    assert all(b >= a - 1e-9 for a, b in zip(gs, gs[1:])), gs
+    steps = [b - a for a, b in zip(gs, gs[1:])]
+    assert max(steps) <= 0.10, f"ramp has a jump: {gs}"          # no threshold behaviour
+
+  def test_no_change_at_and_above_40kph(self):
+    old = P.ACIGAIN_CURVE_CEILING_V
+    g_on, _ = self._steady(v=12.0, cmd=15.0)                     # 43 km/h
+    try:
+      P.ACIGAIN_CURVE_CEILING_V = [0.18, 0.30, 0.75, 0.95]      # kill == base
+      g_off, _ = self._steady(v=12.0, cmd=15.0)
+    finally:
+      P.ACIGAIN_CURVE_CEILING_V = old
+    assert abs(g_on - g_off) <= 0.004 + 1e-9
+
+  def test_kill_switch_identical_at_low_speed(self):
+    old = P.ACIGAIN_CURVE_CEILING_V
+    try:
+      P.ACIGAIN_CURVE_CEILING_V = [0.18, 0.30, 0.75, 0.95]
+      g, _ = self._steady(v=4.4, cmd=15.0)
+    finally:
+      P.ACIGAIN_CURVE_CEILING_V = old
+    assert abs(g - 0.28) <= 0.02, g
+
+  def test_entry_ramps_over_time_no_step(self):
+    # INSTANT plan step 0 -> 15 deg at 16 km/h (faster than any corpus entry):
+    # the ceiling follows the slew-capped ramp input, so the gain must not
+    # jump; the rise is fast (0.15 s) so the raise reaches a real curve entry
+    # (plan 3 -> 8 deg in ~0.3 s on the corpus)
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)                              # boot window at speed
+    run_signal(sim, 300, v=4.4, wheel=0.0, cmd=0.0, tq=0.0)
+    tr = run_signal(sim, 300, v=4.4, wheel=15.0, cmd=15.0, tq=0.0)
+    g = tr['gain']
+    d = [abs(b - a) for a, b in zip(g, g[1:])]
+    assert max(d) <= 0.012 + 1e-9, max(d)                        # <= 3 gain quanta per frame
+    assert g[5] < g[-1] - 0.1, "ceiling rose instantly — ramp input must be filtered"
+    assert g[60] >= g[-1] - 0.02, "raise too slow to reach a curve entry"  # ~0.6 s to the plateau
+
+  def test_ramp_input_rises_fast_falls_slow(self):
+    # white-box on the ramp input: 63% of a 15 deg plan step by ~0.15 s
+    # (frame 15), and after the plan drops it still holds ~37% at 0.5 s
+    sim = Sim()
+    settle(sim, v=15.0, wheel=0.0)
+    run_signal(sim, 200, v=4.4, wheel=0.0, cmd=0.0, tq=0.0)
+    run_signal(sim, 15, v=4.4, wheel=15.0, cmd=15.0, tq=0.0)
+    rise = sim.s.curve_meas_lp
+    assert 3.5 <= rise <= 15.0 * 0.72, rise                     # slew cap 27 deg/s binds first (0.27/frame),
+    run_signal(sim, 25, v=4.4, wheel=15.0, cmd=15.0, tq=0.0)    # then the 0.15 s EMA
+    assert sim.s.curve_meas_lp >= 15.0 * 0.6, sim.s.curve_meas_lp
+    run_signal(sim, 100, v=4.4, wheel=15.0, cmd=15.0, tq=0.0)
+    assert sim.s.curve_meas_lp >= 14.0
+    run_signal(sim, 50, v=4.4, wheel=0.0, cmd=0.0, tq=0.0)
+    fall = sim.s.curve_meas_lp
+    assert 15.0 * 0.30 <= fall <= 15.0 * 0.45, fall             # ~0.37 at one fall tau

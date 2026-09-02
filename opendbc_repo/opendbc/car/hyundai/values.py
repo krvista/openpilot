@@ -406,6 +406,44 @@ class CarControllerParams:
   # the fast descent (p90 back at 1.50 s). The +1.3pp diverged-low-gain
   # exposure is the "driver wins at speed" trade the field request asked for.
   ACIGAIN_GRIP_RATE_DN_GATE_NM    = 160.0
+  # Phase 36: low-speed CURVE-conditional ceiling with a continuous ramp.
+  # The 24a hands-off ceiling (0.18 @0 -> 0.30 @20 -> 0.75 @40 km/h) is the
+  # measured shake/authority balance on STRAIGHTS, where model churn lives;
+  # in real low-speed curves it starves delivery: 0x58-0x5b hands-off curve
+  # windows (|plan| >= 8 deg) follow only wheel/plan p50 0.33 at 10-20 km/h
+  # (0.52 at 20-30, 0.64 at 30-40); the three 16 km/h S-curve misses were TX
+  # 11-16 deg with the wheel at 1.6-3 deg under a ~0.28 ceiling. Phase 33's
+  # GLOBAL step was rolled back (33b) — this raises authority only as the
+  # plan is actually curving, so straights keep the 24a rung.
+  #   ceiling = base + w * (curve - base),  w = interp(curve_deg, [3, 12], [0, 1])
+  # curve_deg = asymmetric EMA of |commanded angle|: rise tau 0.15 s, fall
+  # tau 0.5 s. Real curve entries on the corpus ramp the plan 3 -> 8 deg in
+  # p50 0.28 s (p10 0.08 s), so a symmetric 0.5 s EMA left w at p50 0.16 at
+  # the 8 deg point and 35% of entries with w < 0.1 — the raise arrived
+  # after the curve (verifier measurement); 0.15 s rise gives w p50 0.36 and
+  # 7% below 0.1 at the same point. The slow fall keeps the exit clean
+  # (w >= 0.3 lingers p90 0.34 s after |plan| < 3 deg, no overshoot).
+  # What bounds the ceiling modulation is NOT frequency attenuation (a
+  # first-order LP at 0.5 s is only -9 dB at 0.8 Hz) but the ramp-input
+  # slew: dw/frame p99 = 0.019 on the corpus -> ceiling moves <= ~0.005 per
+  # frame, an order of magnitude under the 0.04 rate_up cap, so the gain
+  # cannot step. The rise is additionally slew-capped (MAX_RISE_DPS, above
+  # the corpus p99 so it is a bound, not a filter): an instantaneous plan
+  # step — not seen on the corpus but possible on a lane-change plan flip —
+  # would otherwise move the ceiling 0.02/frame; with the cap w moves
+  # <= 0.03/frame -> ceiling <= ~0.008/frame at 20 km/h (two gain quanta).
+  # No threshold anywhere (field requirement: no step response).
+  # Above 40 km/h curve == base (no change). Shake population caveat: ~30%
+  # of the Phase 32/33b shake windows (<8 deg wheel excursion) sit in gentle
+  # curves with w > 0.2 and DO get a raise, so the next-drive shake metric
+  # must be split by w (<0.1 / 0.1-0.5 / >0.5) to be interpretable.
+  # Kill: CURVE_CEILING_V = [0.18, 0.30, 0.75, 0.95] (== base) -> identical.
+  ACIGAIN_CURVE_CEILING_SPEEDS_KPH = [0.0, 20.0, 40.0, 120.0]
+  ACIGAIN_CURVE_CEILING_V          = [0.30, 0.55, 0.75, 0.95]
+  ACIGAIN_CURVE_RAMP_DEG           = [3.0, 12.0]
+  ACIGAIN_CURVE_MEAS_TAU_RISE_S    = 0.15
+  ACIGAIN_CURVE_MEAS_TAU_FALL_S    = 0.5
+  ACIGAIN_CURVE_MEAS_MAX_RISE_DPS  = 27.0    # ramp-input rise slew cap (deg/s)
   # Phase 35b: anchored post-release recovery. Hannam bridge merge (0x5a seg5,
   # 43 -> 60 km/h): after the driver released, gain climbed at the reference
   # 0.004/frame (post-grip taper region, |apply-wheel| 2.5-3.2 deg) for 1.1 s
