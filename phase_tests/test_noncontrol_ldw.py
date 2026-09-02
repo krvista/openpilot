@@ -165,3 +165,20 @@ class TestOpActiveDeparture:
       assert (w.left, w.right) == (False, False)
     finally:
       ldw_mod.OP_LDW_CLR_M = old
+
+
+class TestBlinkerCooldownRate:
+  # plannerd feeds sm.frame at 20 Hz (DT_MDL). A DT_CTRL-based cooldown ran 25 s
+  # instead of 5 s (found in the i6nv3 port review; identical line here).
+  def _blink_then_approach(self, gap_frames):
+    w = ldw_mod.LaneDepartureWarning()
+    w.update(10_000, _mk_model(), _mk_cs(left_blinker=True), _mk_cc())   # blinker at frame 10000
+    return run_frames(w, approach_seq(), frame0=10_000 + gap_frames)
+
+  def test_blocked_inside_5s(self):
+    res = self._blink_then_approach(gap_frames=80)          # 4.0 s later @ 20 Hz
+    assert not any(l for l, _ in res)
+
+  def test_allowed_after_5s(self):
+    res = self._blink_then_approach(gap_frames=101)         # 5.05 s later @ 20 Hz
+    assert any(l for l, _ in res), "5 s cooldown must have expired at 20 Hz frames"
