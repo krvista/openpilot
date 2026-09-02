@@ -365,7 +365,63 @@ class CarControllerParams:
   ACIGAIN_HANDSOFF_FULL_NM  = 140.0   # low-speed anchor (kept for reference/kill)
   ACIGAIN_FLOOR_SPEEDS_KPH  = [80.0, 140.0]
   ACIGAIN_HANDSOFF_FLOOR_V  = [0.15, 0.10]
-  ACIGAIN_GRIP_FLOOR_V      = [0.08, 0.05]
+  ACIGAIN_GRIP_FLOOR_V      = [0.08, 0.05]   # superseded for GRIP by the Phase 35a tables below (kept for kill)
+  # Phase 35a: "at speed, when I hold the wheel, assist must get out of the
+  # way" (field request; calibration point = the driver's strongest everyday
+  # grip, Yongsan tunnel section 0x5a seg11 at 89-107 km/h: |tq| p50 750 /
+  # peak 1100 Nm; everyday pressed p50 421 Nm — all already past the 350
+  # override point, so the felt residual is the FLOOR and the DROP LATENCY).
+  # Replayed 0x58/0x5a (v >= 43 km/h): grip-onset gain<0.2 latency p50 0.40 s,
+  # p90 1.50 s; mean gain during grip 0.239. Three grip-side changes, all
+  # scheduled to start at 60 km/h so city behaviour (<= 40 km/h) is untouched:
+  #   floor 0.08 -> 0.03 (60 km/h+), full-yield point 110 -> 80 driver-Nm
+  #   (60 km/h+; the Phase 25 schedule gave 102.5 at 60 km/h), and a rate_dn floor
+  #   of 0.03/frame for a real push (see GATE_NM below) so 1.0 -> floor ~0.3 s.
+  # Axes carry the pre-35a knots (80 / 120 km/h) so a VALUE-ONLY kill restores
+  # the Phase 23/25 schedules exactly:
+  #   kill FLOOR35_V = [0.08, 0.08, 0.08, 0.05]  (== [80,140]->[0.08,0.05])
+  #   kill FULL35_V  = [110.0, 102.5, 80.0]      (== [40,120]->[110,80]; 102.5 at 60)
+  #   kill RATE_DN_FLOOR_V = [0.0, 0.0]
+  ACIGAIN_GRIP_FLOOR35_SPEEDS_KPH = [40.0, 60.0, 80.0, 140.0]
+  ACIGAIN_GRIP_FLOOR35_V          = [0.08, 0.03, 0.03, 0.03]
+  ACIGAIN_GRIP_FULL35_SPEEDS_KPH  = [40.0, 60.0, 120.0]
+  ACIGAIN_GRIP_FULL35_V           = [110.0, 80.0, 80.0]
+  ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH = [40.0, 60.0]
+  ACIGAIN_GRIP_RATE_DN_FLOOR_V    = [0.0, 0.03]
+  # The fast-descent floor must NOT engage on a resting hand: hands-off
+  # driver_tq at speed is p90 ~119 / p95 ~147 and crosses 100 about 3x per
+  # second, so a gate at the arm level (100) ran a 7.5x asymmetric ratchet
+  # hands-off (verification: hands-off mean gain -8%, diverged-low-gain
+  # exposure 1.2% -> 5.5%). Gate = driver_pressed OR driver_tq >= this level
+  # (hands-off p95 is ~147; a real grip, pressed p50 raw 421 = driver ~359,
+  # blows through it in its first frames). Measured on the same replay
+  # (0x58/0x5a, >= 60 km/h, hands-off = EPS-unpressed):
+  #   config        HO mean g  HO div>2&g<0.5  rest-band g  GRIP g  onset p50/p90
+  #   pre-35a          0.813       11.7%          0.537      0.195   0.38 / 1.50 s
+  #   gate 100 (v1)    0.778       15.4%          0.344      0.089   0.00 / 0.15 s
+  #   gate 160 (SHIP)  0.803       13.0%          0.498      0.097   0.01 / 0.18 s
+  #   pressed-only     0.821       11.3%          0.542      0.138   0.22 / 1.50 s
+  # 160 keeps the grip-side gain (onset p90 1.50 -> 0.18 s) at a ~1% hands-off
+  # cost; pressed-only preserves hands-off fully but sub-230 grips never get
+  # the fast descent (p90 back at 1.50 s). The +1.3pp diverged-low-gain
+  # exposure is the "driver wins at speed" trade the field request asked for.
+  ACIGAIN_GRIP_RATE_DN_GATE_NM    = 160.0
+  # Phase 35b: anchored post-release recovery. Hannam bridge merge (0x5a seg5,
+  # 43 -> 60 km/h): after the driver released, gain climbed at the reference
+  # 0.004/frame (post-grip taper region, |apply-wheel| 2.5-3.2 deg) for 1.1 s
+  # while the plan moved fast; the wheel lagged the plan 5-6 deg and the
+  # driver had to grab. Corpus (v >= 43 km/h, 29 clean releases): recovery to
+  # gain >= 0.6 p50 0.34 s / p90 2.13 s, max plan-wheel divergence p90 8.9 deg,
+  # while the released-wheel delivery rate stayed p90 41 deg/s — the VM jerk
+  # limit, not the gain ramp, is what bounds delivery once apply starts AT the
+  # wheel (anchor / one-shot). So within ANCHORED_RECOVERY_FRAMES after apply
+  # was last pinned to the wheel, at >= 40 km/h, the post-grip taper floor
+  # beyond 2 deg is 0.012 instead of 0.004 (3x): a "fresh chase" of the live
+  # plan from the wheel is not the stale-command slam the taper was built for.
+  # Kill: ANCHORED_RECOVERY_FRAMES = 0.
+  ANCHORED_RECOVERY_FRAMES     = 150   # 1.5 s
+  ANCHORED_RECOVERY_SPEED_KPH  = 40.0
+  ANCHORED_RECOVERY_RATE_UP    = 0.012
   # Phase 31: hold-torque model refit. The Phase 22 linear fit
   # (0.8*(122 + 132*lat_acc), cap 240) had no speed term and a slope the
   # binned corpus contradicts — settling measurement (1.1M hands-off

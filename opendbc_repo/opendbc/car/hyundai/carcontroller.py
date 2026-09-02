@@ -2,7 +2,7 @@ import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance
+from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance, get_max_angle_delta_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -128,7 +128,7 @@ def compute_hold_torque(v_ego, lat_acc):
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
-                                  post_grip=False):
+                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -273,6 +273,13 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     target = 0.0
   delta = target - last_gain
   rate_dn = np.interp(abs(steering_torque), [0, 300, 700], [0.004, 0.01, 0.04])
+  # Phase 35a: at speed a real push must drop authority promptly — the
+  # caller passes a speed-scheduled floor (0.03/frame from 60 km/h), already
+  # gated on real grip evidence (driver_pressed OR driver_tq >= GATE_NM 160),
+  # so a resting hand keeps the slow curve (verification round: a gate at the
+  # arm level 100 ratcheted hands-off authority down 8%).
+  if rate_dn_floor > 0.0:
+    rate_dn = max(rate_dn, rate_dn_floor)
   # Phase 5c B3 (commit 41a16ad): when |steering_error| > 0.5°, climb up
   # to 10× faster so ACIGain recovers from a brief grip event within
   # ~250 ms instead of 2.5 s. Below 0.5° rate_up matches the sunnypilot
@@ -296,7 +303,12 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
   # taper cut the mean hands-off recovery rate to 28% of legacy — rejected
   # in review.
   if post_grip:
-    rate_up = float(np.interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, 0.004]))
+    # Phase 35b: when apply was recently pinned to the wheel (anchor /
+    # one-shot) the >2 deg region is a fresh, VM-rate-limited chase of the
+    # live plan, not a stale command — recover 3x faster there (see
+    # values.py ANCHORED_RECOVERY_*; Hannam bridge handover case).
+    tail = CarControllerParams.ANCHORED_RECOVERY_RATE_UP if anchored_recovery else 0.004
+    rate_up = float(np.interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, tail]))
   else:
     rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
   gain = last_gain + max(-rate_dn, min(rate_up, delta))
@@ -466,6 +478,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
     # re-arm edge for the release re-anchor / boost hold-off.
     self.reanchor_arm = 0
+    # Phase 35b: frames since apply was last pinned to the wheel
+    self.frames_since_apply_anchor = 10**6
     self.reanchor_ready = False
     self.anchor_recent_frames = 0
     # Phase 30: release-edge timer for the one-shot (init large: no edge yet).
@@ -812,6 +826,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.reanchor_arm = (min(self.reanchor_arm + 1, CarControllerParams.REANCHOR_ARM_CAP_FRAMES)
                          if driver_tq >= CarControllerParams.REANCHOR_ARM_NM
                          else max(self.reanchor_arm - 1, 0))
+    self.frames_since_apply_anchor = min(self.frames_since_apply_anchor + 1, 10**6)
     # G2 review: re-arm EDGE — a fire consumes readiness, and only a genuine
     # re-grip (driver_tq back above the arm level) restores it. A pure
     # refractory let the dump repeat every 20 frames against a slow wheel
@@ -1130,6 +1145,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(np.clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+        self.frames_since_apply_anchor = 0
       elif (self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES
             and self.anchor_recent_frames > 0
             and self.reanchor_ready
@@ -1155,6 +1171,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(np.clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+        self.frames_since_apply_anchor = 0
         self.reanchor_ready = False
         self.curve_trim = 0.0
         self.trim_resid_lp = 0.0
@@ -1307,6 +1324,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(np.clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+        self.frames_since_apply_anchor = 0
 
     # MADS-driven LKA_ICON for the LKAS_ALT message:
     # MADS enabled → green icon (2), ACC main available → off-but-visible (0),
@@ -1479,6 +1497,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.apply_angle_last = float(np.clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+      self.frames_since_apply_anchor = 0
     if ccnc_lka_alt:
       # Phase 6d adds angle_passive_active to the false-reason chain
       # alongside vm_reject_persistent (Phase 5e). STEER_REQ=0 in this
@@ -1549,13 +1568,29 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       v_kph_aci = v_ego_safe * CV.MS_TO_KPH
       ho_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
                                  CarControllerParams.ACIGAIN_HANDSOFF_FLOOR_V))
-      gr_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
-                                 CarControllerParams.ACIGAIN_GRIP_FLOOR_V))
+      # Phase 35a: grip-side floor on its own schedule (0.03 from 60 km/h)
+      gr_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_FLOOR35_SPEEDS_KPH,
+                                 CarControllerParams.ACIGAIN_GRIP_FLOOR35_V))
       # Phase 25: speed-scheduled full-yield points (see values.py).
       ho_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
                                 CarControllerParams.ACIGAIN_HANDSOFF_FULL_V))
-      gr_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
-                                CarControllerParams.ACIGAIN_GRIP_FULL_V))
+      # Phase 35a: grip full-yield point 80 driver-Nm from 60 km/h (was 120)
+      gr_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_FULL35_SPEEDS_KPH,
+                                CarControllerParams.ACIGAIN_GRIP_FULL35_V))
+      grip_rate_dn_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH,
+                                           CarControllerParams.ACIGAIN_GRIP_RATE_DN_FLOOR_V))
+      # Verification round (35b): "recently pinned" alone cannot tell a fresh
+      # chase from a stale command when an invisible touch (driver_tq < arm)
+      # let the arm decay so the one-shot could not fire while the wheel
+      # walked away. A chase from a pin cannot have diverged faster than the
+      # VM step allows, so bound |apply-wheel| by vm_step x frames since the
+      # pin (+0.5 deg tolerance); beyond that the divergence is stale.
+      vm_step = min(float(get_max_angle_delta_vm(max(v_ego_safe, 1.0), self.VM, self.params)),
+                    float(self.params.ANGLE_LIMITS.MAX_ANGLE_RATE))
+      anchored_recovery = (CarControllerParams.ANCHORED_RECOVERY_FRAMES > 0
+                           and self.frames_since_apply_anchor <= CarControllerParams.ANCHORED_RECOVERY_FRAMES
+                           and v_kph_aci >= CarControllerParams.ANCHORED_RECOVERY_SPEED_KPH
+                           and abs(steering_error) <= vm_step * self.frames_since_apply_anchor + 0.5)
       # Phase 33: blindspot-gated large-correction softening. When op is
       # about to close a LARGE error (a swing that moves the car laterally
       # toward one side), and the BSM radar reports that side occupied
@@ -1587,6 +1622,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         blinker_on=blinker_on,
         grip_full=(gr_full if real_grip else ho_full),
         grip_floor=(gr_floor if real_grip else ho_floor),
+        # Phase 35a: fast descent only on grip evidence (see values.py GATE_NM)
+        rate_dn_floor=(grip_rate_dn_floor if (real_grip or driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM)
+                       else 0.0),
+        anchored_recovery=anchored_recovery,         # Phase 35b
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
         # frame (the recovery transient) — G1 review: the full 2 s memory
         # suppressed 26.1% of hands-off drift-recovery frames, worse than
