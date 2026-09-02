@@ -753,6 +753,26 @@ class TestPhase35AnchoredRecovery:
     k = next((i for i, x in enumerate(g) if x >= 0.6), None)
     assert k is None or k > 70
 
+  def test_decayed_arm_keeps_taper(self):
+    # verification round: the fast anchored recovery is gated on the arm —
+    # if the arm has decayed (an invisible touch let it run out while the
+    # wheel walked off), no one-shot can dump the stored divergence, so the
+    # command is STALE and recovery must stay on the 0.004 taper. The
+    # harness cannot hold gain low through a sub-arm touch (the error boost
+    # lifts it), so the decayed arm is set directly at the release edge.
+    def k60(tr):
+      return next((i for i, x in enumerate(tr['gain']) if x >= 0.6), 10**6)
+    def release(decay_arm):
+      sim = Sim()
+      settle(sim, v=17.0, wheel=0.0)
+      run_signal(sim, 100, v=17.0, wheel=8.0, cmd=0.0, tq=460.0)   # anchored grip, wheel 8 off plan
+      if decay_arm:
+        sim.s.reanchor_arm = 0                                     # arm ran out during an invisible touch
+      return k60(run_signal(sim, 150, v=17.0, wheel=8.0, cmd=0.0, tq=0.0))
+    fresh, stale = release(False), release(True)
+    assert fresh <= 70, fresh
+    assert stale >= fresh + 30, f"decayed-arm release recovered like a fresh one ({stale} vs {fresh})"
+
   def test_window_expires(self):
     old = P.ANCHORED_RECOVERY_FRAMES
     try:
