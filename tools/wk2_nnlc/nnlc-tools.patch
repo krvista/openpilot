@@ -1,0 +1,115 @@
+diff --git a/nnlc_tools/extract_lateral_data.py b/nnlc_tools/extract_lateral_data.py
+index 7bafb01..d15095d 100644
+--- a/nnlc_tools/extract_lateral_data.py
++++ b/nnlc_tools/extract_lateral_data.py
+@@ -51,7 +51,21 @@ def find_rlogs(input_dir):
+     files = []
+     for pattern in patterns:
+         files.extend(glob.glob(os.path.join(input_dir, pattern), recursive=True))
+-    return sorted(set(files))
++    # Natural sort so segment 2 precedes segment 10 (lexical order breaks time
++    # ordering and therefore the temporal lag/lead columns and route grouping).
++    import re as _re
++    def _natkey(path):
++        return [int(t) if t.isdigit() else t for t in _re.split(r"(\d+)", path)]
++    return sorted(set(files), key=_natkey)
++
++
++def _route_id_from_path(rlog_path):
++    """'<...>/<route>--<seg>/rlog.zst' or '<dongle>_<route>--<seg>--rlog.zst' -> '<route>'."""
++    import re
++    name = os.path.basename(os.path.dirname(rlog_path)) if os.path.basename(rlog_path).startswith("rlog") \
++        else os.path.basename(rlog_path)
++    m = re.search(r"([0-9a-f]+--[0-9a-f]+)--\d+", name)
++    return m.group(1) if m else name
+ 
+ 
+ def extract_segment(rlog_path):
+@@ -114,8 +128,16 @@ def extract_segment(rlog_path):
+                     torque_output = ps.output
+                     saturated = ps.saturated
+ 
+-                # active moved from controlsState to selfdriveState in newer openpilot
+-                if "selfdriveState" in sm:
++                # Lateral-control truth: the torque controller's own active flag (== CC.latActive).
++                # selfdriveState.active is the longitudinal/ACC system state and diverges from
++                # lateral on MADS-style forks (lateral-only engagement, or ACC on but steering
++                # inhibited below minSteerSpeed), which would mislabel torque_output==0 frames
++                # as active and drop lateral-only frames.
++                if lat_type == "torqueState":
++                    active = bool(lat_state.torqueState.active)
++                elif lat_type == "pidState":
++                    active = bool(lat_state.pidState.active)
++                elif "selfdriveState" in sm:
+                     active = sm["selfdriveState"].active
+                 else:
+                     active = getattr(ctrl, "active", getattr(ctrl, "activeDEPRECATED", False))
+@@ -169,10 +191,19 @@ def add_temporal_columns(df):
+         shift_frames = int(round(offset / dt))
+         suffix = f"_t{offset:+.1f}".replace(".", "").replace("+", "p").replace("-", "m")
+ 
++        # Rows whose shifted partner is not exactly `offset` seconds away (route
++        # boundary, dropped frames, unsorted input) get NaN instead of a value
++        # borrowed from an unrelated part of the drive; they are dropped below.
++        ts_partner = df["timestamp"].shift(-shift_frames)
++        valid = ((ts_partner - df["timestamp"]) - offset).abs() < 0.05
+         for col in temporal_cols:
+             if col in df.columns:
+-                df[f"{col}{suffix}"] = df[col].shift(-shift_frames)
++                df[f"{col}{suffix}"] = df[col].shift(-shift_frames).where(valid)
+ 
++    temporal_generated = [c for c in df.columns if any(c.startswith(t + "_t") for t in temporal_cols)]
++    before = len(df)
++    df = df.dropna(subset=temporal_generated).reset_index(drop=True)
++    print(f"Dropped {before - len(df)} rows lacking a valid temporal context (boundaries/gaps)")
+     return df
+ 
+ 
+@@ -205,13 +236,16 @@ def main():
+     all_rows = []
+     for rlog_path in tqdm(rlog_files, desc="Processing rlogs"):
+         rows = extract_segment(rlog_path)
+-        all_rows.extend(rows)
++        # Tag rows with the route id from the path (<route>--<seg>/rlog.zst) so
++        # scoring/pruning group by real routes instead of timestamp-gap guesses.
++        route_id = _route_id_from_path(rlog_path)
++        all_rows.extend(r + [route_id] for r in rows)
+ 
+     if not all_rows:
+         print("ERROR: No data extracted from any rlog files")
+         sys.exit(1)
+ 
+-    df = pd.DataFrame(all_rows, columns=COLUMNS)
++    df = pd.DataFrame(all_rows, columns=COLUMNS + ["route_id"])
+     print(f"Extracted {len(df)} rows")
+ 
+     if args.filter_overrides and "steering_pressed" in df.columns:
+diff --git a/nnlc_tools/logreader.py b/nnlc_tools/logreader.py
+index 333a030..d66cf31 100644
+--- a/nnlc_tools/logreader.py
++++ b/nnlc_tools/logreader.py
+@@ -11,7 +11,9 @@ import os
+ import capnp
+ import zstandard as zstd
+ 
+-CEREAL_DIR = os.path.join(os.path.dirname(__file__), "cereal")
++# Override with the cereal directory of the openpilot fork that produced the logs
++# (e.g. sunnypilot adds union members the bundled schema does not know).
++CEREAL_DIR = os.environ.get("NNLC_CEREAL_DIR", os.path.join(os.path.dirname(__file__), "cereal"))
+ capnp_log = capnp.load(os.path.join(CEREAL_DIR, "log.capnp"), imports=[CEREAL_DIR])
+ 
+ 
+diff --git a/nnlc_tools/score_routes.py b/nnlc_tools/score_routes.py
+index b7e5074..3220db6 100644
+--- a/nnlc_tools/score_routes.py
++++ b/nnlc_tools/score_routes.py
+@@ -74,7 +74,8 @@ def load_data_with_routes(input_path):
+         if df is None:
+             print(f"ERROR: Input not found: {input_path}")
+             sys.exit(1)
+-        return df, None
++        # Honor a route_id column written by the extractor (per-path tagging).
++        return df, ("route_id" if "route_id" in df.columns else None)
+ 
+     if os.path.isdir(input_path):
+         # Process rlogs directly — need per-file tracking for route grouping
