@@ -2,7 +2,7 @@ import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance, get_max_angle_delta_vm
+from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -1579,18 +1579,23 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                 CarControllerParams.ACIGAIN_GRIP_FULL35_V))
       grip_rate_dn_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH,
                                            CarControllerParams.ACIGAIN_GRIP_RATE_DN_FLOOR_V))
-      # Verification round (35b): "recently pinned" alone cannot tell a fresh
-      # chase from a stale command when an invisible touch (driver_tq < arm)
-      # let the arm decay so the one-shot could not fire while the wheel
-      # walked away. A chase from a pin cannot have diverged faster than the
-      # VM step allows, so bound |apply-wheel| by vm_step x frames since the
-      # pin (+0.5 deg tolerance); beyond that the divergence is stale.
-      vm_step = min(float(get_max_angle_delta_vm(max(v_ego_safe, 1.0), self.VM, self.params)),
-                    float(self.params.ANGLE_LIMITS.MAX_ANGLE_RATE))
+      # Verification round (35c): "recently pinned" alone cannot tell a fresh
+      # chase from a stale command when an INVISIBLE touch (driver_tq below
+      # the arm level) let the arm decay so the one-shot could not fire while
+      # the wheel walked away (closed-loop probe: anchor -> 1.2 s invisible
+      # touch -> release delivered 73 -> 78 deg/s with the pin alone). A
+      # VM-step bound (v1) was inert there — the stale divergence IS apply
+      # advancing at the VM rate against a still wheel, which the bound
+      # admits. The discriminator that works is the arm itself: while
+      # reanchor_arm >= ARM_FRAMES a stale divergence would have been (or
+      # will be) dumped by the one-shot, so the chase is fresh; once the arm
+      # has decayed we are in the invisible-touch window by definition. Arm
+      # decays 1/frame from 100 -> the fast tail survives ~0.7 s after a
+      # clean release, longer than the 0.48 s the Hannam recovery needs.
       anchored_recovery = (CarControllerParams.ANCHORED_RECOVERY_FRAMES > 0
                            and self.frames_since_apply_anchor <= CarControllerParams.ANCHORED_RECOVERY_FRAMES
                            and v_kph_aci >= CarControllerParams.ANCHORED_RECOVERY_SPEED_KPH
-                           and abs(steering_error) <= vm_step * self.frames_since_apply_anchor + 0.5)
+                           and self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES)
       # Phase 33: blindspot-gated large-correction softening. When op is
       # about to close a LARGE error (a swing that moves the car laterally
       # toward one side), and the BSM radar reports that side occupied
