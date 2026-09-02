@@ -2,7 +2,7 @@ import math
 from collections import deque
 
 from cereal import log
-from openpilot.common.realtime import DT_CTRL
+from openpilot.common.realtime import DT_MDL
 from openpilot.common.constants import CV
 
 
@@ -64,7 +64,9 @@ class LaneDepartureWarning:
     if CS.leftBlinker or CS.rightBlinker:
       self.last_blinker_frame = frame
 
-    recent_blinker = (frame - self.last_blinker_frame) * DT_CTRL < 5.0  # 5s blinker cooldown
+    # frame is plannerd's sm.frame (20 Hz, DT_MDL): the DT_CTRL arithmetic
+    # inherited from the controlsd-era LDW made this 5 s cooldown run 25 s
+    recent_blinker = (frame - self.last_blinker_frame) * DT_MDL < 5.0  # 5s blinker cooldown
     lane_lines = modelV2.laneLines
     probs = modelV2.laneLineProbs
 

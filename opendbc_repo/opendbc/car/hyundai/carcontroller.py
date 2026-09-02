@@ -800,9 +800,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.driver_pressed = self.driver_pressed_cnt > CarControllerParams.DRIVER_PRESSED_FRAMES
     # Phase 28 (0x41 yank fix, see values.py): override-episode memory used
     # by the release re-anchor. NOTE the arm level (100) is hands-off-
-    # reachable by design necessity (hands-off driver_tq p75 = 111) — the
-    # arm alone has no effect; firing additionally requires a recent REAL
-    # anchor episode (anchor_recent) and a stored divergence.
+    # reachable by design necessity (hands-off driver_tq p75 = 111). The
+    # one-shot needs a recent REAL anchor episode (anchor_recent) and a
+    # stored divergence on top of the arm; the arm ALONE does feed the
+    # Phase 29 post_grip recovery taper (see the ACIGain call). Measured on
+    # 0x58/0x5b (Phase 34 build, hands-off >= 6 m/s): arm>=30 covers 27.6%
+    # of hands-off frames, but a counterfactual replay raising the arm level
+    # to 150/180 left the "diverged >= 3 deg with gain < 0.5" exposure
+    # unchanged (18.3 -> 18.0 -> 18.0%) — that exposure is the yield curve
+    # on resting hands (driver_tq 30-140), not the taper, so the level stays.
     self.reanchor_arm = (min(self.reanchor_arm + 1, CarControllerParams.REANCHOR_ARM_CAP_FRAMES)
                          if driver_tq >= CarControllerParams.REANCHOR_ARM_NM
                          else max(self.reanchor_arm - 1, 0))
