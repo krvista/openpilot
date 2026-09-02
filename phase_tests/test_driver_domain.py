@@ -654,3 +654,112 @@ class TestLatPassiveIndicated:
     sim = Sim()
     run_signal(sim, 10, v=1.0, wheel=0.0, gear='reverse')
     assert sim.s.lat_passive_indicated
+
+
+class TestPhase35GripAtSpeed:
+  # 35a: at >= 60 km/h a real push drops authority fast and deep; city unchanged.
+  def _grip(self, v, frames=40, tq=460.0):
+    sim = Sim()
+    settle(sim, v=v, wheel=0.0)
+    run_signal(sim, 200, v=v, wheel=0.0, cmd=0.0, tq=0.0)      # gain at ceiling
+    g0 = sim.s.aci_gain_last
+    tr = run_signal(sim, frames, v=v, wheel=0.0, cmd=0.0, tq=tq)  # EPS-pressed grip
+    return g0, tr['gain']
+
+  def test_highway_grip_drops_fast_and_deep(self):
+    g0, g = self._grip(v=22.0)                                     # 79 km/h
+    assert g0 > 0.7
+    assert g[29] <= 0.10, f"gain after 0.3 s of grip = {g[29]:.3f}"   # ~0.03/frame drop
+    assert min(g) <= 0.03 + 0.004 + 1e-6                           # floor 0.03 (0.004 quantizer)
+
+  def test_city_grip_unchanged(self):
+    g0, g = self._grip(v=11.0, frames=60)                          # 40 km/h (schedule start; below = passthrough in harness)
+    assert g[29] > 0.15, "city drop rate must keep the slow legacy curve"
+    assert min(g) >= 0.08 - 1e-6                                   # floor 0.08 kept
+
+  def test_resting_hand_keeps_slow_curve_at_speed(self):
+    # driver_tq below the descent gate: rate_dn floor must NOT apply
+    g0, g = self._grip(v=22.0, tq=140.0)                           # driver_tq ~78 at 22 m/s
+    assert g[29] > 0.5
+
+  def test_resting_hand_crossing_gate_band_no_ratchet(self):
+    # verification round: hands-off driver_tq crosses 100 ~3x/s at speed. A
+    # descent gate at 100 ran a 7.5x asymmetric ratchet (mean hands-off gain
+    # -8%). Drive driver_tq across 100-150 at 3 Hz for 3 s: mean gain must
+    # stay near the untouched level (gate is pressed OR >= 160).
+    import math
+    sim = Sim()
+    settle(sim, v=22.0, wheel=0.0)
+    run_signal(sim, 200, v=22.0, wheel=0.0, cmd=0.0, tq=0.0)
+    g_ref = sim.s.aci_gain_last
+    comp = sim.s.hold_comp_last
+    tr = run_signal(sim, 300, v=22.0, wheel=0.0, cmd=0.0,
+                    tq_fn=lambda i: comp + 125.0 + 25.0 * math.sin(2 * math.pi * 3.0 * i * 0.01))
+    g = tr['gain']
+    assert not sim.s.driver_pressed
+    # the yield curve itself lowers gain in this band by design (Phase 22);
+    # the assertion is that 35a adds NO ratchet on top: compare against the
+    # same scenario with the descent floor killed.
+    old = P.ACIGAIN_GRIP_RATE_DN_FLOOR_V
+    try:
+      P.ACIGAIN_GRIP_RATE_DN_FLOOR_V = [0.0, 0.0]
+      sim2 = Sim()
+      settle(sim2, v=22.0, wheel=0.0)
+      run_signal(sim2, 200, v=22.0, wheel=0.0, cmd=0.0, tq=0.0)
+      tr2 = run_signal(sim2, 300, v=22.0, wheel=0.0, cmd=0.0,
+                       tq_fn=lambda i: comp + 125.0 + 25.0 * math.sin(2 * math.pi * 3.0 * i * 0.01))
+    finally:
+      P.ACIGAIN_GRIP_RATE_DN_FLOOR_V = old
+    m35, m0 = sum(g) / len(g), sum(tr2['gain']) / len(tr2['gain'])
+    assert m35 >= 0.97 * m0, f"ratchet: mean gain {m35:.3f} vs no-floor {m0:.3f}"
+    assert g_ref > 0.7
+
+  def test_kill_switch_restores_phase25_schedule(self):
+    # value-only kill must reproduce the pre-35a Phase 23/25 schedules: at
+    # 120 km/h floor 0.06 (= [80,140]->[0.08,0.05]) and full 80; slow descent.
+    old = (P.ACIGAIN_GRIP_RATE_DN_FLOOR_V, P.ACIGAIN_GRIP_FLOOR35_V, P.ACIGAIN_GRIP_FULL35_V)
+    try:
+      P.ACIGAIN_GRIP_RATE_DN_FLOOR_V = [0.0, 0.0]
+      P.ACIGAIN_GRIP_FLOOR35_V = [0.08, 0.08, 0.08, 0.05]
+      P.ACIGAIN_GRIP_FULL35_V = [110.0, 102.5, 80.0]
+      g0, g = self._grip(v=33.3, frames=120)                       # 120 km/h
+      assert g[29] > 0.15                                          # no fast descent
+      assert abs(min(g) - 0.06) <= 0.004 + 1e-6, f"floor {min(g):.3f} != Phase 25 0.06"
+    finally:
+      P.ACIGAIN_GRIP_RATE_DN_FLOOR_V, P.ACIGAIN_GRIP_FLOOR35_V, P.ACIGAIN_GRIP_FULL35_V = old
+
+
+class TestPhase35AnchoredRecovery:
+  # 35b: after a released grip at >= 40 km/h the recovery from the wheel is 3x
+  # faster in the >2 deg region; the delivery stays VM-bounded.
+  def _release(self, v):
+    sim = Sim()
+    settle(sim, v=v, wheel=0.0)
+    run_signal(sim, 100, v=v, wheel=10.0, cmd=0.0, tq=460.0)      # driver holds 10 deg off plan (anchored)
+    tr = run_signal(sim, 150, v=v, wheel=10.0, cmd=0.0, tq=0.0)   # release, plan still 10 deg away
+    return tr
+
+  def test_recovery_faster_at_speed(self):
+    tr = self._release(v=17.0)                                     # 61 km/h
+    g = tr['gain']
+    k = next((i for i, x in enumerate(g) if x >= 0.6), None)
+    assert k is not None and k <= 70, f"gain reached 0.6 at frame {k}"
+    d = [abs(b - a) for a, b in zip(tr['apply'], tr['apply'][1:])]
+    assert max(d) <= 0.6, f"apply step {max(d):.2f} deg/frame — delivery must stay VM-bounded"
+
+  def test_recovery_legacy_below_40kph(self):
+    tr = self._release(v=8.0)                                      # 29 km/h
+    g = tr['gain']
+    k = next((i for i, x in enumerate(g) if x >= 0.6), None)
+    assert k is None or k > 70
+
+  def test_window_expires(self):
+    old = P.ANCHORED_RECOVERY_FRAMES
+    try:
+      P.ANCHORED_RECOVERY_FRAMES = 0                               # kill switch
+      tr = self._release(v=17.0)
+      g = tr['gain']
+      k = next((i for i, x in enumerate(g) if x >= 0.6), None)
+      assert k is None or k > 70
+    finally:
+      P.ANCHORED_RECOVERY_FRAMES = old
