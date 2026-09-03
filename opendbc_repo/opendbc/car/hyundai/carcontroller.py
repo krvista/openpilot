@@ -1692,6 +1692,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                         CarControllerParams.ACIGAIN_RATE_UP_CAP_V))
       rate_up_cap_rain = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
                                          CarControllerParams.ACIGAIN_RATE_UP_CAP_RAIN_V))
+      # Phase 37c: yield-curve start by speed (resting hand keeps the assist at speed)
+      grip_start_dry = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_START_SPEEDS_KPH,
+                                       CarControllerParams.ACIGAIN_GRIP_START_V))
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
@@ -1702,11 +1705,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         rate_dn_floor=(grip_rate_dn_floor if (real_grip or driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM)
                        else 0.0),
         curve_deg=self.curve_meas_lp,                # Phase 36
-        # Phase 37a: speed-tapered rise cap, one step tighter in rain; rain
-        # also moves the yield-curve start down so a firm hand wins sooner
+        # Phase 37a: speed-tapered rise cap, one step tighter in rain; 37c:
+        # yield-curve start by speed, pinned back to the city value in rain
         rate_up_cap=(rate_up_cap_dry + self.rain_w * (rate_up_cap_rain - rate_up_cap_dry)),
-        grip_start=(CarControllerParams.ACIGAIN_GRIP_START_NM
-                    + self.rain_w * (CarControllerParams.ACIGAIN_GRIP_START_RAIN_NM - CarControllerParams.ACIGAIN_GRIP_START_NM)),
+        grip_start=(grip_start_dry + self.rain_w * (CarControllerParams.ACIGAIN_GRIP_START_RAIN_NM - grip_start_dry)),
         anchored_recovery=anchored_recovery,         # Phase 35b
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
         # frame (the recovery transient) — G1 review: the full 2 s memory

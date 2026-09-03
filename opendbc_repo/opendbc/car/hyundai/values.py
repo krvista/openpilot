@@ -473,7 +473,7 @@ class CarControllerParams:
   #     planned (op-driven) frames would be clipped 0.8% @80-100 by 2.5.
   #     100 km/h: 16 -> 11 deg/s.
   # RAIN tables (blended by the wiper-derived rain weight, see RAIN_*): one
-  # step tighter, plus an earlier yield start so a firm hand wins sooner.
+  # step tighter, plus the yield start pinned at the city value (37c).
   # Kill: RATE_UP_CAP_V = [0.04, 0.04]; RECOVERY_JERK_CAP_V = [3.59, 3.59].
   ACIGAIN_RATE_UP_CAP_SPEEDS_KPH = [60.0, 100.0]
   ACIGAIN_RATE_UP_CAP_V          = [0.04, 0.012]
@@ -482,8 +482,22 @@ class CarControllerParams:
   RECOVERY_JERK_CAP_V            = [3.59, 2.5]    # m/s^3 (3.59 == panda limit -> no-op)
   RECOVERY_JERK_CAP_RAIN_V       = [2.5, 1.5]
   RECOVERY_JERK_CAP_FRAMES       = 300            # recovery window after an apply anchor
-  ACIGAIN_GRIP_START_NM          = 30.0           # yield-curve start (dry)
-  ACIGAIN_GRIP_START_RAIN_NM     = 20.0
+  # Phase 37c: yield-curve START moved up at speed so a RESTING hand does not
+  # trim the assist. Replay 0x58-0x5d, >= 60 km/h, start 30 -> 50 Nm: hands-off
+  # frames in the 30-50 Nm band (7.8% of hands-off time) mean gain 0.784 ->
+  # 0.819, 50-80 band 0.714 -> 0.764; grip onset (gain < 0.2 after pressed)
+  # p50 0.05 -> 0.06 s, p90 0.38 -> 0.80 s — the firm-grip path (GATE_NM 160 /
+  # DRIVER_PRESSED) is untouched, only slow crossings of 50-80 Nm yield later.
+  # Grip path at >= 60 km/h spans 50 -> 80 (was 30 -> 80, 1.7x steeper) but
+  # only runs on driver_pressed, which crosses it in a fraction of a second
+  # under the 35a rate_dn floor; hands-off dither measured on the corpus
+  # (gain reversals/s, all bands) fell 18% with the new start, bounded by
+  # rate_dn ~0.005/frame at 60-70 Nm, not by the slope.
+  # Speed table keeps the city value (30) below 40 km/h. Rain: 30 at all
+  # speeds (field decision: 30, not 20). Kill: GRIP_START_V = [30, 30].
+  ACIGAIN_GRIP_START_SPEEDS_KPH  = [40.0, 60.0]
+  ACIGAIN_GRIP_START_V           = [30.0, 50.0]
+  ACIGAIN_GRIP_START_RAIN_NM     = 30.0
   # Rain mode input: front-wiper switch state from ECAN 0x35c byte 18 bit 0
   # (CCNC_WIPER.FRONT_WIPER_ON). 2026-09-01 rain routes (0x58/0x59): bit held
   # 1 for 42 min / 24 min with zero toggles from the moment the windshield got
