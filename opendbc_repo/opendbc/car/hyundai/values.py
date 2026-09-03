@@ -259,6 +259,21 @@ class CarControllerParams:
   BLIND_CORR_ERR_DEG         = 3.0
   BLIND_CORR_ERR_RELEASE_DEG = 2.0   # hysteresis: engage 3.0, hold to 2.0
   BLIND_HOLD_FRAMES          = 100
+  # Phase 37b: no blinker CONCESSION toward an occupied side. With the blinker
+  # on, the driver-override thresholds drop (DEADZONE 45 / FULL 100-150), the
+  # ACIGain ceiling falls to 0.28-0.45 and the blinker anchor hands the wheel
+  # over at 120 Nm — a resting hand then drifts the car across. When the BSM
+  # radar reports the blinker side occupied (BLIND_HOLD debounce), all three
+  # stay at their non-blinker values: op keeps the lane unless the driver
+  # really grips (DRIVER_PRESSED / non-blinker override). 0x58-0x5d: 4 of 51
+  # same-side blinker+BSM episodes, all resolved by the driver waiting for the
+  # radar to clear — so this costs nothing on the corpus. If the anchor is
+  # already ACTIVE when the side becomes occupied, its effect stops in one
+  # frame (heavy_grip_anchor needs override_factor >= 0.9, computed from the
+  # concession-selected thresholds); the flag itself lingers inert for the
+  # release debounce, and the re-assert runs under the 37a recovery caps
+  # (frames_since_apply_anchor == 0, gain <= 0.012/frame). Kill: False.
+  BSM_BLINKER_NO_CONCESSION  = True
   # Phase 13a: low-speed (<20 km/h) scenario gate + offset-proof grip signal.
   # Routes 0x2a-0x2d (first build with Phase 11): below 20 km/h the passthrough
   # latch keyed on `hands_off` (override_factor <= 0.5), whose low-V full-override

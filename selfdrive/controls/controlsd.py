@@ -14,6 +14,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.bsm_guard import BsmLaneGuard, BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -184,6 +185,7 @@ class Controls(ControlsExt):
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
+    self.bsm_guard = BsmLaneGuard(DT_CTRL)   # Phase 37b
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
     self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
@@ -389,6 +391,7 @@ class Controls(ControlsExt):
 
     if not CC.latActive:
       self.LaC.reset()
+      self.bsm_guard.reset()   # Phase 37b: guard hold counter
     if not CC.longActive:
       self.LoC.reset()
 
@@ -460,11 +463,11 @@ class Controls(ControlsExt):
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
 
       # Lane-departure protection: when blinker is OFF, do not let op steer
-      # FURTHER into a lane line that the stock LKAS has flagged as departing.
-      # Use driverAssistance.{left,right}LaneDeparture (from camera ECU) — these
-      # only trigger near solid/edge lines, so gating on them avoids interfering
-      # with normal lane following. With blinker on, the driver intends a lane
-      # change so the gate is relaxed.
+      # FURTHER into a lane line flagged as departing. The input is
+      # driverAssistance.{left,right}LaneDeparture, published by plannerd from
+      # ldw.py (op-active predictor: sustained monotonic approach < 0.7 m) —
+      # NOT the camera ECU (comment corrected, Phase 37b). With blinker on,
+      # the driver intends a lane change so the gate is relaxed.
       blinker_on = bool(CS.leftBlinker or CS.rightBlinker)
       if not blinker_on and self.sm.valid['driverAssistance']:
         da = self.sm['driverAssistance']
@@ -473,6 +476,27 @@ class Controls(ControlsExt):
         if (da.leftLaneDeparture and new_desired_curvature < self.desired_curvature) or \
            (da.rightLaneDeparture and new_desired_curvature > self.desired_curvature):
           new_desired_curvature = self.desired_curvature
+      # Phase 37b: BSM lane guard — radar-occupied side + lane line close on
+      # that side + no blinker toward it -> hold curvature (see bsm_guard.py).
+      # Called EVERY active frame (no BSM short-circuit) so the hold-timeout
+      # counter resets on the first unblocked frame — review: a short-circuit
+      # latched an exhausted counter across the BSM-off gap and silently
+      # left the next episode unguarded.
+      if BSM_LANE_GUARD_M > 0.0:
+        try:
+          _lls = model_v2.laneLines
+          _lp = model_v2.laneLineProbs
+          if len(_lls) >= 3 and len(_lp) >= 3 and len(_lls[1].y) > 0 and len(_lls[2].y) > 0:
+            new_desired_curvature, _ = self.bsm_guard.update(
+              new_desired_curvature, self.desired_curvature,
+              bool(CS.leftBlindspot), bool(CS.rightBlindspot),
+              bool(CS.leftBlinker), bool(CS.rightBlinker),
+              float(_lls[1].y[0]), float(_lls[2].y[0]), float(_lp[1]), float(_lp[2]),
+              BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB)
+          else:
+            self.bsm_guard.reset()
+        except (IndexError, TypeError, ValueError):
+          self.bsm_guard.reset()
 
     # Temporal command smoothing w/ lead compensation (see constants). Applied AFTER
     # confidence damping / lane-departure and BEFORE clip_curvature, so ISO lateral

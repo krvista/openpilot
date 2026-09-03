@@ -10,6 +10,20 @@ TurnDirection = custom.ModelDataV2SP.TurnDirection
 
 LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
+# Phase 37b: abort a lane change already in progress when the BSM radar
+# reports the target side occupied. Upstream only gates the START
+# (preLaneChange); once laneChangeStarting is reached the blindspot is never
+# re-checked. The abort drops to `off` (desire none, lane keeping resumes in
+# whichever lane the car is in) and does NOT re-arm until the blinker is
+# cycled (the `off` branch needs a fresh blinker edge). Only while the
+# crossing is YOUNG (lane_change_timer < ABORT_MAX_S): laneChangeStarting can
+# persist for several seconds, and aborting at 2.5 s would leave the car
+# past the line settling into the occupied lane with no memory of where it
+# came from — a late detection runs on to laneChangeFinishing instead.
+# Corpus: 619 BSM-on episodes, min duration 0.35 s -> the radar already
+# debounces, no extra frame filter. Kill: False.
+LANE_CHANGE_BSM_ABORT = True
+LANE_CHANGE_BSM_ABORT_MAX_S = 1.0
 
 DESIRES = {
   LaneChangeDirection.none: {
@@ -101,12 +115,20 @@ class DesireHelper:
 
       # LaneChangeState.laneChangeStarting
       elif self.lane_change_state == LaneChangeState.laneChangeStarting:
-        # fade out over .5s
-        self.lane_change_ll_prob = max(self.lane_change_ll_prob - 2 * DT_MDL, 0.0)
+        bsm_on_target = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
+                         (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
+        if LANE_CHANGE_BSM_ABORT and bsm_on_target and self.lane_change_timer < LANE_CHANGE_BSM_ABORT_MAX_S:
+          # Phase 37b: occupied mid-change -> abort (see constant above)
+          self.lane_change_state = LaneChangeState.off
+          self.lane_change_direction = LaneChangeDirection.none
+          self.lane_change_ll_prob = 1.0
+        else:
+          # fade out over .5s
+          self.lane_change_ll_prob = max(self.lane_change_ll_prob - 2 * DT_MDL, 0.0)
 
-        # 98% certainty
-        if lane_change_prob < 0.02 and self.lane_change_ll_prob < 0.01:
-          self.lane_change_state = LaneChangeState.laneChangeFinishing
+          # 98% certainty
+          if lane_change_prob < 0.02 and self.lane_change_ll_prob < 0.01:
+            self.lane_change_state = LaneChangeState.laneChangeFinishing
 
       # LaneChangeState.laneChangeFinishing
       elif self.lane_change_state == LaneChangeState.laneChangeFinishing:

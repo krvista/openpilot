@@ -484,6 +484,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.blind_left_hold = 0
     self.blind_right_hold = 0
     self.blind_caution_on = False
+    self.blinker_concession = False
     # Phase 37a rain mode: wiper debounce counters and the ramped weight 0..1
     self.wiper_on_frames = 0
     self.wiper_off_frames = 0
@@ -870,6 +871,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                             else max(self.blind_left_hold - 1, 0))
     self.blind_right_hold = (CarControllerParams.BLIND_HOLD_FRAMES if bool(CS.out.rightBlindspot)
                              else max(self.blind_right_hold - 1, 0))
+    # Phase 37b: blinker concessions (override thresholds, ceiling, anchor)
+    # are withheld when the blinker side is BSM-occupied (see values.py).
+    blinker_toward_bsm = ((bool(CS.out.leftBlinker) and self.blind_left_hold > 0)
+                          or (bool(CS.out.rightBlinker) and self.blind_right_hold > 0))
+    blinker_concession = blinker_on and not (CarControllerParams.BSM_BLINKER_NO_CONCESSION and blinker_toward_bsm)
+    self.blinker_concession = blinker_concession
     # Phase 37a rain mode: front-wiper switch (CCNC_WIPER) -> debounced flag
     # -> ramped weight. Unknown/stale input counts as OFF (conservative).
     wiper_on = bool(getattr(CS, "wiper_front_on", False)) and not bool(getattr(CS, "wiper_stale", True))
@@ -896,7 +903,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # point sits inside the column-torque offset; the latch now enters on
     # debounced steeringPressed and releases on a sustained sub-260 Nm.)
     if ccnc_lka_alt:
-      if blinker_on:
+      if blinker_concession:
         DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE_ANGLE_BLINKER
         override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V_BLINKER
         override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V_BLINKER
@@ -947,11 +954,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # measured rolling-passive bar level (p50 147-233 Nm), self-firing
     # hands-off. The keep/release path is left ungated so an episode that
     # legitimately fired op-active still ends on the driver's let-go.
-    blinker_anchor_raw = (blinker_on and self.prev_eff_lat_active
+    blinker_anchor_raw = (blinker_concession and self.prev_eff_lat_active
                           and driver_tq >= CarControllerParams.BLINKER_ANCHOR_TORQUE_NM)
     if self.blinker_anchor_on:
       self.blinker_anchor_hold += 1
-      keep = blinker_on and driver_tq >= CarControllerParams.BLINKER_ANCHOR_RELEASE_NM
+      keep = blinker_concession and driver_tq >= CarControllerParams.BLINKER_ANCHOR_RELEASE_NM
       # Phase 14-2b: the release was a SINGLE sub-180 frame (vs the 3-frame
       # debounced fire) — asymmetric, so offset-band noise (100-300 Nm,
       # 1-5 Hz) still flapped the anchor at 2-3 transitions/s in sim, the
@@ -1688,7 +1695,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
-        blinker_on=blinker_on,
+        blinker_on=blinker_concession,               # Phase 37b: no ceiling drop toward BSM
         grip_full=(gr_full if real_grip else ho_full),
         grip_floor=(gr_floor if real_grip else ho_floor),
         # Phase 35a: fast descent only on grip evidence (see values.py GATE_NM)

@@ -83,7 +83,7 @@ def mk_controls():
   s.sm = _SM({
     'carState': types.SimpleNamespace(vEgo=20.0, steeringAngleDeg=0.0, standstill=False,
                                       steerFaultTemporary=False, steerFaultPermanent=False,
-                                      leftBlinker=False, rightBlinker=False, vCruise=100.0,
+                                      leftBlinker=False, rightBlinker=False, leftBlindspot=False, rightBlindspot=False, vCruise=100.0,
                                       vCruiseCluster=100.0, canValid=True, steeringPressed=False),
     'liveParameters': types.SimpleNamespace(stiffnessFactor=1.0, steerRatio=15.0, angleOffsetDeg=0.0, roll=0.0),
     'liveDelay': types.SimpleNamespace(lateralDelay=0.2),
