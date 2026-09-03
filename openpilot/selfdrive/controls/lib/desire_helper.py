@@ -11,6 +11,20 @@ TurnDirection = custom.ModelDataV2SP.TurnDirection
 LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
 LANE_CHANGE_START_TIME = 0.5
+# Phase 37b: abort a lane change already in progress when the BSM radar
+# reports the target side occupied. Upstream only gates the START
+# (preLaneChange); once laneChangeStarting is reached the blindspot is never
+# re-checked. The abort drops to `off` (desire none, lane keeping resumes in
+# whichever lane the car is in) and does NOT re-arm until the blinker is
+# cycled (the `off` branch needs a fresh blinker edge). Only while the
+# crossing is YOUNG (lane_change_timer < ABORT_MAX_S): laneChangeStarting can
+# persist for several seconds, and aborting at 2.5 s would leave the car
+# past the line settling into the occupied lane with no memory of where it
+# came from — a late detection runs on to completion instead.
+# Corpus: 619 BSM-on episodes, min duration 0.35 s -> the radar already
+# debounces, no extra frame filter. Kill: False.
+LANE_CHANGE_BSM_ABORT = True
+LANE_CHANGE_BSM_ABORT_MAX_S = 1.0
 
 TURN_DESIRES = {
   TurnDirection.none: log.Desire.none,
@@ -79,8 +93,15 @@ class DesireHelper:
 
       elif self.lane_change_state == LaneChangeState.laneChangeStarting:
         self.lane_change_timer += DT_MDL
+        bsm_on_target = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
+                         (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
 
-        if lane_change_prob < 0.02 and self.lane_change_timer >= LANE_CHANGE_START_TIME:
+        if LANE_CHANGE_BSM_ABORT and bsm_on_target and self.lane_change_timer < LANE_CHANGE_BSM_ABORT_MAX_S:
+          # Phase 37b: occupied mid-change -> abort (see constant above)
+          self.lane_change_state = LaneChangeState.off
+          self.lane_change_direction = LaneChangeDirection.none
+          self.lane_change_timer = 0.0
+        elif lane_change_prob < 0.02 and self.lane_change_timer >= LANE_CHANGE_START_TIME:
           self.lane_change_timer = 0.0
           if one_blinker:
             self.lane_change_state = LaneChangeState.preLaneChange
