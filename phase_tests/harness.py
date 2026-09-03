@@ -94,7 +94,8 @@ class Sim:
   def step(self, v=15.0, tq=0.0, wheel=0.0, cmd=0.0, lat_active=True,
            pressed=None, blinker=False, lead_dist=None, gear='drive',
            door=False, belt=False, standstill=None, cruise_available=True,
-           v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0):
+           v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
+           wiper=False, wiper_stale=False, blinker_right=False):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -104,6 +105,7 @@ class Sim:
     out.steeringAngleDeg = float(wheel)
     out.steeringRateDeg = float(wheel_rate)
     out.leftBlinker = bool(blinker)
+    out.rightBlinker = bool(blinker_right)
     out.leftBlindspot = bool(bs_l)
     out.rightBlindspot = bool(bs_r)
     out.doorOpen = bool(door)
@@ -127,7 +129,8 @@ class Sim:
 
     CS = types.SimpleNamespace(out=out, lkas_alt_cam_msg=cam, fault_lfa=0,
                                msg_161=None, lfa_block_msg=None, is_metric=True,
-                               main_cruise_enabled=True)
+                               main_cruise_enabled=True,
+                               wiper_front_on=bool(wiper), wiper_stale=bool(wiper_stale))
 
     CC = structs.CarControl()
     CC.latActive = bool(lat_active)
