@@ -105,6 +105,7 @@ def mk_controls():
   s.steer_limited_by_safety = False
   s.curvature = s.desired_curvature = s.predicted_lat_accel_ratio = 0.0
   s._lat_cmd_lp = s._klane_lp = s._absdc_slow = 0.0
+  s.bsm_guard = cd.BsmLaneGuard(0.01)   # Phase 37b (Controls built via __new__)
   s._model_nonfinite_frames = 0
   return s
 
