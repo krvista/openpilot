@@ -373,6 +373,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       # OEM stock LFA wheel button press surfaces as a one-frame (~20 ms) ACK
       # pulse on the camera-sent LKAS_ALT.LFA_BUTTON bit, not on LDA_BTN.
       self.lfa_button_oem = int(self.lkas_alt_cam_msg["LFA_BUTTON"])
+      # Phase 37a rain input: front-wiper switch state (ECAN 0x35c byte 18
+      # bit 0, see CCNC_WIPER in the DBC). Not part of canValid (alive/counter
+      # ignored below); staleness is judged against the 100 Hz MDPS timestamp
+      # so a silent message reads as "unknown" -> rain mode off.
+      self.wiper_front_on = bool(cp.vl["CCNC_WIPER"]["FRONT_WIPER_ON"])
+      _ts_w = cp.ts_nanos["CCNC_WIPER"]["FRONT_WIPER_ON"]
+      _ts_ref = cp.ts_nanos["MDPS"]["STEERING_COL_TORQUE"]
+      self.wiper_stale = (_ts_w == 0) or (_ts_ref - _ts_w > CarControllerParams.RAIN_STALE_NS)
 
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
@@ -410,7 +418,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if CP.flags & HyundaiFlags.CCNC:
       msgs += [("ACCELERATOR", 50), ("MANUAL_SPEED_LIMIT_ASSIST", 5)]
       if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
-        msgs += [("CCNC_0x162", 20)]
+        msgs += [("CCNC_0x162", 20), ("CCNC_WIPER", 5)]
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
@@ -421,6 +429,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       skip_addrs = [0x35, 0x2E0]  # ACCELERATOR, MANUAL_SPEED_LIMIT_ASSIST
       if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
         skip_addrs.append(0x162)  # CCNC_0x162
+        skip_addrs.append(0x35c)  # CCNC_WIPER (Phase 37a; never gates canValid)
       for addr in skip_addrs:
         if addr in parsers[Bus.pt].message_states:
           parsers[Bus.pt].message_states[addr].ignore_counter = True

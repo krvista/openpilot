@@ -444,6 +444,42 @@ class CarControllerParams:
   ACIGAIN_CURVE_MEAS_TAU_RISE_S    = 0.15
   ACIGAIN_CURVE_MEAS_TAU_FALL_S    = 0.5
   ACIGAIN_CURVE_MEAS_MAX_RISE_DPS  = 27.0    # ramp-input rise slew cap (deg/s)
+  # Phase 37a: high-speed RECOVERY softening ("correct the error over a longer
+  # time at speed"). Two levers, both inert on planned driving:
+  # (1) ACIGain rise-rate cap tapered with speed. The 0.04/frame rise (full
+  #     authority in 0.25 s) is what lets a post-release correction snap at
+  #     highway speed; 0x58-0x5d clean releases >= 60 km/h: gain 0.2 -> 0.8 in
+  #     p50 0.4 s, wheel jerk p50 2.6 m/s^3 (n=6), 105 km/h case 15 deg/s.
+  #     Cap 0.04 @60 -> 0.012 @100 km/h stretches the recovery to ~1 s. The
+  #     35b anchored tail (0.012) sits under the cap everywhere.
+  # (2) command lateral-jerk cap inside the recovery window (<= 3 s after an
+  #     anchor): 3.59 (panda) @60 -> 2.5 m/s^3 @80+ km/h. Corpus: recovery
+  #     frames sat AT the panda cap 41% of the time at 100+ km/h (0x58-0x5b),
+  #     planned (op-driven) frames would be clipped 0.8% @80-100 by 2.5.
+  #     100 km/h: 16 -> 11 deg/s.
+  # RAIN tables (blended by the wiper-derived rain weight, see RAIN_*): one
+  # step tighter, plus an earlier yield start so a firm hand wins sooner.
+  # Kill: RATE_UP_CAP_V = [0.04, 0.04]; RECOVERY_JERK_CAP_V = [3.59, 3.59].
+  ACIGAIN_RATE_UP_CAP_SPEEDS_KPH = [60.0, 100.0]
+  ACIGAIN_RATE_UP_CAP_V          = [0.04, 0.012]
+  ACIGAIN_RATE_UP_CAP_RAIN_V     = [0.02, 0.008]
+  RECOVERY_JERK_CAP_SPEEDS_KPH   = [60.0, 80.0]
+  RECOVERY_JERK_CAP_V            = [3.59, 2.5]    # m/s^3 (3.59 == panda limit -> no-op)
+  RECOVERY_JERK_CAP_RAIN_V       = [2.5, 1.5]
+  RECOVERY_JERK_CAP_FRAMES       = 300            # recovery window after an apply anchor
+  ACIGAIN_GRIP_START_NM          = 30.0           # yield-curve start (dry)
+  ACIGAIN_GRIP_START_RAIN_NM     = 20.0
+  # Rain mode input: front-wiper switch state from ECAN 0x35c byte 18 bit 0
+  # (CCNC_WIPER.FRONT_WIPER_ON). 2026-09-01 rain routes (0x58/0x59): bit held
+  # 1 for 42 min / 24 min with zero toggles from the moment the windshield got
+  # wet to arrival; four dry routes (~3 h): never set. Debounced ON 5 s / OFF
+  # 60 s, message stale > 1 s -> off, and the weight RAMPS (no step): up
+  # tau 3 s, down tau 10 s. Kill: RAIN_WIPER_ON_FRAMES = 10**9.
+  RAIN_WIPER_ON_FRAMES   = 500
+  RAIN_WIPER_OFF_FRAMES  = 6000
+  RAIN_STALE_NS          = int(1.0e9)
+  RAIN_RAMP_UP_TAU_S     = 3.0
+  RAIN_RAMP_DN_TAU_S     = 10.0
   # Phase 35b: anchored post-release recovery. Hannam bridge merge (0x5a seg5,
   # 43 -> 60 km/h): after the driver released, gain climbed at the reference
   # 0.004/frame (post-grip taper region, |apply-wheel| 2.5-3.2 deg) for 1.1 s

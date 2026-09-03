@@ -128,7 +128,7 @@ def compute_hold_torque(v_ego, lat_acc):
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
-                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0):
+                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0, rate_up_cap=0.04):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -319,6 +319,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     rate_up = float(np.interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, tail]))
   else:
     rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
+  rate_up = min(rate_up, rate_up_cap)   # Phase 37a: speed/rain-tapered rise cap
   gain = last_gain + max(-rate_dn, min(rate_up, delta))
   return round(gain / 0.004) * 0.004
 
@@ -483,6 +484,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.blind_left_hold = 0
     self.blind_right_hold = 0
     self.blind_caution_on = False
+    # Phase 37a rain mode: wiper debounce counters and the ramped weight 0..1
+    self.wiper_on_frames = 0
+    self.wiper_off_frames = 0
+    self.rain_active = False
+    self.rain_w = 0.0
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
     # re-arm edge for the release re-anchor / boost hold-off.
     self.reanchor_arm = 0
@@ -864,6 +870,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                             else max(self.blind_left_hold - 1, 0))
     self.blind_right_hold = (CarControllerParams.BLIND_HOLD_FRAMES if bool(CS.out.rightBlindspot)
                              else max(self.blind_right_hold - 1, 0))
+    # Phase 37a rain mode: front-wiper switch (CCNC_WIPER) -> debounced flag
+    # -> ramped weight. Unknown/stale input counts as OFF (conservative).
+    wiper_on = bool(getattr(CS, "wiper_front_on", False)) and not bool(getattr(CS, "wiper_stale", True))
+    if wiper_on:
+      self.wiper_on_frames = min(self.wiper_on_frames + 1, 10**6); self.wiper_off_frames = 0
+    else:
+      self.wiper_off_frames = min(self.wiper_off_frames + 1, 10**6); self.wiper_on_frames = 0
+    if self.wiper_on_frames >= CarControllerParams.RAIN_WIPER_ON_FRAMES:
+      self.rain_active = True
+    elif self.wiper_off_frames >= CarControllerParams.RAIN_WIPER_OFF_FRAMES:
+      self.rain_active = False
+    _rt = CarControllerParams.RAIN_RAMP_UP_TAU_S if self.rain_active else CarControllerParams.RAIN_RAMP_DN_TAU_S
+    self.rain_w += (DT_CTRL / (_rt + DT_CTRL)) * ((1.0 if self.rain_active else 0.0) - self.rain_w)
     # Phase 30: frames since driver torque was last at/above the fire level —
     # the one-shot dump only makes sense at the release edge.
     self.frames_since_drv_release = (0 if driver_tq >= CarControllerParams.REANCHOR_FIRE_NM
@@ -1339,6 +1358,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                    CarControllerParams.MAX_ANGLE_RATE_LOWSPEED_V))
         apply_angle = float(np.clip(apply_angle, self.apply_angle_last - rate_cap,
                                                  self.apply_angle_last + rate_cap))
+        # Phase 37a: inside the recovery window after an anchor (the command
+        # chasing the plan from wherever the wheel was left), bound the
+        # command's lateral jerk below the panda limit at highway speed so
+        # the correction is spread over a longer time (see values.py
+        # RECOVERY_JERK_CAP_*). Planned driving never reaches these rates.
+        if self.frames_since_apply_anchor <= CarControllerParams.RECOVERY_JERK_CAP_FRAMES:
+          _vk = v_ego_safe * CV.MS_TO_KPH
+          _jn = float(np.interp(_vk, CarControllerParams.RECOVERY_JERK_CAP_SPEEDS_KPH, CarControllerParams.RECOVERY_JERK_CAP_V))
+          _jr = float(np.interp(_vk, CarControllerParams.RECOVERY_JERK_CAP_SPEEDS_KPH, CarControllerParams.RECOVERY_JERK_CAP_RAIN_V))
+          _j = _jn + self.rain_w * (_jr - _jn)
+          if _j < self.params.ANGLE_LIMITS.MAX_LATERAL_JERK - 1e-6:
+            _vs = max(v_ego_safe, 1.0)
+            # same conversion as the VM limiter; take the tighter of the two
+            # vehicle models so the taper is delivered in full (the baseline
+            # safety VM is the binding one by ~10%)
+            _cap = min(math.degrees(self.VM.get_steer_from_curvature(_j / (_vs ** 2), _vs, 0)),
+                       math.degrees(self.BASELINE_VM.get_steer_from_curvature(_j / (_vs ** 2), _vs, 0))) * DT_CTRL
+            apply_angle = float(np.clip(apply_angle, self.apply_angle_last - _cap,
+                                                     self.apply_angle_last + _cap))
         self.apply_angle_last = apply_angle
         self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
 
@@ -1643,6 +1681,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                        and ((self.blind_left_hold > 0) if steering_error > 0
                             else (self.blind_right_hold > 0)))
       self.blind_caution_on = blind_caution
+      rate_up_cap_dry = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
+                                        CarControllerParams.ACIGAIN_RATE_UP_CAP_V))
+      rate_up_cap_rain = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
+                                         CarControllerParams.ACIGAIN_RATE_UP_CAP_RAIN_V))
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
@@ -1653,6 +1695,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         rate_dn_floor=(grip_rate_dn_floor if (real_grip or driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM)
                        else 0.0),
         curve_deg=self.curve_meas_lp,                # Phase 36
+        # Phase 37a: speed-tapered rise cap, one step tighter in rain; rain
+        # also moves the yield-curve start down so a firm hand wins sooner
+        rate_up_cap=(rate_up_cap_dry + self.rain_w * (rate_up_cap_rain - rate_up_cap_dry)),
+        grip_start=(CarControllerParams.ACIGAIN_GRIP_START_NM
+                    + self.rain_w * (CarControllerParams.ACIGAIN_GRIP_START_RAIN_NM - CarControllerParams.ACIGAIN_GRIP_START_NM)),
         anchored_recovery=anchored_recovery,         # Phase 35b
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
         # frame (the recovery transient) — G1 review: the full 2 s memory
