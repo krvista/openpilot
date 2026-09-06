@@ -323,6 +323,17 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.HIGHEST, VisualAlert.fcw, AudibleAlert.warningSoft, 2.),
   },
 
+  # i6n Phase 39: lane-line dropout latch — op stops following the plan and decays
+  # the command to straight; visual only (it can be active for seconds at a time
+  # on faded markings, a chime each time would be noise)
+  EventName.laneDropout: {
+    ET.PERMANENT: Alert(
+      "Lane Lines Lost",
+      "Holding straight, keep hands on wheel",
+      AlertStatus.userPrompt, AlertSize.small,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .2),
+  },
+
   EventName.ldw: {
     ET.PERMANENT: Alert(
       "Lane Departure Detected",

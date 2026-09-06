@@ -41,7 +41,7 @@ class TestPhase38WireGovernor:
     assert worst <= dmax + 1e-9, (worst, dmax)
     assert internal_jump > 2.0, "test premise: the internal anchor did jump ahead of the wire"
     assert dmax < 1.0                                       # ~0.47 deg/frame at 53 km/h on the baseline model
-    assert 1 <= resyncs <= 2, resyncs                       # one realignment per RESYNC_FRAMES of saturation
+    assert resyncs <= 1, resyncs                            # backup watchdog (100 frames); the echo detector is the primary realignment
 
   def test_wire_reference_resets_to_measured_on_passive_frames(self):
     v = 14.7; sim = Sim(); settle(sim)
@@ -69,3 +69,16 @@ class TestPhase38WireGovernor:
       assert abs(_tx_angle(sim) - sim.s.apply_angle_last) < 1e-6
     finally:
       P.TX_GOVERNOR = old
+
+
+class TestPhase38EchoResync:
+  def test_rejected_echo_realigns_wire_reference_to_measured(self):
+    # 38-2: the panda resets its reference to the measured angle on a rejection; carstate
+    # reports the src-192 echo and the controller must restart from the measurement
+    v = 14.7; sim = Sim(); settle(sim)
+    run_signal(sim, 200, v=v, wheel=0.0, cmd=0.0, tq=0.0)
+    for _ in range(20):                                   # governor saturating: wire lags a 12 deg anchor
+      sim.step(v=v, wheel=12.0, cmd=0.0, tq=460.0, pressed=True, mdps_angle_2=12.0)
+    assert abs(sim.s.tx_angle_last - 12.0) > 2.0
+    sim.step(v=v, wheel=12.0, cmd=0.0, tq=460.0, pressed=True, mdps_angle_2=12.0, tx_rejected=True)
+    assert abs(_tx_angle(sim) - 12.0) <= _panda_delta(sim, v) + 1e-6   # continues from the measured angle

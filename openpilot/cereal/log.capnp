@@ -138,6 +138,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     usbErrorDEPRECATED @78;
     audioFeedbackDEPRECATED @97;
     bigModelReadyDEPRECATED @101;
+    laneDropout @104;  # i6n Phase 39
   }
 }
 
@@ -875,6 +876,7 @@ struct ControlsState @0x97ff69c53601abf1 {
   ufAccelCmd @33 :Float32;
   curvature @37 :Float32;  # path curvature from vehicle model
   desiredCurvature @61 :Float32;  # lag adjusted curvatures used by lateral controllers
+  laneDropout @67 :Bool;  # i6n Phase 39: lane-line dropout latch active (plan ignored, command decaying to straight)
   forceDecel @51 :Bool;
 
   lateralControlState :union {
