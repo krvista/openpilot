@@ -70,7 +70,7 @@ class TestAlcAbortOnBsm:
     return dh, dh.DesireHelper()
 
   def _start_left(self, dh, DH):
-    from cereal import log
+    from openpilot.cereal import log
     LCS = log.LaneChangeState
     DH.update(_mk_cs(), True, 0.0)                       # off, no blinker
     DH.update(_mk_cs(lb=True), True, 0.0)                # blinker edge -> preLaneChange
@@ -83,7 +83,7 @@ class TestAlcAbortOnBsm:
     dh, DH = self._dh(); LCS = self._start_left(dh, DH)
     DH.update(_mk_cs(lb=True, bsl=True), True, 0.5)
     assert DH.lane_change_state == LCS.off
-    from cereal import log
+    from openpilot.cereal import log
     assert DH.lane_change_direction == log.LaneChangeDirection.none
     # blinker still on: must NOT re-arm without a fresh blinker edge
     DH.update(_mk_cs(lb=True), True, 0.5)
