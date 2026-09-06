@@ -127,6 +127,11 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       else:
         effective_angle = lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
 
+      # Passive frames carry gain 0 on the WIRE: the panda rejects an inactive
+      # frame with a non-zero torque-reduction gain (hyundai_canfd.h
+      # gain_violation), and the internal gain ramps DOWN over ~2.5 s after a
+      # deactivation — i6nv3 route 00000003 seg 6: 154 passive frames rejected
+      # per pause. The internal state keeps ramping for re-engage continuity.
       # Suppress camera takeover-request signals while op is actively steering.
       # The stock camera raises LKA_WARNING and FCA_SYSWARN in moderate corners
       # — false positives when op has its own model-based plan.
@@ -175,10 +180,14 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         # Override stale camera value with explicit passive (1) when the
         # camera is broken, so we never forward a frozen "active=2"
         # snapshot from a dead camera to MDPS.
-        "LKAS_ANGLE_ACTIVE":         2 if steering_active else (1 if cam_invalid else lkas_alt_cam_msg["LKAS_ANGLE_ACTIVE"]),
+        # passive frames are always flagged INACTIVE (1): the panda derives
+        # steer_angle_req from these wire bits, and a mirrored camera 0/2 would
+        # put the frame under the active rate check (review). Corpus: the camera
+        # sends 1 whenever idle (29,635/29,635 frames, route 00000003).
+        "LKAS_ANGLE_ACTIVE":         2 if steering_active else 1,
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        effective_angle,
-        "ADAS_ACIAnglTqRedcGainVal": effective_aci_gain,
+        "ADAS_ACIAnglTqRedcGainVal": (effective_aci_gain if steering_active else 0.0),
         "LKAS_BYTE7_BITS4_5":        3 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
         "LKAS_BYTE7_BIT7":           1 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
         "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if steering_active else 0),

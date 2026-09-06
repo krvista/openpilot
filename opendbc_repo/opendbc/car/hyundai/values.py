@@ -460,6 +460,32 @@ class CarControllerParams:
   ACIGAIN_CURVE_MEAS_TAU_RISE_S    = 0.15
   ACIGAIN_CURVE_MEAS_TAU_FALL_S    = 0.5
   ACIGAIN_CURVE_MEAS_MAX_RISE_DPS  = 27.0    # ramp-input rise slew cap (deg/s)
+  # Phase 38: WIRE governor — the transmitted LKAS_ALT angle mirrors the panda
+  # safety's VM angle checks (lateral.h steer_angle_cmd_checks_vm: per-frame
+  # delta from the last TRANSMITTED value <= jerk-limited rate, |angle| <=
+  # accel-limited max, both from the model-11 baseline params; passive frames
+  # reset the reference to the measured angle). Internally op still anchors
+  # apply_angle_last := wheel (one-shot dumps, passthrough) — those jumps are
+  # what the panda dropped: i6nv3 route 00000003 (source-built firmware), seg
+  # 13 with the driver holding the wheel 41% of the time, 2532/5214 active
+  # frames rejected (src 192) -> the car lost the LKAS stream (cluster ADAS
+  # warning) and the EPS kept the LAST ACCEPTED, pre-yield gain ("wheel held
+  # too hard, then lets go"). The i6nv2 device's committed firmware evidently
+  # did not enforce this (0.2 Hz rejections on the same manoeuvres). The
+  # governor ramps the wire value at the panda rate (0.5 deg/frame @53 km/h)
+  # instead of jumping; with the gain yielded the EPS is not following the
+  # wire value anyway, so control is unchanged. Kill: TX_GOVERNOR = False.
+  TX_GOVERNOR            = True
+  # clipping is done in integer CAN units (0.1 deg) against the already-quantized
+  # last sent value: allowed = int(panda_delta*10) - 1 units, so the packer's
+  # +/-0.05 rounding cannot eat the margin (review). Watchdog: the panda resets
+  # its reference to the measured angle on ANY rejection (or when its own
+  # lateral allowance drops) while ours keeps walking; if the governor has been
+  # saturated (|internal - wire| > 1 deg) for RESYNC_FRAMES, send one frame at
+  # the measured angle and reset the reference — deterministic realignment
+  # instead of a rejection cascade. Follow-up: count src-192 echoes in carstate.
+  TX_GOVERNOR_RESYNC_FRAMES = 30
+  TX_GOVERNOR_RESYNC_DEG    = 1.0
   # Phase 37a: high-speed RECOVERY softening ("correct the error over a longer
   # time at speed"). Two levers, both inert on planned driving:
   # (1) ACIGain rise-rate cap tapered with speed. The 0.04/frame rise (full
