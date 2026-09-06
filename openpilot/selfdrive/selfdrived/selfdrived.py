@@ -238,8 +238,9 @@ class SelfdriveD(CruiseHelper):
     if self.sm.updated['userBookmark']:
       self.events.add(EventName.userBookmark)
 
-    if self.sm.updated['audioFeedback']:
-      self.events.add(EventName.audioFeedback)
+    # (i6nv2's audioFeedback event block removed: the service is DEPRECATED in
+    # this base and was never subscribed — KeyError crashed selfdrived 3 s after
+    # init on the first i6nv3 road test, route 00000000/1 2026-09-06.)
 
     # i6nv2: the CCNC angle-control silent-failure alerts (lateralAccelLimit /
     # steerAngleLimit / cameraDataStale) and the curveSpeedAdvisory heads-up are
