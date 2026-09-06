@@ -4,6 +4,8 @@
 #   2. safety suite     : opendbc C safety layer (upstream file + i6n CCNC file)
 #   3. test_dbc_frames  : DBC packing golden frames (inside phase_tests)
 #   4. static review    : sm keys / enums / capnp fields / interp tables / Params keys
+#   5. process replay   : real selfdrived+controlsd on a logged segment (DRIVELOG_SEG)
+#   6. pre-flight       : regenerated TX through libsafety on that segment, rejection < 0.5%
 # Every leg must be green before anything is flashed to the car.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd); cd "$ROOT"
@@ -16,6 +18,22 @@ echo "=== [2] opendbc safety suite: i6n CCNC (angle enforcement + model-id falsi
 ( cd opendbc_repo && PYTHONPATH=$PWD python3 -m pytest opendbc/safety/tests/test_hyundai_canfd_i6n.py -q 2>&1 | tail -1 ) | tee /tmp/acc3; grep -q " passed" /tmp/acc3 && ! grep -q "failed\|error" /tmp/acc3 || fail=1
 echo "=== [4] static review: sm keys / enum members / capnp fields / interp tables / Params keys (exit 1 on issue)"
 PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/ccnc_analysis/static_review.py > /tmp/acc4 2>&1 && echo "static review: clean" || { sed -n '/^## ISSUES/,/^## notes/p' /tmp/acc4; fail=1; }
+# legs 5-6 need a local drive log: DRIVELOG_SEG=<path to an rlog.zst of a recent i6nv3 drive> (skipped if unset)
+if [[ -n "${DRIVELOG_SEG:-}" && -f "${DRIVELOG_SEG}" ]]; then
+  echo "=== [5] process replay: real selfdrived + controlsd on ${DRIVELOG_SEG##*/}"
+  PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/i6nv3_bench/process_replay_check.py "$DRIVELOG_SEG" selfdrived,controlsd 420 2>&1 | grep -v "^stack\|KjException" | tail -3 | tee /tmp/acc5; grep -q "PROCESS REPLAY GREEN" /tmp/acc5 || fail=1
+  echo "=== [6] pre-flight: regenerated LKAS_ALT frames through the panda safety code (closed loop)"
+  R=$(basename "$DRIVELOG_SEG" | sed -E 's/^[0-9a-f]+_([0-9a-f]+)--.*/\1/'); SEGN=$(basename "$DRIVELOG_SEG" | sed -E 's/.*--([0-9]+)--rlog.*/\1/')
+  PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/ccnc_analysis/preflight_replay.py "$R" "$SEGN" 2>&1 | grep -v "^stack\|KjException" | grep -E "^seg|^TOTAL" | tee /tmp/acc6
+  python3 - <<'PY' || fail=1
+import re,sys
+t=open("/tmp/acc6").read(); m=re.search(r"rejected (\d+) \((\d+\.\d+)%\)", t)
+ok = bool(m) and float(m.group(2)) < 0.5
+print("pre-flight rejection rate", (m.group(2)+"%") if m else "n/a", "->", "OK" if ok else "FAIL (>= 0.5%)"); sys.exit(0 if ok else 1)
+PY
+else
+  echo "=== [5]/[6] process replay + pre-flight: SKIPPED (set DRIVELOG_SEG=<rlog.zst>)"
+fi
 echo "=== generated DBC duplicate-SG_ scan"
 python3 - <<'PY' || fail=1
 import re, sys

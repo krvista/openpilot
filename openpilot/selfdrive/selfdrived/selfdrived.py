@@ -350,6 +350,10 @@ class SelfdriveD(CruiseHelper):
       if self.sm['driverAssistance'].leftLaneDeparture or self.sm['driverAssistance'].rightLaneDeparture:
         self.events.add(EventName.ldw)
 
+    # i6n Phase 39: controlsd's lane-dropout latch -> visual prompt
+    if self.sm['controlsState'].laneDropout:
+      self.events.add(EventName.laneDropout)
+
     # ******************************************************************************************
     #  NOTE: To fork maintainers.
     #  Disabling or nerfing safety features will get you and your users banned from our servers.
