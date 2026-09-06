@@ -89,13 +89,21 @@ class TestAlcAbortOnBsm:
     DH.update(_mk_cs(lb=True), True, 0.5)
     assert DH.lane_change_state == LCS.off
 
+  def test_detection_at_1s2_aborts(self):
+    # 37b-2: the 0x5e seg 14 timing (BSM at ~1.0 s) is inside the 1.5 s floor
+    dh, DH = self._dh(); LCS = self._start_left(dh, DH)
+    for _ in range(int(1.2 / 0.05)):
+      DH.update(_mk_cs(lb=True), True, 0.5)
+    DH.update(_mk_cs(lb=True, bsl=True), True, 0.5)
+    assert DH.lane_change_state == LCS.off
+
   def test_late_detection_does_not_abort(self):
     dh, DH = self._dh(); LCS = self._start_left(dh, DH)
-    for _ in range(int(1.2 / 0.05)):                     # 1.2 s into the crossing (DT_MDL 0.05)
+    for _ in range(int(1.7 / 0.05)):                     # 1.7 s into the crossing (DT_MDL 0.05)
       DH.update(_mk_cs(lb=True), True, 0.5)
     assert DH.lane_change_state == LCS.laneChangeStarting
     DH.update(_mk_cs(lb=True, bsl=True), True, 0.5)
-    assert DH.lane_change_state == LCS.laneChangeStarting   # too late to abort: runs on to finishing
+    assert DH.lane_change_state == LCS.laneChangeStarting   # too late to abort: runs on
 
   def test_other_side_bsm_does_not_abort(self):
     dh, DH = self._dh(); LCS = self._start_left(dh, DH)
@@ -149,6 +157,25 @@ class TestNoBlinkerConcessionTowardBsm:
     sim, tr = self._run(tq=460.0, bs_l=True, bs_r=False, n=200, wheel=5.0)
     assert tr['gain'][-1] <= 0.10, tr['gain'][-1]
 
+  def test_op_own_lane_change_keeps_concession(self):
+    # 37b-2 review: op's ALC pointing at the occupied side -> driver must be able to push op aside
+    sim = Sim(); settle(sim)
+    run_signal(sim, 200, v=self.V, wheel=0.0, cmd=0.0, tq=0.0)
+    tr = run_signal(sim, 300, v=self.V, wheel=0.0, cmd=0.0, tq=230.0, blinker=True, bs_l=True,
+                    cc_blinker_left=True, cc_lc_active=True)
+    assert sim.s.blinker_concession and any(tr['blinker_anchor_on'])
+    sim2, tr2 = self._run(tq=230.0, bs_l=True, bs_r=False)          # driver blinker only: still withheld
+    assert not sim2.s.blinker_concession and not any(tr2['blinker_anchor_on'])
+
+  def test_queued_lane_change_keeps_withdrawal(self):
+    # review regression: BSM already on the target side -> ALC sits in preLaneChange
+    # (CC blinker set, lateralLaneChangeActive False) -> the withdrawal must hold
+    sim = Sim(); settle(sim)
+    run_signal(sim, 200, v=self.V, wheel=0.0, cmd=0.0, tq=0.0, bs_l=True)
+    tr = run_signal(sim, 300, v=self.V, wheel=0.0, cmd=0.0, tq=230.0, blinker=True, bs_l=True,
+                    cc_blinker_left=True, cc_lc_active=False)
+    assert not sim.s.blinker_concession and not any(tr['blinker_anchor_on'])
+
   def test_kill_restores_concession(self):
     old = P.BSM_BLINKER_NO_CONCESSION
     try:
@@ -157,3 +184,16 @@ class TestNoBlinkerConcessionTowardBsm:
     finally:
       P.BSM_BLINKER_NO_CONCESSION = old
     assert sim.s.blinker_concession and any(tr['blinker_anchor_on'])
+
+
+class TestCarControlSPRoundTrip:
+  def test_capnp_to_struct_carries_lane_change_flag(self):
+    # review: card hands the car controller convert_carControlSP(CC_SP), not the capnp
+    # reader — a capnp field without a structs.py mirror raises on every frame
+    from openpilot.cereal import custom
+    from openpilot.selfdrive.car.helpers import convert_carControlSP
+    m = custom.CarControlSP.new_message(); m.lateralLaneChangeActive = True
+    out = convert_carControlSP(m.as_reader())
+    assert out.lateralLaneChangeActive is True
+    m2 = custom.CarControlSP.new_message()
+    assert convert_carControlSP(m2.as_reader()).lateralLaneChangeActive is False

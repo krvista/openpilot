@@ -95,7 +95,7 @@ class Sim:
            pressed=None, blinker=False, lead_dist=None, gear='drive',
            door=False, belt=False, standstill=None, cruise_available=True,
            v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
-           wiper=False, wiper_stale=False, blinker_right=False):
+           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -136,6 +136,9 @@ class Sim:
     CC.latActive = bool(lat_active)
     CC.enabled = bool(lat_active if enabled is None else enabled)
     CC.actuators.steeringAngleDeg = float(cmd)
+    CC.leftBlinker = bool(cc_blinker_left)
+    CC.rightBlinker = bool(cc_blinker_right)
+    cc._cc_sp.lateralLaneChangeActive = bool(cc_lc_active)
 
     # lead data (LeadDataCarController outputs)
     cc.lead_visible = lead_dist is not None

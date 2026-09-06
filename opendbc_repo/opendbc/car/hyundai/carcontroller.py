@@ -890,7 +890,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # are withheld when the blinker side is BSM-occupied (see values.py).
     blinker_toward_bsm = ((bool(CS.out.leftBlinker) and self.blind_left_hold > 0)
                           or (bool(CS.out.rightBlinker) and self.blind_right_hold > 0))
-    blinker_concession = blinker_on and not (CarControllerParams.BSM_BLINKER_NO_CONCESSION and blinker_toward_bsm)
+    # 37b-2 review: when op's OWN lane change (CC.leftBlinker/rightBlinker =
+    # model laneChangeDirection while a change is queued/running) points at
+    # the occupied side, withholding the concession would make op HARDER to
+    # push aside exactly when the driver needs to stop it (0x5e seg 14: raw
+    # -343 Nm against op's ALC). Keep the concession in that case; the ALC
+    # abort (desire_helper) covers the early part, the driver the rest.
+    # Gated on CarControlSP.lateralLaneChangeActive (model laneChangeStarting):
+    # CC.left/rightBlinker are also set while a change is merely QUEUED in
+    # preLaneChange — which is exactly where a resting hand + blinker toward
+    # the occupied side must keep the withdrawal (review).
+    op_lc_active = bool(getattr(self._cc_sp, 'lateralLaneChangeActive', False))
+    op_lc_toward_bsm = op_lc_active and ((bool(CC.leftBlinker) and self.blind_left_hold > 0)
+                                         or (bool(CC.rightBlinker) and self.blind_right_hold > 0))
+    blinker_concession = blinker_on and not (CarControllerParams.BSM_BLINKER_NO_CONCESSION
+                                             and blinker_toward_bsm and not op_lc_toward_bsm)
     self.blinker_concession = blinker_concession
     # Phase 37a rain mode: front-wiper switch (CCNC_WIPER) -> debounced flag
     # -> ramped weight. Unknown/stale input counts as OFF (conservative).
