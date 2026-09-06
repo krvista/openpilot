@@ -96,7 +96,10 @@ class LaneDepartureWarning:
     ldw_allowed = CS.vEgo > LDW_MIN_SPEED and not recent_blinker
 
     desire_prediction = modelV2.meta.desirePrediction
-    if len(desire_prediction) and ldw_allowed:
+    # same shape guard as the op-active path: a glitch frame with < 3 lines or
+    # an empty y array must not IndexError plannerd (manual path, review)
+    lines_ok = (len(probs) >= 3 and len(lane_lines) >= 3 and len(lane_lines[1].y) > 0 and len(lane_lines[2].y) > 0)
+    if len(desire_prediction) > max(int(log.Desire.laneChangeLeft), int(log.Desire.laneChangeRight)) and ldw_allowed and lines_ok:
       right_lane_visible = probs[2] > 0.5
       left_lane_visible = probs[1] > 0.5
       l_lane_change_prob = desire_prediction[log.Desire.laneChangeLeft]
