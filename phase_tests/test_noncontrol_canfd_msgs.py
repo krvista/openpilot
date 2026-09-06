@@ -95,6 +95,16 @@ class TestLkasAltConstruction:
       effective_aci_gain=0.5, mads_lka_icon=0, meas_angle=348.2)
     assert unpack(msgs[0]).vl["LKAS_ALT"]["ADAS_StrAnglReqVal"] == 3.5
 
+  def test_passive_frame_forces_wire_gain_zero(self):
+    # panda: inactive frame with gain != 0 is a violation; the internal gain may still be ramping down
+    CP, packer, CAN = real_env()
+    msgs = hyundaicanfd.create_steering_messages(
+      packer, CP, CAN, enabled=False, lat_active=False, apply_torque=0,
+      lkas_icon=0, apply_angle=7.0, lkas_alt_cam_msg=dict(CAM_MSG),
+      effective_aci_gain=0.996, mads_lka_icon=0, meas_angle=1.2)
+    vl = unpack(msgs[0]).vl["LKAS_ALT"]
+    assert vl["LKAS_ANGLE_ACTIVE"] == CAM_MSG["LKAS_ANGLE_ACTIVE"] and vl["ADAS_ACIAnglTqRedcGainVal"] == 0.0
+
   def test_boot_fallback_frame_packs_fully_passive(self):
     CP, packer, CAN = real_env()
     # lat_active=True must still emit a passive frame with no camera msg
