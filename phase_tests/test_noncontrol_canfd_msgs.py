@@ -73,6 +73,28 @@ class TestLkasAltConstruction:
     assert abs(vl["ADAS_StrAnglReqVal"] - CAM_MSG["ADAS_StrAnglReqVal"]) < 0.05
     assert vl["LKA_WARNING"] == CAM_MSG["LKA_WARNING"]
 
+  def test_passive_frame_sends_measured_angle_when_given(self):
+    # i6nv3 route 00000002: camera advisory saturates at +/-176.7 deg while the
+    # wheel sits at parking lock (348 deg); the panda inactive check needs the
+    # request inside the measured window, so the passive frame must carry the
+    # measured angle (clipped by the caller), not the camera's value
+    CP, packer, CAN = real_env()
+    cam = dict(CAM_MSG, ADAS_StrAnglReqVal=176.7)
+    msgs = hyundaicanfd.create_steering_messages(
+      packer, CP, CAN, enabled=False, lat_active=False, apply_torque=0,
+      lkas_icon=0, apply_angle=7.0, lkas_alt_cam_msg=cam,
+      effective_aci_gain=0.0, mads_lka_icon=0, meas_angle=348.2)
+    vl = unpack(msgs[0]).vl["LKAS_ALT"]
+    assert abs(vl["ADAS_StrAnglReqVal"] - 348.2) < 0.06, vl["ADAS_StrAnglReqVal"]
+    assert vl["LKAS_ANGLE_ACTIVE"] == CAM_MSG["LKAS_ANGLE_ACTIVE"]      # still passive
+    assert vl["ADAS_ACIAnglTqRedcGainVal"] == 0.0
+    # active frame is unaffected by meas_angle
+    msgs = hyundaicanfd.create_steering_messages(
+      packer, CP, CAN, enabled=True, lat_active=True, apply_torque=0,
+      lkas_icon=0, apply_angle=3.5, lkas_alt_cam_msg=cam,
+      effective_aci_gain=0.5, mads_lka_icon=0, meas_angle=348.2)
+    assert unpack(msgs[0]).vl["LKAS_ALT"]["ADAS_StrAnglReqVal"] == 3.5
+
   def test_boot_fallback_frame_packs_fully_passive(self):
     CP, packer, CAN = real_env()
     # lat_active=True must still emit a passive frame with no camera msg
@@ -84,6 +106,12 @@ class TestLkasAltConstruction:
     assert vl["ADAS_StrAnglReqVal"] == 0.0
     assert vl["ADAS_ACIAnglTqRedcGainVal"] == 0.0
     assert vl["LKAS_BYTE28"] == 0 and vl["LKAS_BYTE31"] == 0
+    # with a measurement the boot frame carries the wheel angle (same panda inactive rule)
+    msgs = hyundaicanfd.create_steering_messages(
+      packer, CP, CAN, enabled=True, lat_active=True, apply_torque=0,
+      lkas_icon=0, apply_angle=5.0, lkas_alt_cam_msg=None, meas_angle=-212.4)
+    vl = unpack(msgs[0]).vl["LKAS_ALT"]
+    assert vl["LKAS_ANGLE_ACTIVE"] == 1 and abs(vl["ADAS_StrAnglReqVal"] + 212.4) < 0.06
 
   def test_none_gain_contract_violation_mirrors_camera(self):
     CP, packer, CAN = real_env()
