@@ -3,7 +3,7 @@
 CarController (real packer), feed the logged CAN RX and the regenerated TX through the real
 panda safety code (libsafety), and count what the panda would reject. Run BEFORE flashing.
 usage (i6nv3 tree): PYTHONPATH=$PWD:$PWD/opendbc_repo python3 preflight_replay.py <route> <seg,seg,...> [KILL_GOVERNOR=1]"""
-import os, sys, glob, collections, types, zstandard as zstd, capnp, numpy as np
+import os, sys, glob, collections, zstandard as zstd, capnp, numpy as np
 capnp.remove_import_hook()
 W=os.getcwd()
 IS3 = (not os.path.islink(W+"/openpilot")) and os.path.exists(W+"/openpilot/cereal/log.capnp")
@@ -48,16 +48,27 @@ for w,m in events(load(seg_list[0])):
         except Exception: spv=0
     if cfg and spv is not None: break
 S=libsafety_py.libsafety
-if hasattr(S,"set_current_safety_param_sp"): S.set_current_safety_param_sp(spv or 0)
-S.set_alternative_experience(alt or 0); S.set_safety_hooks(cfg[0],cfg[1]); S.init_tests(); S.set_alternative_experience(alt or 0)
-if hasattr(S,"mads_apply_alternative_experience"): S.mads_apply_alternative_experience(alt or 0)
+def arm_safety():
+    if hasattr(S,"set_current_safety_param_sp"): S.set_current_safety_param_sp(spv or 0)
+    S.set_alternative_experience(alt or 0); S.set_safety_hooks(cfg[0],cfg[1]); S.init_tests(); S.set_alternative_experience(alt or 0)
+    if hasattr(S,"mads_apply_alternative_experience"): S.mads_apply_alternative_experience(alt or 0)
+arm_safety()
 print(f"safety config from log: {cfg} alt {alt} sp {spv} | mads {S.get_enable_mads() if hasattr(S,'get_enable_mads') else '?'}")
+# Boot segments: the log's panda sits in elm327/noOutput with the harness relay CLOSED, so the camera's own 0x110 is seen on
+# bus 0 (1600+ frames on a boot segment). Feeding those to an armed libsafety latches relay_malfunction and every later TX is
+# rejected (100%) — a tool artifact, not the car. Mirror the log: hooks run only once pandaStates reports the target model.
+armed=False; model_name=None
 sim=H.Sim(); sim.cc.packer=CANPacker("hyundai_canfd_generated")
 t0=None; cc_cmd=0.0; lat=False; en=False; cam=None; mdps2=None; total=collections.Counter(); tx_rej_flag=False
 for seg in seg_list:
     cnt=collections.Counter(); lag=[]; diag=[]
     for w,m in events(load(seg)):
         t=m.logMonoTime; t0=t0 or t; S.set_timer(int((t-t0)/1000)&0xFFFFFFFF)
+        if w=="pandaStates" and len(m.pandaStates):
+            now_on = int(m.pandaStates[0].safetyModel.raw)==cfg[0]
+            if now_on and not armed: arm_safety(); armed=True; print(f"   safety armed at t={(t-t0)/1e9:.2f}s (log pandaStates -> model {cfg[0]})")
+            elif not now_on and armed: armed=False; print(f"   safety disarmed at t={(t-t0)/1e9:.2f}s (log pandaStates -> {m.pandaStates[0].safetyModel})")
+        if not armed and w in ("can","carState"): continue
         if w=="can":
             for c in m.can:
                 if c.src>=128: continue
@@ -86,7 +97,8 @@ for seg in seg_list:
                     diag.append((round((t-t0)/1e9,2), "A" if active else "P", des, dl, amin, amax, dat[12], round(cs.steeringAngleDeg*10), None if mdps2 is None else round(mdps2*10), lat, sim.s.tx_angle_last))
                 if active: lag.append(abs(sim.s.apply_angle_last-sim.s.tx_angle_last))
     tot=sum(cnt.values()); rej=cnt[("active","REJ")]+cnt[("passive","REJ")]
-    print(f"seg {seg}: frames {tot} | {dict(cnt)} | rejected {100*rej/max(tot,1):.2f}% | wire lag behind internal apply p50/p99 {np.median(lag) if lag else 0:.2f}/{np.percentile(lag,99) if lag else 0:.2f} deg")
+    rm = S.get_relay_malfunction() if hasattr(S,"get_relay_malfunction") else None
+    print(f"seg {seg}: frames {tot} | {dict(cnt)} | rejected {100*rej/max(tot,1):.2f}% | wire lag behind internal apply p50/p99 {np.median(lag) if lag else 0:.2f}/{np.percentile(lag,99) if lag else 0:.2f} deg" + (f" | RELAY_MALFUNCTION latched" if rm else ""))
     total.update(cnt)
     for d in diag: print('   REJ', d)
 tot=sum(total.values()); rej=total[("active","REJ")]+total[("passive","REJ")]

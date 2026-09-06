@@ -18,6 +18,27 @@ bash tools/i6nv3_bench/acceptance.sh
 세 결함 클래스가 각각 "당시 녹색이던 스위트에 안 보이던" 경험에서 온 구조 —
 하나라도 빨간 상태로 장치에 올리지 않는다.
 
+### 0-a. 로그 기반 다리 (4~7, 드라이브로그가 있을 때)
+```
+SEG=/path/…_00000004--…--8--rlog.zst
+DRIVELOG_SEG=$SEG DRIVELOG_DROPOUT_SEG=$SEG bash tools/i6nv3_bench/acceptance.sh
+```
+| 다리 | 도구 | 무엇을 증명하나 |
+|---|---|---|
+| [4] 정적 점검 | `tools/ccnc_analysis/static_review.py` | sm 키/enum/capnp 필드/interp 표/Params 키 (audioFeedback KeyError 클래스) |
+| [5] 프로세스 리플레이 | `process_replay_check.py <seg> selfdrived,controlsd,card` | **실제 데몬 3개**가 로그 위에서 죽지 않고 출력률 유지; controlsd 는 latActive 프레임이 로그와 일치(측방 경로가 실제로 돌았다는 증거); card 는 로그와 같은 차 구성으로 핑거프린트(steer type/flags/safetyParam) |
+| [6] 프리플라이트 | `tools/ccnc_analysis/preflight_replay.py <route> <segs>` | 현재 CarController 가 다시 만든 LKAS_ALT 를 판다 안전 코드(libsafety)에 폐루프로 통과, 거부율 < 0.5 % |
+| [7] E2E 차선 드롭아웃 | `replay_e2e_dropout.py <seg>` | 실제 controlsd 래치(Phase 39) → 실제 selfdrived 시각 경고까지 한 줄로 |
+| (수동) card 패리티 | `replay_card_parity.py <seg>` | 실제 card 재생 프레임 수/활성 비율/각도 차이 요약 |
+
+리플레이 도구가 놓쳤던 세 구멍(2026-09-07 발견, 모두 도구 쪽 결함):
+1. `process_replay` 의 fingerprint 경로는 `get_non_essential_params` 의 **일반 Ioniq 6 N 파라미터(토크 조향, CCNC 플래그 없음, safetyParam 2089)** 를 쓴다 →
+   각도 조향 측방 경로가 통째로 스킵된 채 "녹색". 지금은 로그의 carParams/carParamsSP 를 그대로 Params 에 넣는다(`log_carparams_configs`).
+2. controlsd 리플레이에 `selfdriveStateSP` 가 공급되지 않아 MADS 상태가 없고 latActive=False. pubs 에 sunnypilot 서비스를 추가.
+3. 프리플라이트가 부팅 세그먼트에서 릴레이가 닫힌 구간의 카메라 0x110(버스 0)을 무장된 libsafety 에 먹여 relay_malfunction 이 래치 → 100 % 거부.
+   지금은 로그의 pandaStates 가 hyundaiCanfd 로 바뀌는 시점에 무장한다.
+card 리플레이는 서브모듈 `openpilot/sunnypilot/neural_network_data` 가 체크아웃돼 있어야 한다(장치에는 있음).
+
 ## 0-1. 정적 점검 결론 (장치 첫 부팅 플로우)
 - **빌드**: i6nv3에는 `prebuilt` 마커가 없다 → 첫 부팅에서 `system/manager/build.py`가
   scons 전체 빌드(panda 펌웨어 + **모델 tinygrad 컴파일 포함**). 예상 20~40분,

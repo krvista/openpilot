@@ -441,8 +441,10 @@ CONFIGS = [
       "cabinCameraState", "narrowRoadCameraState", "wideRoadCameraState", "managerState", "lateralTorqueParameters",
       "accelerometer", "gyroscope", "carOutput", "gpsLocationExternal", "gpsLocation", "controlsState",
       "carControl", "driverAssistance", "alertDebug",
+      # sunnypilot services selfdrived subscribes to (without them MADS/ext state is never fed)
+      "lateralManeuverPlan", "modelDataV2SP", "longitudinalPlanSP", "userBookmark",
     ],
-    subs=["selfdriveState", "onroadEvents"],
+    subs=["selfdriveState", "onroadEvents", "selfdriveStateSP", "onroadEventsSP"],
     ignore=["logMonoTime"],
     config_callback=selfdrived_config_callback,
     init_callback=get_car_params_callback,
@@ -454,8 +456,11 @@ CONFIGS = [
     proc_name="controlsd",
     pubs=["vehicleParameters", "lateralTorqueParameters", "modelV2", "selfdriveState",
           "extrinsicsCalibration", "deviceMotion", "longitudinalPlan", "carState", "carOutput",
-          "driverMonitoringState", "onroadEvents", "driverAssistance"],
-    subs=["carControl", "controlsState"],
+          "driverMonitoringState", "onroadEvents", "driverAssistance",
+          # sunnypilot services controlsd subscribes to: selfdriveStateSP carries the MADS state that
+          # decides latActive — without it the whole lateral path replays as inactive
+          "lateralDelay", "lateralManeuverPlan", "radarState", "selfdriveStateSP"],
+    subs=["carControl", "controlsState", "carControlSP"],
     ignore=["logMonoTime", ],
     init_callback=get_car_params_callback,
     should_recv_callback=MessageBasedRcvCallback("selfdriveState"),
