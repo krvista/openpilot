@@ -1768,13 +1768,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       )
       self.aci_gain_last = effective_aci_gain
 
+    # passive-frame angle: the exact sensor panda samples (MDPS.STEERING_ANGLE_2),
+    # clipped to the safety window; steeringAngleDeg only if that is unavailable
+    _mdps2 = getattr(CS, "mdps_angle_2", None)
+    _meas_src = float(_mdps2) if (_mdps2 is not None and np.isfinite(_mdps2)) else steer_angle_safe
+    meas_angle_for_panda = float(np.clip(_meas_src, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                          mads_lka_icon=mads_lka_icon,
                                                          effective_aci_gain=effective_aci_gain,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
                                                          cam_invalid=bool(cam_stale_tripped or fault_lfa_bool),
-                                                         lfa_sync_pulse=lfa_sync_pulse))
+                                                         lfa_sync_pulse=lfa_sync_pulse,
+                                                         meas_angle=meas_angle_for_panda))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):

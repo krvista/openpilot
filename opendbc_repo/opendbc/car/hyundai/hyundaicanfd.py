@@ -42,7 +42,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
                              apply_angle=0.0, lkas_alt_cam_msg=None,
                              mads_lka_icon=None, effective_aci_gain=None,
                              mads_force_assist=False, cam_invalid=False,
-                             lfa_sync_pulse=False):
+                             lfa_sync_pulse=False, meas_angle=None):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEER_MSG_ALT` flags; Ioniq 6 N
@@ -108,11 +108,24 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       if effective_aci_gain is None:
         effective_aci_gain = cam_aci_gain
 
-      # Angle command: when not steering, mirror camera's advisory so ADAS
-      # DRV sees no delta from op's side. This closes the remaining window
-      # where `apply_angle` (set by the rate limiter to actual wheel angle
-      # when inactive) could briefly disagree with the camera's frame.
-      effective_angle = apply_angle if steering_active else lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
+      # Angle command when NOT steering: send the MEASURED wheel angle
+      # (meas_angle, clipped by the caller), not the camera's advisory.
+      # i6nv3 first road test (route 00000002, 2026-09-06): the stock
+      # camera's ADAS_StrAnglReqVal saturates at +/-176.7 deg, and it also
+      # lags the wheel by ~20 deg at 300 deg/s; the panda inactive-angle
+      # check requires the request to sit inside the measured-angle sample
+      # window, so at parking lock (wheel 348 deg) 100% of our frames were
+      # rejected (1386/5936 in the segment) and the cluster's ADAS warning
+      # flickered as the car lost the LKAS stream. The frame is inert here
+      # anyway (LKAS_ANGLE_ACTIVE = inactive, gain 0), so the measured angle
+      # is the neutral value. Camera mirror kept only as a fallback when the
+      # caller passes no measurement.
+      if steering_active:
+        effective_angle = apply_angle
+      elif meas_angle is not None:
+        effective_angle = meas_angle
+      else:
+        effective_angle = lkas_alt_cam_msg.get("ADAS_StrAnglReqVal", apply_angle)
 
       # Suppress camera takeover-request signals while op is actively steering.
       # The stock camera raises LKA_WARNING and FCA_SYSWARN in moderate corners
@@ -202,7 +215,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "HAS_LANE_SAFETY": 0,
         "LKAS_BYTE9_HIDDEN": 0x5,
         "LKAS_ANGLE_ACTIVE": 1,
-        "ADAS_StrAnglReqVal": 0.0,
+        "ADAS_StrAnglReqVal": (meas_angle if meas_angle is not None else 0.0),
         "ADAS_ACIAnglTqRedcGainVal": 0,
         "LKAS_BYTE7_BITS4_5": 0,
         "LKAS_BYTE7_BIT7": 0,

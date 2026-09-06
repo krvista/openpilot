@@ -130,7 +130,8 @@ class Sim:
     CS = types.SimpleNamespace(out=out, lkas_alt_cam_msg=cam, fault_lfa=0,
                                msg_161=None, lfa_block_msg=None, is_metric=True,
                                main_cruise_enabled=True,
-                               wiper_front_on=bool(wiper), wiper_stale=bool(wiper_stale))
+                               wiper_front_on=bool(wiper), wiper_stale=bool(wiper_stale),
+                               mdps_angle_2=float(wheel) if np.isfinite(wheel) else 0.0)
 
     CC = structs.CarControl()
     CC.latActive = bool(lat_active)

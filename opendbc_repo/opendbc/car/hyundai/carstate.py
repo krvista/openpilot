@@ -376,6 +376,13 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       # bit 0, see CCNC_WIPER in the DBC). Not part of canValid (alive/counter
       # ignored below); staleness is judged against the 100 Hz MDPS timestamp
       # so a silent message reads as "unknown" -> rain mode off.
+      # MDPS.STEERING_ANGLE_2 = the sample panda's inactive-angle check uses
+      # (hyundai_canfd.h reads 0xEA bytes 16-17). Differs from
+      # STEERING_SENSORS.STEERING_ANGLE by up to 4.4 deg at parking lock /
+      # fast turns (route 00000002), more than the +/-0.1 deg tolerance, so
+      # the passive LKAS_ALT angle must be THIS value. Control keeps using
+      # steeringAngleDeg.
+      self.mdps_angle_2 = float(cp.vl["MDPS"]["STEERING_ANGLE_2"])
       self.wiper_front_on = bool(cp.vl["CCNC_WIPER"]["FRONT_WIPER_ON"])
       _ts_w = cp.ts_nanos["CCNC_WIPER"]["FRONT_WIPER_ON"]
       _ts_ref = cp.ts_nanos["MDPS"]["STEERING_COL_TORQUE"]
