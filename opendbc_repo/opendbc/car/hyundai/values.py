@@ -271,7 +271,9 @@ class CarControllerParams:
   # frame (heavy_grip_anchor needs override_factor >= 0.9, computed from the
   # concession-selected thresholds); the flag itself lingers inert for the
   # release debounce, and the re-assert runs under the 37a recovery caps
-  # (frames_since_apply_anchor == 0, gain <= 0.012/frame). Kill: False.
+  # (frames_since_apply_anchor == 0, gain <= 0.012/frame). Exempt while op's
+  # own lane change (CC blinker = model direction) points at that side, so
+  # the driver can still push op aside (37b-2 review). Kill: False.
   BSM_BLINKER_NO_CONCESSION  = True
   # Phase 13a: low-speed (<20 km/h) scenario gate + offset-proof grip signal.
   # Routes 0x2a-0x2d (first build with Phase 11): below 20 km/h the passthrough

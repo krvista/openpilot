@@ -104,6 +104,9 @@ class ControlsExt(ModelStateBase):
     CC_SP.intelligentCruiseButtonManagement.sendButton = icbm_src.sendButton
     CC_SP.intelligentCruiseButtonManagement.vTarget = icbm_src.vTarget
 
+    # Phase 37b-2: op is actively crossing (not merely queued in preLaneChange)
+    CC_SP.lateralLaneChangeActive = bool(sm['modelV2'].meta.laneChangeState == log.LaneChangeState.laneChangeStarting)
+
     return CC_SP
 
   @staticmethod
