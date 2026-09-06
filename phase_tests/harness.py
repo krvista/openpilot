@@ -95,7 +95,7 @@ class Sim:
            pressed=None, blinker=False, lead_dist=None, gear='drive',
            door=False, belt=False, standstill=None, cruise_available=True,
            v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
-           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False):
+           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -131,7 +131,7 @@ class Sim:
                                msg_161=None, lfa_block_msg=None, is_metric=True,
                                main_cruise_enabled=True,
                                wiper_front_on=bool(wiper), wiper_stale=bool(wiper_stale),
-                               mdps_angle_2=float(wheel) if np.isfinite(wheel) else 0.0)
+                               mdps_angle_2=float(mdps_angle_2) if mdps_angle_2 is not None else (float(wheel) if np.isfinite(wheel) else 0.0))
 
     CC = structs.CarControl()
     CC.latActive = bool(lat_active)

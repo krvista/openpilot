@@ -2,7 +2,7 @@ import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
-from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance
+from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance, get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -492,6 +492,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.blind_right_hold = 0
     self.blind_caution_on = False
     self.blinker_concession = False
+    self.tx_angle_last = 0.0   # Phase 38: last TRANSMITTED angle (panda desired_angle_last mirror)
+    self.tx_sat_frames = 0     # Phase 38: consecutive frames the governor clipped by > RESYNC_DEG
     # Phase 37a rain mode: wiper debounce counters and the ramped weight 0..1
     self.wiper_on_frames = 0
     self.wiper_off_frames = 0
@@ -663,7 +665,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # control platform. For other cars, preserve the angle set by
     # controlsd's lateral controller.
     if is_ccnc_angle_platform(self.CP.flags):
-      new_actuators.steeringAngleDeg = self.apply_angle_last
+      # Phase 38: report what the CAR received (the governed wire value), not the internal anchor
+      new_actuators.steeringAngleDeg = self.tx_angle_last
     new_actuators.accel = self.tuning.actual_accel
 
     if self.alert_vm_limit_cooldown_frames > 0:
@@ -1773,8 +1776,36 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     _mdps2 = getattr(CS, "mdps_angle_2", None)
     _meas_src = float(_mdps2) if (_mdps2 is not None and np.isfinite(_mdps2)) else steer_angle_safe
     meas_angle_for_panda = float(np.clip(_meas_src, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+    # Phase 38 wire governor (see values.py TX_GOVERNOR): what goes on the bus
+    # never exceeds the panda's per-frame VM delta / max angle relative to the
+    # last transmitted value; passive frames reset the reference to the
+    # measured angle exactly as the panda resets desired_angle_last.
+    if effective_lat_active and CarControllerParams.TX_GOVERNOR:
+      _vg = max(v_ego_safe, 1.0)                    # panda fudges its speed DOWN by 1 m/s -> its window is wider than this
+      _dmax = min(get_max_angle_delta_vm(_vg, self.BASELINE_VM, self.params), self.params.ANGLE_LIMITS.MAX_ANGLE_RATE)
+      _amax = get_max_angle_vm(_vg, self.BASELINE_VM, self.params)
+      # integer CAN units (0.1 deg): panda allows int(delta*10)+1 units; stay one unit inside
+      _d_can = max(int(_dmax * 10.0) - 1, 1)
+      _a_can = max(int(_amax * 10.0) - 1, 5)
+      _last_can = int(round(self.tx_angle_last * 10.0))
+      _want_can = int(round(self.apply_angle_last * 10.0))
+      _tx_can = int(np.clip(_want_can, _last_can - _d_can, _last_can + _d_can))
+      _tx_can = int(np.clip(_tx_can, -_a_can, _a_can))
+      tx_angle = _tx_can / 10.0
+      # saturation watchdog: realign with the panda's reference (measured angle)
+      if abs(self.apply_angle_last - tx_angle) > CarControllerParams.TX_GOVERNOR_RESYNC_DEG:
+        self.tx_sat_frames += 1
+      else:
+        self.tx_sat_frames = 0
+      if self.tx_sat_frames >= CarControllerParams.TX_GOVERNOR_RESYNC_FRAMES:
+        tx_angle = meas_angle_for_panda
+        self.tx_sat_frames = 0
+    else:
+      tx_angle = meas_angle_for_panda if not effective_lat_active else self.apply_angle_last
+      self.tx_sat_frames = 0
+    self.tx_angle_last = tx_angle
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
-                                                         apply_angle=self.apply_angle_last, lkas_alt_cam_msg=lkas_alt_cam_msg,
+                                                         apply_angle=tx_angle, lkas_alt_cam_msg=lkas_alt_cam_msg,
                                                          mads_lka_icon=mads_lka_icon,
                                                          effective_aci_gain=effective_aci_gain,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
