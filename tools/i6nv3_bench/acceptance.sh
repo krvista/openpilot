@@ -3,6 +3,7 @@
 #   1. phase_tests      : CarController / controlsd behaviour (python)
 #   2. safety suite     : opendbc C safety layer (upstream file + i6n CCNC file)
 #   3. test_dbc_frames  : DBC packing golden frames (inside phase_tests)
+#   4. static review    : sm keys / enums / capnp fields / interp tables / Params keys
 # Every leg must be green before anything is flashed to the car.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd); cd "$ROOT"
@@ -13,6 +14,8 @@ echo "=== [2] opendbc safety suite: hyundai canfd (upstream)"
 ( cd opendbc_repo && PYTHONPATH=$PWD python3 -m pytest opendbc/safety/tests/test_hyundai_canfd.py -q 2>&1 | tail -1 ) | tee /tmp/acc2; grep -q " passed" /tmp/acc2 && ! grep -q "failed\|error" /tmp/acc2 || fail=1
 echo "=== [2] opendbc safety suite: i6n CCNC (angle enforcement + model-id falsification)"
 ( cd opendbc_repo && PYTHONPATH=$PWD python3 -m pytest opendbc/safety/tests/test_hyundai_canfd_i6n.py -q 2>&1 | tail -1 ) | tee /tmp/acc3; grep -q " passed" /tmp/acc3 && ! grep -q "failed\|error" /tmp/acc3 || fail=1
+echo "=== [4] static review: sm keys / enum members / capnp fields / interp tables / Params keys (exit 1 on issue)"
+PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/ccnc_analysis/static_review.py > /tmp/acc4 2>&1 && echo "static review: clean" || { sed -n '/^## ISSUES/,/^## notes/p' /tmp/acc4; fail=1; }
 echo "=== generated DBC duplicate-SG_ scan"
 python3 - <<'PY' || fail=1
 import re, sys
