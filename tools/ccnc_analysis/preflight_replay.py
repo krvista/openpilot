@@ -53,7 +53,7 @@ S.set_alternative_experience(alt or 0); S.set_safety_hooks(cfg[0],cfg[1]); S.ini
 if hasattr(S,"mads_apply_alternative_experience"): S.mads_apply_alternative_experience(alt or 0)
 print(f"safety config from log: {cfg} alt {alt} sp {spv} | mads {S.get_enable_mads() if hasattr(S,'get_enable_mads') else '?'}")
 sim=H.Sim(); sim.cc.packer=CANPacker("hyundai_canfd_generated")
-t0=None; cc_cmd=0.0; lat=False; en=False; cam=None; mdps2=None; total=collections.Counter()
+t0=None; cc_cmd=0.0; lat=False; en=False; cam=None; mdps2=None; total=collections.Counter(); tx_rej_flag=False
 for seg in seg_list:
     cnt=collections.Counter(); lag=[]; diag=[]
     for w,m in events(load(seg)):
@@ -73,12 +73,14 @@ for seg in seg_list:
                     if k in H.CAM_MSG_TEMPLATE and k!="COUNTER": H.CAM_MSG_TEMPLATE[k]=v
             msgs=sim.step(v=cs.vEgo, tq=cs.steeringTorque, wheel=cs.steeringAngleDeg, cmd=cc_cmd, lat_active=lat, enabled=en,
                           pressed=cs.steeringPressed, blinker=cs.leftBlinker, blinker_right=cs.rightBlinker, bs_l=cs.leftBlindspot, bs_r=cs.rightBlindspot,
-                          standstill=cs.standstill, wheel_rate=cs.steeringRateDeg, mdps_angle_2=mdps2, v_raw=cs.vEgoRaw)
+                          standstill=cs.standstill, wheel_rate=cs.steeringRateDeg, mdps_angle_2=mdps2, v_raw=cs.vEgoRaw, tx_rejected=tx_rej_flag)
+            tx_rej_flag=False
             for addr,dat,bus in msgs:
                 if addr!=0x110: continue
                 amin=S.get_angle_meas_min(); amax=S.get_angle_meas_max(); dl=S.get_desired_angle_last()
                 ok=bool(S.safety_tx_hook(make_CANPacket(addr,bus,bytes(dat))))
                 active=((dat[9]>>4)&3)!=1; cnt[("active" if active else "passive","ok" if ok else "REJ")]+=1
+                if not ok: tx_rej_flag=True   # closed loop: the src-192 echo the car controller will see next frame
                 if not ok and os.environ.get("DIAG") and len(diag)<12:
                     des=(dat[11]<<6)|(dat[10]>>2); des=des-16384 if des>=8192 else des
                     diag.append((round((t-t0)/1e9,2), "A" if active else "P", des, dl, amin, amax, dat[12], round(cs.steeringAngleDeg*10), None if mdps2 is None else round(mdps2*10), lat, sim.s.tx_angle_last))

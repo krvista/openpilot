@@ -1766,6 +1766,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # last transmitted value; passive frames reset the reference to the
     # measured angle exactly as the panda resets desired_angle_last.
     if effective_lat_active and CarControllerParams.TX_GOVERNOR:
+      # Phase 38-2: a rejected echo means the panda's reference is now the
+      # measured angle — realign ours before the next frame (exact mirror)
+      if bool(getattr(CS, "tx_rejected", False)):
+        self.tx_angle_last = meas_angle_for_panda
+        self.tx_sat_frames = 0
       _vg = max(v_ego_safe, 1.0)                    # panda fudges its speed DOWN by 1 m/s -> its window is wider than this
       _dmax = min(get_max_angle_delta_vm(_vg, self.BASELINE_VM, self.params), self.params.ANGLE_LIMITS.MAX_ANGLE_RATE)
       _amax = get_max_angle_vm(_vg, self.BASELINE_VM, self.params)

@@ -106,6 +106,7 @@ def mk_controls():
   s.curvature = s.desired_curvature = s.predicted_lat_accel_ratio = 0.0
   s._lat_cmd_lp = s._klane_lp = s._absdc_slow = 0.0
   s.bsm_guard = cd.BsmLaneGuard(0.01)   # Phase 37b (Controls built via __new__)
+  s.lane_dropout = False; s.lane_dropout_clear_frames = 0; s.lane_dropout_frames = 0; s.lane_dropout_cooldown = 0   # Phase 39
   s._model_nonfinite_frames = 0
   return s
 
@@ -152,3 +153,65 @@ class TestRecursiveStatePoisoning:
     assert held[0] == pytest.approx(K, rel=1e-3)  # brief hold: no jerk
     out = run(s, int(3.0 / cd.DT_CTRL), nan_model)
     assert math.isfinite(out[0]) and abs(out[0]) < 0.05 * K
+
+
+def mk_model_dropout(k_plan, lane_prob):
+  m = mk_model(fallback=k_plan)
+  m.laneLineProbs = [lane_prob, lane_prob, lane_prob, lane_prob]
+  return m
+
+
+class TestLaneDropoutLatch:
+  # Phase 39: route 00000004 seg 8 — both lane probs ~0.13 for 7 s while the plan swung to
+  # -11.8e-3; the 6g-2 blend half-passed it. The latch must hold/decay instead.
+  def test_dropout_holds_and_decays_instead_of_following_the_plan(self):
+    s = mk_controls()
+    run(s, 200, mk_model())                       # steady on K with good lanes
+    steady = s.desired_curvature
+    out = run(s, 300, mk_model_dropout(k_plan=4 * K, lane_prob=0.13))   # 3 s dropout with a 4x plan spike
+    assert s.lane_dropout
+    assert abs(out[0]) < 0.5 * abs(steady) + 1e-9, (out[0], steady)   # decaying toward measured (0.0), not toward 4K
+    assert abs(out[0] - 4 * K) > 3 * K
+
+  def test_exit_needs_hi_for_half_a_second_then_plan_resumes(self):
+    s = mk_controls()
+    run(s, 200, mk_model())
+    run(s, 100, mk_model_dropout(k_plan=K, lane_prob=0.13))
+    assert s.lane_dropout
+    run(s, 20, mk_model_dropout(k_plan=K, lane_prob=0.5))        # 0.2 s above HI: still latched
+    assert s.lane_dropout
+    run(s, 40, mk_model_dropout(k_plan=K, lane_prob=0.5))        # 0.6 s: released
+    assert not s.lane_dropout
+    out = run(s, 300, mk_model())
+    assert out[0] == pytest.approx(K, rel=1e-2)
+
+  def test_reconnection_band_keeps_6g1_floor(self):
+    # lane_min in [0.20, 0.30] must NOT latch (6g-1: freezing there ran the car wide at corner entry)
+    s = mk_controls()
+    run(s, 200, mk_model())
+    run(s, 50, mk_model_dropout(k_plan=K, lane_prob=0.25))
+    assert not s.lane_dropout
+
+  def test_kill_restores_blend(self):
+    old = cd.LANE_DROPOUT_LATCH
+    try:
+      cd.LANE_DROPOUT_LATCH = False
+      s = mk_controls(); run(s, 200, mk_model())
+      out = run(s, 300, mk_model_dropout(k_plan=4 * K, lane_prob=0.13))
+      assert not s.lane_dropout and abs(out[0]) > 1.2 * K        # blend moves TOWARD the spike (pre-39); the latch would decay below K
+    finally:
+      cd.LANE_DROPOUT_LATCH = old
+
+  def test_max_duration_hands_back_to_blend(self):
+    s = mk_controls(); run(s, 200, mk_model())
+    run(s, 250, mk_model_dropout(k_plan=K, lane_prob=0.13))     # 2.5 s: still latched
+    assert s.lane_dropout
+    run(s, 100, mk_model_dropout(k_plan=K, lane_prob=0.13))     # 3.5 s: released even though still < LO
+    assert not s.lane_dropout
+
+  def test_exit_counter_resets_on_in_band_frame(self):
+    s = mk_controls(); run(s, 200, mk_model())
+    run(s, 100, mk_model_dropout(k_plan=K, lane_prob=0.13))
+    for _ in range(4):                                          # 4 x (0.4 s above HI, 1 frame in band): never 0.5 s continuous
+      run(s, 40, mk_model_dropout(k_plan=K, lane_prob=0.5)); run(s, 1, mk_model_dropout(k_plan=K, lane_prob=0.25))
+    assert s.lane_dropout

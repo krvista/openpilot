@@ -134,6 +134,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     audioFeedback @97;
 
     soundsUnavailableDEPRECATED @47;
+    laneDropout @100;  # i6n Phase 39
   }
 }
 
@@ -860,6 +861,7 @@ struct SelfdriveState {
 
 struct ControlsState @0x97ff69c53601abf1 {
   longitudinalPlanMonoTime @28 :UInt64;
+  laneDropout @67 :Bool;  # i6n Phase 39: lane-line dropout latch active (plan ignored, command decaying to straight)
   lateralPlanMonoTime @50 :UInt64;
 
   longControlState @30 :Car.CarControl.Actuators.LongControlState;

@@ -485,7 +485,7 @@ class CarControllerParams:
   # saturated (|internal - wire| > 1 deg) for RESYNC_FRAMES, send one frame at
   # the measured angle and reset the reference — deterministic realignment
   # instead of a rejection cascade. Follow-up: count src-192 echoes in carstate.
-  TX_GOVERNOR_RESYNC_FRAMES = 30
+  TX_GOVERNOR_RESYNC_FRAMES = 100   # 38-2 backup only: the rejected-echo detector (carstate, bus ACAN+192 — rlog-confirmed src 192) realigns exactly; each blind resync costs one dropped frame
   TX_GOVERNOR_RESYNC_DEG    = 1.0
   # Phase 37a: high-speed RECOVERY softening ("correct the error over a longer
   # time at speed"). Two levers, both inert on planned driving:

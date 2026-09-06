@@ -384,6 +384,9 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       # the passive LKAS_ALT angle must be THIS value. Control keeps using
       # steeringAngleDeg.
       self.mdps_angle_2 = float(cp.vl["MDPS"]["STEERING_ANGLE_2"])
+      # Phase 38-2: rejected-echo flag for this frame (see get_can_parsers)
+      _rej = can_parsers.get(Bus.loopback)
+      self.tx_rejected = bool(_rej is not None and len(_rej.vl_all["LKAS_ALT"]["COUNTER"]) > 0)
       self.wiper_front_on = bool(cp.vl["CCNC_WIPER"]["FRONT_WIPER_ON"])
       _ts_w = cp.ts_nanos["CCNC_WIPER"]["FRONT_WIPER_ON"]
       _ts_ref = cp.ts_nanos["MDPS"]["STEERING_COL_TORQUE"]
@@ -431,6 +434,19 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
     }
+    if CP.flags & HyundaiFlags.CCNC and CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+      # Phase 38-2: our own LKAS_ALT echoes that the panda REJECTED come back on
+      # src = ECAN-bus + CAN_REJECTED_BUS_OFFSET (192). Seeing one means the
+      # panda reset its desired_angle_last to the measured angle; the car
+      # controller mirrors that reset exactly instead of guessing (watchdog).
+      # Never part of canValid (alive/counter ignored).
+      # src = the bus we TX LKAS_ALT on (ACAN) + CAN_REJECTED_BUS_OFFSET; rlog evidence: 0x110 echoes at src 128 (accepted) / 192 (rejected)
+      rej = CANParser(DBC[CP.carFingerprint][Bus.pt], [("LKAS_ALT", 0)], CanBus(CP).ACAN + 192)
+      if 0x110 in rej.message_states:
+        rej.message_states[0x110].ignore_counter = True
+        rej.message_states[0x110].ignore_alive = True
+        rej.message_states[0x110].ignore_checksum = True
+      parsers[Bus.loopback] = rej
 
     if CP.flags & HyundaiFlags.CCNC:
       skip_addrs = [0x35, 0x2E0]  # ACCELERATOR, MANUAL_SPEED_LIMIT_ASSIST
