@@ -23,7 +23,15 @@ LANE_CHANGE_TIME_MAX = 10.
 # Corpus: 619 BSM-on episodes, min duration 0.35 s -> the radar already
 # debounces, no extra frame filter. Kill: False.
 LANE_CHANGE_BSM_ABORT = True
-LANE_CHANGE_BSM_ABORT_MAX_S = 1.0
+# 37b-2 (0x5e seg 14, 09-04 07:55, 50 km/h): the BSM flag lit exactly 1.0 s
+# into an automatic left change — the window had just closed and op steered
+# on for 4 s with the side occupied. 1.0 -> 1.5 s: wheel was < 5 deg through
+# +0.5 s, so the displacement at 1.5 s stays well under a metre and the
+# "never abort after crossing" rationale survives. A lane-line "not crossed"
+# witness was tried and rejected in review (the line estimate wobbled
+# 0.9 -> 2.6 -> 1.3 m in that very event; a standing comparison would have
+# aborted at +2.25 s, a latched one never).
+LANE_CHANGE_BSM_ABORT_MAX_S = 1.5
 
 DESIRES = {
   LaneChangeDirection.none: {

@@ -371,6 +371,9 @@ struct CarControlSP @0xa5cd762cd951a455 {
   leadOne @2 :LeadData;
   leadTwo @3 :LeadData;
   intelligentCruiseButtonManagement @4 :IntelligentCruiseButtonManagement;
+  # Phase 37b-2: model laneChangeState == laneChangeStarting (op is actively
+  # crossing); lets the car controller tell op's own lane change from a queued one
+  lateralLaneChangeActive @5 :Bool;
 
   struct Param {
     key @0 :Text;
