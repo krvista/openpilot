@@ -202,3 +202,22 @@ class TestPhase38_3WheelOutrunPassive:
       assert int(frame["LKA_ICON"]) == 2 and int(frame["LKA_WARNING"]) == 0 and int(frame["FCA_SYSWARN"]) == 0 and int(frame["LKA_ASSIST"]) == 1
     finally:
       H.CAM_MSG_TEMPLATE.clear(); H.CAM_MSG_TEMPLATE.update(old)
+
+  def test_gain_reramps_under_the_37a_cap_after_passive_exit(self):
+    # review: with the wire gain at 0 during passive frames the internal gain must not keep ramping;
+    # the first active frames after the exit must climb at <= ACIGAIN_RATE_UP_CAP per frame from 0
+    v = 25.3; sim = Sim(); settle(sim, v=v)
+    run_signal(sim, 300, v=v, wheel=8.0, cmd=8.0, tq=0.0, mdps_angle_2=8.0)
+    assert _frame_active(sim)[1] > 0.8                             # wire gain (0..1 in the harness) high before the episode
+    w = 8.0; step = _panda_delta(sim, v) + 0.35
+    for _ in range(8):                                             # driver yanks: passive
+      w -= step; sim.step(v=v, wheel=w, cmd=8.0, tq=190.0, mdps_angle_2=w)
+    assert not _frame_active(sim)[0]
+    gains = []
+    for _ in range(40):                                            # wheel quiet: active resumes, gain re-ramps
+      sim.step(v=v, wheel=w, cmd=w, tq=0.0, mdps_angle_2=w)
+      active, g = _frame_active(sim)
+      if active: gains.append(g)
+    assert gains and gains[0] <= 0.05, gains[:3]                   # no step on the exit frame
+    steps = [b - a for a, b in zip(gains, gains[1:])]
+    assert max(steps) <= max(P.ACIGAIN_RATE_UP_CAP_V) + 1e-6, max(steps)

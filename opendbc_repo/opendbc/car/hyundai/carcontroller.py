@@ -1842,6 +1842,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         wire_active = False
         tx_angle = meas_angle_for_panda
         self.tx_sat_frames = 0
+        # review (routes 5+6, 36 exits): the internal ACI gain kept ramping behind a wire gain of 0, so the first
+        # active frame after an exit carried up to 0.72 in one step — the very step the 37a RATE_UP_CAP exists to
+        # prevent. Keep the internal ramp at the wire value (0) so the exit re-ramps under the cap.
+        self.aci_gain_last = 0.0
     else:
       tx_angle = meas_angle_for_panda if not effective_lat_active else self.apply_angle_last
       self.tx_sat_frames = 0

@@ -18,6 +18,8 @@ echo "=== [2] opendbc safety suite: hyundai canfd (upstream)"
 ( cd opendbc_repo && PYTHONPATH=$PWD python3 -m pytest opendbc/safety/tests/test_hyundai_canfd.py -q 2>&1 | tail -1 ) | tee /tmp/acc2; grep -q " passed" /tmp/acc2 && ! grep -q "failed\|error" /tmp/acc2 || fail=1
 echo "=== [2] opendbc safety suite: i6n CCNC (angle enforcement + model-id falsification)"
 ( cd opendbc_repo && PYTHONPATH=$PWD python3 -m pytest opendbc/safety/tests/test_hyundai_canfd_i6n.py -q 2>&1 | tail -1 ) | tee /tmp/acc3; grep -q " passed" /tmp/acc3 && ! grep -q "failed\|error" /tmp/acc3 || fail=1
+echo "=== [3b] ruff: syntax / undefined names / duplicate defs on the control path (a NameError in publish() slipped past phase_tests once)"
+ruff check --select E9,F63,F7,F82,F821,F811 openpilot/selfdrive/controls openpilot/selfdrive/selfdrived openpilot/selfdrive/car openpilot/system/hardware/hardwared.py opendbc_repo/opendbc/car/hyundai opendbc_repo/opendbc/car/lateral.py opendbc_repo/opendbc/car/scalar.py --output-format concise 2>&1 | tee /tmp/acc3b | grep -q "All checks passed" || fail=1
 echo "=== [4] static review: sm keys / enum members / capnp fields / interp tables / Params keys (exit 1 on issue)"
 PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/ccnc_analysis/static_review.py > /tmp/acc4 2>&1 && echo "static review: clean" || { sed -n '/^## ISSUES/,/^## notes/p' /tmp/acc4; fail=1; }
 # legs 5-6 need a local drive log: DRIVELOG_SEG=<path to an rlog.zst of a recent i6nv3 drive> (skipped if unset)
