@@ -760,6 +760,8 @@ class Controls(ControlsExt):
     cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
     cs.desiredCurvature = self.desired_curvature
     cs.laneDropout = bool(self.lane_dropout)   # Phase 39
+    cs.angleFbInteg = float(getattr(self.LaC, "_fb_integ", 0.0))   # i6n: 7a integrator state (see log.capnp)
+    cs.steerCmdGapDeg = float(CC.actuators.steeringAngleDeg - CS.steeringAngleDeg) if self.CP.steerControlType == car.CarParams.SteerControlType.angle else 0.0
     cs.longControlState = self.LoC.long_control_state
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
