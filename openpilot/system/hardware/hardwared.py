@@ -188,6 +188,46 @@ def hw_state_thread(end_event, hw_queue):
     time.sleep(DT_HW)
 
 
+def _log_cpu_topology(tag: str) -> None:
+  """i6n: one-shot record of the kernel's CPU isolation and the IRQ placement, so the per-core load in
+  the logs (deviceState.cpuUsagePercent) can be read against what actually runs there. isolcpus lives
+  in the AGNOS kernel command line, not in this tree; IRQ counts come from /proc/interrupts (cumulative),
+  so the 'onroad' snapshot minus the 'boot' one is the onroad distribution."""
+  try:
+    with open("/proc/cmdline") as f:
+      cmdline = f.read().strip()
+    kv = dict(s.split("=", 1) for s in cmdline.split() if "=" in s)
+    isol = {k: kv[k] for k in ("isolcpus", "nohz_full", "rcu_nocbs", "irqaffinity") if k in kv}
+    irqs = []
+    with open("/proc/interrupts") as f:
+      header = f.readline().split()
+      ncpu = len(header)
+      for line in f:
+        parts = line.split()
+        if not parts or not parts[0].endswith(":"):
+          continue
+        num = parts[0][:-1]
+        counts = []
+        for x in parts[1:1 + ncpu]:
+          if not x.isdigit():
+            break
+          counts.append(int(x))
+        if not counts or sum(counts) == 0:
+          continue
+        name = " ".join(parts[1 + len(counts):])[-40:]
+        try:
+          with open(f"/proc/irq/{num}/smp_affinity_list") as af:
+            aff = af.read().strip()
+        except OSError:
+          aff = "?"
+        irqs.append((sum(counts), num, name, aff, counts))
+    irqs.sort(reverse=True)
+    top = [{"irq": n, "name": name, "affinity": aff, "per_cpu": c} for _, n, name, aff, c in irqs[:16]]
+    cloudlog.event("cpu_topology", tag=tag, isolation=isol, top_irqs=top, ncpu=ncpu)
+  except Exception:
+    cloudlog.exception("cpu_topology snapshot failed")
+
+
 def hardware_thread(end_event, hw_queue) -> None:
   system_stats = LinuxSystemStats()
   pm = messaging.PubMaster(['deviceState'])
@@ -235,6 +275,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   last_uptime_ts: float = time.monotonic()
 
   HARDWARE.initialize_hardware()
+  _log_cpu_topology("boot")            # i6n: isolcpus / IRQ placement, once (see helper)
   thermal_config = HARDWARE.get_thermal_config()
 
   fan_controller = FanController(int(1./DT_HW))
@@ -242,6 +283,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   big_model_available = (MODELS_DIR / 'big_driving_supercombo.onnx').is_file() or usbgpu_compiled()
 
   loop_t_prev = time.monotonic(); _t_sm = loop_t_prev; sm_update_s = 0.0
+  onroad_topology_at = None
   while not end_event.is_set():
     _t_loop = time.monotonic()
     # i6n: a 7 s gap in deviceState (route 00000005 seg 19) could not be attributed from the
@@ -493,6 +535,10 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     # report to server once every 10 minutes, or every 1s when thermally blocked
     rising_edge_started = should_start and not should_start_prev
+    if rising_edge_started:
+      onroad_topology_at = count + int(120.0 / DT_HW)
+    if onroad_topology_at is not None and count == onroad_topology_at:
+      _log_cpu_topology("onroad+120s"); onroad_topology_at = None
     status_packet_interval = 1. if show_alert else 600.
     if rising_edge_started or (count % int(status_packet_interval / DT_HW)) == 0:
       dat = {
