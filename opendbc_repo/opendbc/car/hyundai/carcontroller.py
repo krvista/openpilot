@@ -1,7 +1,7 @@
 import math
-import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+from opendbc.car.scalar import interp as _interp, clip as _clip, sign as _sign   # bit-identical scalar np.interp/clip/sign (see scalar.py)
 from opendbc.car.lateral import apply_driver_steer_torque_limits, apply_steer_angle_limits_vm, common_fault_avoidance, get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -123,11 +123,11 @@ def compute_hold_torque(v_ego, lat_acc):
   B(v) + G(v) * S(la). Pure function so the model is unit-testable in
   isolation (review 31b) — the kill switch (BASE_V/LAGAIN_V all-zero) and
   the cap headroom are pinned in phase_tests/test_driver_domain.py."""
-  base = float(np.interp(v_ego, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
+  base = float(_interp(v_ego, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
                          CarControllerParams.ACIGAIN_HOLD_BASE_V))
-  gain = float(np.interp(v_ego, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
+  gain = float(_interp(v_ego, CarControllerParams.ACIGAIN_HOLD_BASE_SPEEDS_MS,
                          CarControllerParams.ACIGAIN_HOLD_LAGAIN_V))
-  shape = float(np.interp(lat_acc, CarControllerParams.ACIGAIN_HOLD_LA_BP,
+  shape = float(_interp(lat_acc, CarControllerParams.ACIGAIN_HOLD_LA_BP,
                           CarControllerParams.ACIGAIN_HOLD_LA_S))
   return min(base + gain * shape, CarControllerParams.ACIGAIN_HOLD_MAX_NM)
 
@@ -196,18 +196,18 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # Lesson: the aggregate quiet-window shake metric cannot distinguish
     # "less shake" from "less steering" — normalize by motion before it
     # drives another change. 24a ladder restored:
-    base_ceiling = np.interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
+    base_ceiling = _interp(v_ego_kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])
     # Phase 36: continuous curve-conditional raise at low speed (see
     # values.py ACIGAIN_CURVE_*). curve_deg is the caller's fast-rise /
     # slow-fall EMA of |commanded angle|; w ramps 0 -> 1 over 3 -> 12 deg,
     # no threshold.
-    curve_ceiling = np.interp(v_ego_kph, CarControllerParams.ACIGAIN_CURVE_CEILING_SPEEDS_KPH,
+    curve_ceiling = _interp(v_ego_kph, CarControllerParams.ACIGAIN_CURVE_CEILING_SPEEDS_KPH,
                               CarControllerParams.ACIGAIN_CURVE_CEILING_V)
-    curve_w = np.interp(curve_deg, CarControllerParams.ACIGAIN_CURVE_RAMP_DEG, [0.0, 1.0])
+    curve_w = _interp(curve_deg, CarControllerParams.ACIGAIN_CURVE_RAMP_DEG, [0.0, 1.0])
     base_ceiling = base_ceiling + curve_w * (curve_ceiling - base_ceiling)
     # Error-based boost reduction gain: at 0 kph, ignore errors under 1.25°.
-    error_start = np.interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
-    error_mult_raw = np.interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
+    error_start = _interp(v_ego_kph, [0, 20, 40, 120], [1.25, 0.5, 0.3, 0.2])
+    error_mult_raw = _interp(abs(steering_error), [error_start, error_start*2], [1.0, 2])
     # Phase 19b: the drift-recovery boost is a low-speed noise AMPLIFIER —
     # creep-band command oscillation opens |steering_error| past error_start
     # (measured firing 43-53% of hands-off low-speed time on 0x36-0x37), so
@@ -215,7 +215,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # Gate it out below 15 km/h, full strength again from 25 km/h; highway
     # drift recovery (its actual purpose) is untouched.
     # Kill switch: [0.0, 0.0] speeds -> boost always full.
-    boost_speed_gate = np.interp(v_ego_kph, [15.0, 25.0], [0.0, 1.0])
+    boost_speed_gate = _interp(v_ego_kph, [15.0, 25.0], [0.0, 1.0])
     error_mult_raw = 1.0 + (error_mult_raw - 1.0) * boost_speed_gate
     # Phase 6c-2 N7b: the error_mult boost was designed to recover op
     # tracking when hands-off drift opens steering_error (i.e. ACIGain
@@ -228,7 +228,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # 100 Nm deadzone to zero at the 180 Nm low-v full-override point;
     # above 180 Nm there is no boost at all. The base_ceiling × 1 line
     # remains, so light-grip / hands-off recovery is unchanged.
-    torque_suppress = np.interp(abs(steering_torque), [30, 110], [1.0, 0.0])  # Phase 22: driver-domain
+    torque_suppress = _interp(abs(steering_torque), [30, 110], [1.0, 0.0])  # Phase 22: driver-domain
     # Phase 9: in yield-by-authority mode the command no longer tracks the wheel,
     # so steering_error reflects the driver's own divergence during grip; boosting
     # MDPS back to op's angle would then FIGHT the driver. The caller sets
@@ -246,7 +246,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # (anchor-only would be 10.3% but misses the sub-anchor 150-300 Nm
     # release class) while preserving the field-event catch (t=3.05
     # release had anchor_recent = 103).
-    big_err_taper = np.interp(abs(steering_error), [2.5, 4.0], [1.0, 0.0]) if post_grip else 1.0
+    big_err_taper = _interp(abs(steering_error), [2.5, 4.0], [1.0, 0.0]) if post_grip else 1.0
     error_mult = 1.0 if suppress_error_boost else (1.0 + (error_mult_raw - 1.0) * torque_suppress * big_err_taper)
     dynamic_ceiling = min(1.0, base_ceiling * error_mult)
     # Phase 5d A2 (commit 4a4d29b): when the driver signals intent with
@@ -272,7 +272,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
       # blinker gain p50 = 0.260). Taper over the offset-clearing band instead —
       # see ACIGAIN_BLINKER_GATE_* in values.py for the sim numbers.
       # Kill switches: [0.45, 0.45] = pre-10b flat; [0.28, 0.28] = 10b flat.
-      ceiling_blinker = float(np.interp(
+      ceiling_blinker = float(_interp(
         abs(steering_torque),
         [CarControllerParams.ACIGAIN_BLINKER_GATE_START_NM,
          CarControllerParams.ACIGAIN_BLINKER_GATE_FULL_NM],
@@ -282,11 +282,11 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # caller passes [100,260]->[ceiling,0.10] so authority drops harder to absorb
     # the removed command-blend's yield; hands-off keeps the legacy band
     # [100,350]->[ceiling,0.19].
-    target = np.interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
+    target = _interp(abs(steering_torque), [grip_start, grip_full], [dynamic_ceiling, grip_floor])
   else:
     target = 0.0
   delta = target - last_gain
-  rate_dn = np.interp(abs(steering_torque), [0, 300, 700], [0.004, 0.01, 0.04])
+  rate_dn = _interp(abs(steering_torque), [0, 300, 700], [0.004, 0.01, 0.04])
   # Phase 35a: at speed a real push must drop authority promptly — the
   # caller passes a speed-scheduled floor (0.03/frame from 60 km/h), already
   # gated on real grip evidence (driver_pressed OR driver_tq >= GATE_NM 160),
@@ -322,9 +322,9 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # live plan, not a stale command — recover 3x faster there (see
     # values.py ANCHORED_RECOVERY_*; Hannam bridge handover case).
     tail = CarControllerParams.ANCHORED_RECOVERY_RATE_UP if anchored_recovery else 0.004
-    rate_up = float(np.interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, tail]))
+    rate_up = float(_interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, tail]))
   else:
-    rate_up = float(np.interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
+    rate_up = float(_interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
   rate_up = min(rate_up, rate_up_cap)   # Phase 37a: speed/rain-tapered rise cap
   gain = last_gain + max(-rate_dn, min(rate_up, delta))
   return round(gain / 0.004) * 0.004
@@ -357,13 +357,13 @@ def sp_smooth_angle(v_ego_raw: float, apply_angle: float, apply_angle_last: floa
   if (v_ego_raw < CarControllerParams.SMOOTHING_ANGLE_DEADBAND_MAX_VEGO
       and gap < CarControllerParams.SMOOTHING_ANGLE_DEADBAND_DEG):
     return apply_angle_last
-  adjusted_alpha = np.interp(v_ego_raw, CarControllerParams.SMOOTHING_ANGLE_VEGO_MATRIX,
+  adjusted_alpha = _interp(v_ego_raw, CarControllerParams.SMOOTHING_ANGLE_VEGO_MATRIX,
                               CarControllerParams.SMOOTHING_ANGLE_ALPHA_MATRIX)
   adjusted_alpha = float(min(float(adjusted_alpha), 1.))
   # Maneuver release: scale alpha up with |gap| between LO and HI degrees, but only
   # up to RELEASE_MAX (6g-2a) so a fast catch-up keeps ~30% damping. If the speed
   # alpha already exceeds RELEASE_MAX (high speed) the release adds nothing.
-  release = float(np.interp(gap, [CarControllerParams.SMOOTHING_ANGLE_RELEASE_LO_DEG,
+  release = float(_interp(gap, [CarControllerParams.SMOOTHING_ANGLE_RELEASE_LO_DEG,
                                   CarControllerParams.SMOOTHING_ANGLE_RELEASE_HI_DEG], [0.0, 1.0]))
   headroom = max(CarControllerParams.SMOOTHING_ANGLE_RELEASE_MAX - adjusted_alpha, 0.0)
   adjusted_alpha_limited = adjusted_alpha + headroom * release
@@ -616,7 +616,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.apply_torque_last = apply_torque
 
     # accel + longitudinal
-    accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+    accel = float(_clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
     stopping = actuators.longControlState == LongCtrlState.stopping
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
 
@@ -757,11 +757,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.alert_cam_stale_frames = max(self.alert_cam_stale_frames - 5, 0)
 
     # F8 / R1: NaN guards on raw sensor / planner inputs.
-    v_ego_safe = float(np.clip(CS.out.vEgoRaw, 0.0, 100.0)) if np.isfinite(CS.out.vEgoRaw) else 0.0
-    steer_angle_safe = float(CS.out.steeringAngleDeg) if np.isfinite(CS.out.steeringAngleDeg) else 0.0
-    steer_torque_safe = float(CS.out.steeringTorque) if np.isfinite(CS.out.steeringTorque) else 0.0
+    v_ego_safe = float(_clip(CS.out.vEgoRaw, 0.0, 100.0)) if math.isfinite(CS.out.vEgoRaw) else 0.0
+    steer_angle_safe = float(CS.out.steeringAngleDeg) if math.isfinite(CS.out.steeringAngleDeg) else 0.0
+    steer_torque_safe = float(CS.out.steeringTorque) if math.isfinite(CS.out.steeringTorque) else 0.0
     op_curv_raw = float(CC.actuators.steeringAngleDeg)
-    op_curv_safe = op_curv_raw if np.isfinite(op_curv_raw) else steer_angle_safe
+    op_curv_safe = op_curv_raw if math.isfinite(op_curv_raw) else steer_angle_safe
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
 
     # Phase 26: hold-compensated driver-torque domain, computed ONCE here and
@@ -811,7 +811,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # driver) starts turning; the gate only lowers comp, so a gripping
       # driver is seen sooner, never later.
       steer_rate_safe = (float(CS.out.steeringRateDeg)
-                         if np.isfinite(CS.out.steeringRateDeg) else 0.0)
+                         if math.isfinite(CS.out.steeringRateDeg) else 0.0)
       # Rate hysteresis (enter <10 / exit >14 deg/s): a single threshold on
       # a 10 deg/s-quantized rate signal measured p50 4.2 toggles/s in-domain
       # with dwells long enough for full 140<->70 comp swings = a new 2-4 Hz
@@ -829,7 +829,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Slew guard: a single-frame angle/speed sensor spike would otherwise jump
     # hold_comp by up to +142 Nm and mask a real driver input for that window.
     # Real curve entries measure ~1 Nm/frame; 4 Nm/frame passes them cleanly.
-    self.hold_comp_last += float(np.clip(hold_target - self.hold_comp_last,
+    self.hold_comp_last += float(_clip(hold_target - self.hold_comp_last,
                                          -CarControllerParams.ACIGAIN_HOLD_SLEW_NM,
                                           CarControllerParams.ACIGAIN_HOLD_SLEW_NM))
     hold_comp = self.hold_comp_last
@@ -850,7 +850,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     pressed_base = (CarControllerParams.DRIVER_PRESSED_NM if self.prev_eff_lat_active
                     else CarControllerParams.DRIVER_PRESSED_RAW_NM)
     pressed_thr = pressed_base * (0.8 if self.driver_pressed else 1.0)
-    self.driver_pressed_cnt = int(np.clip(self.driver_pressed_cnt + (1 if driver_tq > pressed_thr else -1),
+    self.driver_pressed_cnt = int(_clip(self.driver_pressed_cnt + (1 if driver_tq > pressed_thr else -1),
                                           0, 2 * CarControllerParams.DRIVER_PRESSED_FRAMES + 1))
     self.driver_pressed = self.driver_pressed_cnt > CarControllerParams.DRIVER_PRESSED_FRAMES
     # Phase 28 (0x41 yank fix, see values.py): override-episode memory used
@@ -952,11 +952,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       DRIVER_TORQUE_DEADZONE = CarControllerParams.DRIVER_TORQUE_DEADZONE
       override_low_v  = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_LOW_V
       override_high_v = CarControllerParams.DRIVER_TORQUE_FULL_OVERRIDE_HIGH_V
-    full_override_torque = float(np.interp(v_ego_safe,
+    full_override_torque = float(_interp(v_ego_safe,
                                            [CarControllerParams.DRIVER_TORQUE_LOW_V_SPEED,
                                             CarControllerParams.DRIVER_TORQUE_HIGH_V_SPEED],
                                            [override_low_v, override_high_v]))
-    override_factor = float(np.clip((abs(steer_torque_safe) - DRIVER_TORQUE_DEADZONE) /
+    override_factor = float(_clip((abs(steer_torque_safe) - DRIVER_TORQUE_DEADZONE) /
                                      max(full_override_torque - DRIVER_TORQUE_DEADZONE, 1.0), 0.0, 1.0))
 
     # The heavy-override anchor (apply_angle_last := wheel for a bump-free resume)
@@ -1227,7 +1227,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # post-frame clamp still runs, covering the angle_passive_active
       # case which is updated mid-method.
       if heavy_grip_anchor:
-        self.apply_angle_last = float(np.clip(steer_angle_safe,
+        self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.frames_since_apply_anchor = 0
@@ -1253,7 +1253,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # the memory dead at the field event's actual t=3.01 release). The
         # wound curve_trim is zeroed so it cannot recreate the divergence
         # just dumped (F5).
-        self.apply_angle_last = float(np.clip(steer_angle_safe,
+        self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.frames_since_apply_anchor = 0
@@ -1277,7 +1277,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Neither torque-gated variant could fix it (silence-timeout: 50%
       # coverage, arm-budget: 53% — both defeated by hands-off torque noise
       # re-arming the state). Handover latency is the safety-dominant side.
-      desired_angle = float(np.clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+      desired_angle = float(_clip(op_curv_safe, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                    self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
       # Phase 12b (P2): backlash/hysteresis band on the desired angle. The output
@@ -1291,10 +1291,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # SOURCE (complementing the ceiling cut, which reduces transmission);
       # tapers to the legacy 0.15 by 43 km/h so curve tracking above town
       # speed is untouched.
-      hyst = float(np.interp(v_ego_safe, CarControllerParams.CMD_HYSTERESIS_SPEEDS_MS,
+      hyst = float(_interp(v_ego_safe, CarControllerParams.CMD_HYSTERESIS_SPEEDS_MS,
                              CarControllerParams.CMD_HYSTERESIS_V))
       if CC.latActive and hyst > 0.0:
-        self.cmd_hyst = float(np.clip(self.cmd_hyst, desired_angle - hyst, desired_angle + hyst))
+        self.cmd_hyst = float(_clip(self.cmd_hyst, desired_angle - hyst, desired_angle + hyst))
         desired_angle = self.cmd_hyst
       else:
         self.cmd_hyst = desired_angle
@@ -1331,10 +1331,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # exit bleed) alone would carry an opposing trim for seconds — replay
       # measured up to 4.5° opposing — so fast-bleed any trim opposing the
       # current curve direction, in every branch.
-      if self.curve_trim * np.sign(desired_angle) < 0.0:
+      if self.curve_trim * _sign(desired_angle) < 0.0:
         self.curve_trim *= (1.0 - DT_CTRL / CarControllerParams.CURVE_TRIM_FLIP_TAU_S)
       if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES:
-        trim_cap = float(np.interp(v_ego_safe,
+        trim_cap = float(_interp(v_ego_safe,
                                    CarControllerParams.CURVE_TRIM_CAP_SPEEDS_MS,
                                    CarControllerParams.CURVE_TRIM_CAP_DEG))
         # Rate-limited integrator: step toward the residual's sign at up to
@@ -1351,9 +1351,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         alpha = DT_CTRL / max(CarControllerParams.CURVE_TRIM_RESID_LP_TAU_S, DT_CTRL)
         self.trim_resid_lp += alpha * (residual - self.trim_resid_lp)
         db = CarControllerParams.CURVE_TRIM_RESID_DEADBAND_DEG
-        res_eff = float(np.sign(self.trim_resid_lp)) * max(0.0, abs(self.trim_resid_lp) - db)
+        res_eff = float(_sign(self.trim_resid_lp)) * max(0.0, abs(self.trim_resid_lp) - db)
         step = trim_rate * DT_CTRL
-        self.curve_trim = float(np.clip(self.curve_trim + np.clip(res_eff, -step, step),
+        self.curve_trim = float(_clip(self.curve_trim + _clip(res_eff, -step, step),
                                         -trim_cap, trim_cap))
       else:
         self.trim_resid_lp = 0.0
@@ -1361,7 +1361,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.curve_trim *= (1.0 - DT_CTRL / max(CarControllerParams.CURVE_TRIM_BLEED_TAU_S, DT_CTRL))
         if abs(self.curve_trim) < 0.01:
           self.curve_trim = 0.0
-      desired_angle = float(np.clip(desired_angle + self.curve_trim,
+      desired_angle = float(_clip(desired_angle + self.curve_trim,
                                     -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                      self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
@@ -1397,10 +1397,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # Phase 10a: extra low-speed angle-rate taper to kill the felt "grab" on
         # override-recovery at <30 km/h (see values.py). The VM limiter already
         # ran; this only tightens the per-frame step further at low speed.
-        rate_cap = float(np.interp(v_ego_safe,
+        rate_cap = float(_interp(v_ego_safe,
                                    CarControllerParams.MAX_ANGLE_RATE_LOWSPEED_BP,
                                    CarControllerParams.MAX_ANGLE_RATE_LOWSPEED_V))
-        apply_angle = float(np.clip(apply_angle, self.apply_angle_last - rate_cap,
+        apply_angle = float(_clip(apply_angle, self.apply_angle_last - rate_cap,
                                                  self.apply_angle_last + rate_cap))
         # Phase 37a: inside the recovery window after an anchor (the command
         # chasing the plan from wherever the wheel was left), bound the
@@ -1409,8 +1409,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # RECOVERY_JERK_CAP_*). Planned driving never reaches these rates.
         if self.frames_since_apply_anchor <= CarControllerParams.RECOVERY_JERK_CAP_FRAMES:
           _vk = v_ego_safe * CV.MS_TO_KPH
-          _jn = float(np.interp(_vk, CarControllerParams.RECOVERY_JERK_CAP_SPEEDS_KPH, CarControllerParams.RECOVERY_JERK_CAP_V))
-          _jr = float(np.interp(_vk, CarControllerParams.RECOVERY_JERK_CAP_SPEEDS_KPH, CarControllerParams.RECOVERY_JERK_CAP_RAIN_V))
+          _jn = float(_interp(_vk, CarControllerParams.RECOVERY_JERK_CAP_SPEEDS_KPH, CarControllerParams.RECOVERY_JERK_CAP_V))
+          _jr = float(_interp(_vk, CarControllerParams.RECOVERY_JERK_CAP_SPEEDS_KPH, CarControllerParams.RECOVERY_JERK_CAP_RAIN_V))
           _j = _jn + self.rain_w * (_jr - _jn)
           if _j < self.params.ANGLE_LIMITS.MAX_LATERAL_JERK - 1e-6:
             _vs = max(v_ego_safe, 1.0)
@@ -1419,13 +1419,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             # safety VM is the binding one by ~10%)
             _cap = min(math.degrees(self.VM.get_steer_from_curvature(_j / (_vs ** 2), _vs, 0)),
                        math.degrees(self.BASELINE_VM.get_steer_from_curvature(_j / (_vs ** 2), _vs, 0))) * DT_CTRL
-            apply_angle = float(np.clip(apply_angle, self.apply_angle_last - _cap,
+            apply_angle = float(_clip(apply_angle, self.apply_angle_last - _cap,
                                                      self.apply_angle_last + _cap))
         self.apply_angle_last = apply_angle
         self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
 
       if not CC.latActive:
-        self.apply_angle_last = float(np.clip(steer_angle_safe,
+        self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.frames_since_apply_anchor = 0
@@ -1550,8 +1550,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         v_ego_safe <= CarControllerParams.INTENT_DISAGREE_VEGO_MS
         and driver_tq >= CarControllerParams.INTENT_DISAGREE_TQ_MIN_NM
         and abs(self.apply_angle_last - steer_angle_safe) >= CarControllerParams.INTENT_DISAGREE_DELTA_DEG
-        and (np.sign(steer_torque_safe)
-             * np.sign(self.apply_angle_last - steer_angle_safe)) < 0
+        and (_sign(steer_torque_safe)
+             * _sign(self.apply_angle_last - steer_angle_safe)) < 0
       )
       self.intent_disagree_frames = self.intent_disagree_frames + 1 if low_intent_disagree else 0
       # Phase 26: driver_pressed replaces the raw EPS flag — a >= 40° curve at
@@ -1598,7 +1598,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # step at scenario-gate release). Anchored, resume starts at the wheel.
     if (self.angle_passive_active or heavy_grip_anchor or self.parking_mode_active
         or in_passthrough):
-      self.apply_angle_last = float(np.clip(steer_angle_safe,
+      self.apply_angle_last = float(_clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
       self.frames_since_apply_anchor = 0
@@ -1670,18 +1670,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # felt residual force IS the floor — relief goes exactly there while
       # city-speed floors (tracking authority) stay untouched.
       v_kph_aci = v_ego_safe * CV.MS_TO_KPH
-      ho_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
+      ho_floor = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_FLOOR_SPEEDS_KPH,
                                  CarControllerParams.ACIGAIN_HANDSOFF_FLOOR_V))
       # Phase 35a: grip-side floor on its own schedule (0.03 from 60 km/h)
-      gr_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_FLOOR35_SPEEDS_KPH,
+      gr_floor = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_FLOOR35_SPEEDS_KPH,
                                  CarControllerParams.ACIGAIN_GRIP_FLOOR35_V))
       # Phase 25: speed-scheduled full-yield points (see values.py).
-      ho_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
+      ho_full = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_FULL_SPEEDS_KPH,
                                 CarControllerParams.ACIGAIN_HANDSOFF_FULL_V))
       # Phase 35a: grip full-yield point 80 driver-Nm from 60 km/h (was 120)
-      gr_full = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_FULL35_SPEEDS_KPH,
+      gr_full = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_FULL35_SPEEDS_KPH,
                                 CarControllerParams.ACIGAIN_GRIP_FULL35_V))
-      grip_rate_dn_floor = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH,
+      grip_rate_dn_floor = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH,
                                            CarControllerParams.ACIGAIN_GRIP_RATE_DN_FLOOR_V))
       # Verification round (35c): "recently pinned" alone cannot tell a fresh
       # chase from a stale command when an INVISIBLE touch (driver_tq below
@@ -1725,12 +1725,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                        and ((self.blind_left_hold > 0) if steering_error > 0
                             else (self.blind_right_hold > 0)))
       self.blind_caution_on = blind_caution
-      rate_up_cap_dry = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
+      rate_up_cap_dry = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
                                         CarControllerParams.ACIGAIN_RATE_UP_CAP_V))
-      rate_up_cap_rain = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
+      rate_up_cap_rain = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_RATE_UP_CAP_SPEEDS_KPH,
                                          CarControllerParams.ACIGAIN_RATE_UP_CAP_RAIN_V))
       # Phase 37c: yield-curve start by speed (resting hand keeps the assist at speed)
-      grip_start_dry = float(np.interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_START_SPEEDS_KPH,
+      grip_start_dry = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_START_SPEEDS_KPH,
                                        CarControllerParams.ACIGAIN_GRIP_START_V))
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
@@ -1779,8 +1779,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # passive-frame angle: the exact sensor panda samples (MDPS.STEERING_ANGLE_2),
     # clipped to the safety window; steeringAngleDeg only if that is unavailable
     _mdps2 = getattr(CS, "mdps_angle_2", None)
-    _meas_src = float(_mdps2) if (_mdps2 is not None and np.isfinite(_mdps2)) else steer_angle_safe
-    meas_angle_for_panda = float(np.clip(_meas_src, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+    _meas_src = float(_mdps2) if (_mdps2 is not None and math.isfinite(_mdps2)) else steer_angle_safe
+    meas_angle_for_panda = float(_clip(_meas_src, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
     # Phase 38 wire governor (see values.py TX_GOVERNOR): what goes on the bus
     # never exceeds the panda's per-frame VM delta / max angle relative to the
     # last transmitted value; passive frames reset the reference to the
@@ -1826,8 +1826,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.wheel_outrun_hot = 0
       _last_can = int(round(self.tx_angle_last * 10.0))
       _want_can = int(round(self.apply_angle_last * 10.0))
-      _tx_can = int(np.clip(_want_can, _last_can - _d_can, _last_can + _d_can))
-      _tx_can = int(np.clip(_tx_can, -_a_can, _a_can))
+      _tx_can = int(_clip(_want_can, _last_can - _d_can, _last_can + _d_can))
+      _tx_can = int(_clip(_tx_can, -_a_can, _a_can))
       tx_angle = _tx_can / 10.0
       # saturation watchdog: realign with the panda's reference (measured angle)
       if abs(self.apply_angle_last - tx_angle) > CarControllerParams.TX_GOVERNOR_RESYNC_DEG:

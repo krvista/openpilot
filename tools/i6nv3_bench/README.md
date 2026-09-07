@@ -31,6 +31,7 @@ DRIVELOG_SEG=$SEG DRIVELOG_DROPOUT_SEG=$SEG bash tools/i6nv3_bench/acceptance.sh
 | [7] E2E 차선 드롭아웃 | `replay_e2e_dropout.py <seg>` | 실제 controlsd 래치(Phase 39) → 실제 selfdrived 시각 경고까지 한 줄로 |
 | (수동) card 패리티 | `replay_card_parity.py <seg>` | 실제 card 재생 프레임 수/활성 비율/각도 차이 요약 |
 | (수동) controlsd 프로파일 | `profile_controlsd.py <seg> 2800 --dump out.pkl` | 실제 Controls 를 로그로 구동해 프레임당 wall 시간 + cProfile 핫스팟; `--dump` 출력을 최적화 전후로 비교하면 패리티 검증 |
+| (수동) CarController 프레임 덤프 | `dump_cc_frames.py <route> <seg> out.pkl` | 실제 CarController 가 로그 입력으로 만든 모든 CAN 프레임 + 내부 상태 + 프레임당 wall 시간; 전후 덤프 바이트 비교 = 패리티 |
 
 controlsd 최적화(2026-09-07): modelV2 한 메시지(20 Hz)에서만 정해지는 값(계획점 12/24개 3차 다항 적합, 차선확률,
 진입보조 차선중심 곡률, BSM 가드 입력, 차선변경 상태)을 `_ModelFrame` 으로 한 번만 계산해 100 Hz 프레임이 재사용.
@@ -39,6 +40,14 @@ np.interp/np.clip 은 같은 산술의 순수 파이썬 `_interp/_clip` 으로. 
 0.41 → 0.27 ms, 비활성 위주 seg 25 0.21 ms(변화 없음). 출력은 실제 데몬 리플레이 3 세그먼트 35,620행 비트 동일.
 selfdrived 는 코어 4(card·controlsd 와 공유, 95–98 %)에서 코어 5(radard·plannerd CTRL_LOW)로 이동. 코어 6 은
 camerad 의 격리 코어(비실시간 단일 폴 루프)라 실시간 이웃을 두지 않음.
+
+card/CarController 최적화(2026-09-07): 프로파일에서 프레임당 np.clip 19회 + np.interp 23회(+ lateral.py 8회)가
+CarController 시간의 ~36 %. `opendbc/car/scalar.py` 의 같은 산술 순수 파이썬 interp/clip/sign 으로 교체(carcontroller.py
+61곳, lateral.py 15곳). 프레임당 0.30 → 0.17 ms(x86), 3 세그먼트 17,808 프레임의 CAN 바이트·내부 상태 비트 동일.
+
+주행 중 CPU 전원 설정(hardware.py set_power_save): 시동 시 8코어 온라인, 두 클러스터 `performance` 거버너, 최대
+1,689.6 MHz 캡(열 설계). 카메라 IRQ → 코어 6, GPU IRQ → 코어 7. 절전(big 클러스터 오프라인·ondemand)은 시동+화면
+꺼짐일 때만. C-state 는 건드리지 않음.
 
 리플레이 도구가 놓쳤던 세 구멍(2026-09-07 발견, 모두 도구 쪽 결함):
 1. `process_replay` 의 fingerprint 경로는 `get_non_essential_params` 의 **일반 Ioniq 6 N 파라미터(토크 조향, CCNC 플래그 없음, safetyParam 2089)** 를 쓴다 →
