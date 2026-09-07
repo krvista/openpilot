@@ -24,7 +24,10 @@ from openpilot.common.realtime import Ratekeeper
 
 from openpilot.system.ui.sunnypilot.lib.application import GuiApplicationExt
 
-_DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20}.get(HARDWARE.get_device_type(), 60)))
+# i6n: comma 4 (mici) renders at 30 fps. At 60 the UI process took 55 % of LITTLE core 0 and its display
+# IRQ work (msm_drm is pinned to core 5) made core 5 — where selfdrived / plannerd / radard live — the busiest
+# core of the drive (86 % mean, route 00000006). Override with FPS=60 if wanted.
+_DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20, 'mici': 30}.get(HARDWARE.get_device_type(), 60)))
 FPS_LOG_INTERVAL = 5  # Seconds between logging FPS drops
 FPS_DROP_THRESHOLD = 0.9  # FPS drop threshold for triggering a warning
 FPS_CRITICAL_THRESHOLD = 0.5  # Critical threshold for triggering strict actions
