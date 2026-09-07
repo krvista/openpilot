@@ -32,6 +32,114 @@ State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
+
+def _interp(x, xp, fp):
+  """Scalar np.interp (ascending xp, clamped ends, NaN in -> NaN out) without the numpy call
+  overhead: same arithmetic (slope * (x - xp[j]) + fp[j]) so results match np.interp."""
+  if x != x:
+    return float("nan")
+  if x <= xp[0]:
+    return float(fp[0])
+  if x >= xp[-1]:
+    return float(fp[-1])
+  for j in range(len(xp) - 1):
+    if x < xp[j + 1]:
+      return (fp[j + 1] - fp[j]) / (xp[j + 1] - xp[j]) * (x - xp[j]) + fp[j]
+  return float(fp[-1])
+
+
+def _clip(v, lo, hi):
+  """Scalar np.clip (NaN passes through)."""
+  return lo if v < lo else (hi if v > hi else v)
+
+
+class _ModelFrame:
+  """Everything state_control derives from ONE modelV2 message (20 Hz), computed once and reused
+  by the 100 Hz control frames. Profile (route 00000005 seg 13, in-process): two cubic polyfits +
+  ~8 np.fromiter + ~12 np.interp per 100 Hz frame were ~45 % of state_control; all of them depend
+  only on the model message (the per-frame speed enters afterwards). Values are identical — the
+  same arrays go into the same polyfit — the work just happens 5x less often. The expensive parts
+  (plan-point fits, lane-centre curvature, BSM lane inputs) are computed on first use, so a
+  disengaged frame — which never reads them — pays nothing (review: eager computation made
+  disengaged frames slower than before)."""
+  __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "y_std", "lane_min_p",
+               "_klane", "_bsm", "lane_change_state", "lane_change_dir")
+  _UNSET = object()
+
+  def __init__(self, model_v2, key):
+    self.ref = model_v2; self.key = key
+    self.fallback = model_v2.action.desiredCurvature
+    self.n = len(model_v2.position.x)
+    self._pos = None
+    self._fit12 = self._fit24 = self._klane = self._bsm = _ModelFrame._UNSET
+    probs = getattr(model_v2, "laneLineProbs", [])
+    self.lane_min = min(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0
+    self.lane_min_p = min(float(probs[1]), float(probs[2])) if len(probs) >= 3 else 0.0
+    y_std_list = getattr(model_v2.position, "yStd", [])
+    self.y_std = float(y_std_list[5]) if len(y_std_list) > 5 else 0.0
+    meta = getattr(model_v2, "meta", None)
+    self.lane_change_state = meta.laneChangeState if meta is not None else LaneChangeState.off
+    self.lane_change_dir = meta.laneChangeDirection if meta is not None else LaneChangeDirection.none
+
+  def _fit(self, nn):
+    """(x, polyfit-3 coefficients or None) over the first nn plan points; None when n < 5."""
+    if self.n < 5:
+      return None
+    if self._pos is None:
+      self._pos = (list(self.ref.position.x), list(self.ref.position.y))
+    m = min(self.n, nn)
+    x = np.array(self._pos[0][:m], dtype=np.float64); y = np.array(self._pos[1][:m], dtype=np.float64)
+    c = None
+    if np.all(np.isfinite(x)) and np.all(np.isfinite(y)):
+      try:
+        c = np.polyfit(x, y, 3)
+      except (np.linalg.LinAlgError, ValueError):
+        c = None
+    return (x, c)
+
+  @property
+  def fit12(self):
+    if self._fit12 is _ModelFrame._UNSET:
+      self._fit12 = self._fit(12)
+    return self._fit12
+
+  @property
+  def fit24(self):
+    if self._fit24 is _ModelFrame._UNSET:
+      self._fit24 = self._fit(24)
+    return self._fit24
+
+  @property
+  def klane_raw(self):
+    """Phase 7c entry assist: lane-centre curvature from the two inner lane lines; None = unreadable."""
+    if self._klane is _ModelFrame._UNSET:
+      try:
+        lls = getattr(self.ref, "laneLines", [])
+        xl = np.fromiter((x for x in lls[1].x), dtype=np.float64)
+        yl = np.fromiter((y for y in lls[1].y), dtype=np.float64)
+        xr = np.fromiter((x for x in lls[2].x), dtype=np.float64)
+        yr = np.fromiter((y for y in lls[2].y), dtype=np.float64)
+        lc = lambda xq: 0.5 * (np.interp(xq, xl, yl) + np.interp(xq, xr, yr))
+        self._klane = (lc(0.0) - 2.0 * lc(25.0) + lc(50.0)) / 625.0
+      except (IndexError, ValueError):
+        self._klane = None
+    return self._klane
+
+  @property
+  def bsm_lane(self):
+    """Phase 37b BSM guard inputs (y_left, y_right, p_left, p_right); None = unreadable -> guard reset."""
+    if self._bsm is _ModelFrame._UNSET:
+      self._bsm = None
+      try:
+        lls = getattr(self.ref, "laneLines", [])
+        probs = getattr(self.ref, "laneLineProbs", [])
+        if len(lls) >= 3 and len(probs) >= 3 and len(lls[1].y) > 0 and len(lls[2].y) > 0:
+          self._bsm = (float(lls[1].y[0]), float(lls[2].y[0]), float(probs[1]), float(probs[2]))
+      except (IndexError, TypeError, ValueError):
+        self._bsm = None
+    return self._bsm
+
+
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 # Lateral accel envelope used to normalize the predicted ratio for the
@@ -232,6 +340,7 @@ class Controls(ControlsExt):
     self.lane_dropout_lc_holdoff = 0         # 39-2: frames left after a lane change / blinker
     self.lane_dropout_hold_k = 0.0           # 39-2: the command held while latched
     self.lane_dropout_k_hist = deque(maxlen=int(LANE_DROPOUT_ENTRY_S / DT_CTRL) + 1)   # 39-2: commands of the last ENTRY_S
+    self._mf = None                          # _ModelFrame cache (see class)
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
     self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
@@ -264,28 +373,32 @@ class Controls(ControlsExt):
       device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
 
+  def _model_frame(self, model_v2):
+    key = (id(model_v2), self.sm.logMonoTime.get('modelV2', 0))
+    mf = self._mf
+    if mf is None or mf.key != key or mf.ref is not model_v2:
+      mf = self._mf = _ModelFrame(model_v2, key)
+    return mf
+
   def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
 
     Phase 6h-1: lookahead_extra_s is the caller's LP time constant tau(v) so the
     phase lead always matches the smoothing lag (was a fixed 0.10 s constant)."""
-    fallback = model_v2.action.desiredCurvature
+    mf = self._model_frame(model_v2)
+    fallback = mf.fallback
 
     # Non-finite model action: hold the last command briefly, then ramp to
     # straight (see MODEL_NONFINITE_* above). Nothing non-finite may reach the
     # recursive state in state_control().
     if not math.isfinite(fallback):
       self._model_nonfinite_frames += 1
-      ramp = np.clip((MODEL_NONFINITE_RAMP_END_S - self._model_nonfinite_frames * DT_CTRL) /
-                     (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
+      ramp = _clip((MODEL_NONFINITE_RAMP_END_S - self._model_nonfinite_frames * DT_CTRL) /
+                   (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
       return self.desired_curvature * float(ramp)
     self._model_nonfinite_frames = 0
 
-    # capnp _DynamicListReader does not support slicing, so use np.fromiter
-    pos_x = model_v2.position.x
-    pos_y = model_v2.position.y
-    n = len(pos_x)
-    if n < 5:
+    if mf.n < 5:
       return fallback
 
     abs_curv = abs(fallback)
@@ -305,24 +418,17 @@ class Controls(ControlsExt):
     #     0x3a-0x3f cross-correlation showed the existing pipeline gives op a
     #     ~+87 ms duration-weighted lead over the wheel; this widens that lead
     #     in shallow-to-medium corners (where it matters most for entry feel).
-    base_s = float(np.interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
-    boost_s = float(np.interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
+    base_s = float(_interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
+    boost_s = float(_interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
     t_ahead = min(base_s + boost_s + lookahead_extra_s, LOOKAHEAD_T_AHEAD_CAP + lookahead_extra_s)
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
     if dist_ahead < 0.3:
       return fallback
 
-    n = min(n, 12)
-    x = np.fromiter((pos_x[i] for i in range(n)), dtype=np.float64, count=n)
-    y = np.fromiter((pos_y[i] for i in range(n)), dtype=np.float64, count=n)
-
-    if x[-1] < dist_ahead or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
-      return fallback
-
-    try:
-      c = np.polyfit(x, y, 3)
-    except (np.linalg.LinAlgError, ValueError):
+    # cubic fit of the first 12 plan points, computed once per model frame (_ModelFrame)
+    x, c = mf.fit12
+    if x[-1] < dist_ahead or c is None:
       return fallback
 
     curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
@@ -333,8 +439,8 @@ class Controls(ControlsExt):
     # J=0.7 = 0.0141; straights (|fb|<0.0015, n=2668) injected-noise p99
     # 0.00092->0.00058 (-37%); normal corners (n=1192) ratio p50/p90 unchanged.
     dk_max = LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v_ego, 5.0) ** 2
-    blend = float(np.interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
-    return fallback + blend * float(np.clip(float(curv) - fallback, -dk_max, dk_max))
+    blend = float(_interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
+    return fallback + blend * float(_clip(float(curv) - fallback, -dk_max, dk_max))
 
   def _predicted_lat_accel_excess(self, model_v2, v_ego, lookahead_s=1.5):
     """Predicted v²·κ at lookahead_s ahead, normalized by LAT_ACCEL_ENVELOPE.
@@ -346,26 +452,17 @@ class Controls(ControlsExt):
     if v_ego < 2.0:
       return 0.0
 
-    pos_x = model_v2.position.x
-    pos_y = model_v2.position.y
-    n = len(pos_x)
-    if n < 5:
+    mf = self._model_frame(model_v2)
+    if mf.n < 5:
       return 0.0
 
     dist_ahead = min(v_ego * lookahead_s, 30.0)
     if dist_ahead < 1.0:
       return 0.0
 
-    n = min(n, 24)
-    x = np.fromiter((pos_x[i] for i in range(n)), dtype=np.float64, count=n)
-    y = np.fromiter((pos_y[i] for i in range(n)), dtype=np.float64, count=n)
-
-    if x[-1] < dist_ahead or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
-      return 0.0
-
-    try:
-      c = np.polyfit(x, y, 3)
-    except (np.linalg.LinAlgError, ValueError):
+    # cubic fit of the first 24 plan points, computed once per model frame (_ModelFrame)
+    x, c = mf.fit24
+    if x[-1] < dist_ahead or c is None:
       return 0.0
 
     curv_pred = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
@@ -407,6 +504,7 @@ class Controls(ControlsExt):
 
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
+    mf = self._model_frame(model_v2)    # per-model-frame derived values (see _ModelFrame)
 
     # curveSpeedAdvisory: EMA-filtered ratio of predicted v²·κ at 1.5 s
     # lookahead to LAT_ACCEL_ENVELOPE. Updated every frame (cheap) so the
@@ -433,9 +531,9 @@ class Controls(ControlsExt):
     actuators.longControlState = self.LoC.long_control_state
 
     # Enable blinkers while lane changing
-    if model_v2.meta.laneChangeState != LaneChangeState.off:
-      CC.leftBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.left
-      CC.rightBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.right
+    if mf.lane_change_state != LaneChangeState.off:
+      CC.leftBlinker = mf.lane_change_dir == LaneChangeDirection.left
+      CC.rightBlinker = mf.lane_change_dir == LaneChangeDirection.right
 
     if not CC.latActive:
       self.LaC.reset()
@@ -457,39 +555,29 @@ class Controls(ControlsExt):
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
     # Phase 6h-1 order: tau(v) first, so the lookahead lead matches the LP lag below.
-    lat_smooth_tau = float(np.interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
+    lat_smooth_tau = float(_interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
 
     # Phase 7c geometry entry assist (constants above).
-    if ENTRY_ASSIST_CAP > 0.0 and CC.latActive:
-      try:
-        lls = model_v2.laneLines
-        probs = model_v2.laneLineProbs
-        lane_min_p = min(float(probs[1]), float(probs[2])) if len(probs) >= 3 else 0.0
-        xl = np.fromiter((x for x in lls[1].x), dtype=np.float64)
-        yl = np.fromiter((y for y in lls[1].y), dtype=np.float64)
-        xr = np.fromiter((x for x in lls[2].x), dtype=np.float64)
-        yr = np.fromiter((y for y in lls[2].y), dtype=np.float64)
-        lc = lambda xq: 0.5 * (np.interp(xq, xl, yl) + np.interp(xq, xr, yr))
-        klane_raw = (lc(0.0) - 2.0 * lc(25.0) + lc(50.0)) / 625.0
-        a = DT_CTRL / (0.3 + DT_CTRL)
-        # NaN lane-line y values pass the length checks and np.interp forwards
-        # them; one such frame would poison the EMA (abs(NaN) gates all go
-        # False) and silently disable entry assist for the rest of the drive.
-        if np.isfinite(klane_raw):
-          self._klane_lp += a * (float(klane_raw) - self._klane_lp)
-        self._absdc_slow += (DT_CTRL / 0.5) * (abs(new_desired_curvature) - self._absdc_slow)
-        rising = abs(new_desired_curvature) > self._absdc_slow * 1.02
-        if (CS.vEgo > ENTRY_ASSIST_MIN_SPEED and lane_min_p > ENTRY_ASSIST_LANE_MIN
-            and model_v2.meta.laneChangeState == log.LaneChangeState.off
-            and abs(self._klane_lp) > ENTRY_ASSIST_KLANE_MIN and rising
-            and np.sign(self._klane_lp) == np.sign(new_desired_curvature)
-            and abs(self._klane_lp) > abs(new_desired_curvature)):
-          shortfall = abs(self._klane_lp) - abs(new_desired_curvature)
-          assist = min(shortfall, ENTRY_ASSIST_CAP, ENTRY_ASSIST_REL * abs(new_desired_curvature))
-          new_desired_curvature = new_desired_curvature + float(np.sign(new_desired_curvature)) * assist
-      except (IndexError, ValueError):
-        pass
+    if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None:   # (lane-line read failed -> skip, as before)
+      lane_min_p = mf.lane_min_p
+      klane_raw = mf.klane_raw          # lane-centre curvature, once per model frame (_ModelFrame)
+      a = DT_CTRL / (0.3 + DT_CTRL)
+      # NaN lane-line y values pass the length checks and np.interp forwards
+      # them; one such frame would poison the EMA (abs(NaN) gates all go
+      # False) and silently disable entry assist for the rest of the drive.
+      if math.isfinite(klane_raw):
+        self._klane_lp += a * (float(klane_raw) - self._klane_lp)
+      self._absdc_slow += (DT_CTRL / 0.5) * (abs(new_desired_curvature) - self._absdc_slow)
+      rising = abs(new_desired_curvature) > self._absdc_slow * 1.02
+      if (CS.vEgo > ENTRY_ASSIST_MIN_SPEED and lane_min_p > ENTRY_ASSIST_LANE_MIN
+          and mf.lane_change_state == log.LaneChangeState.off
+          and abs(self._klane_lp) > ENTRY_ASSIST_KLANE_MIN and rising
+          and np.sign(self._klane_lp) == np.sign(new_desired_curvature)
+          and abs(self._klane_lp) > abs(new_desired_curvature)):
+        shortfall = abs(self._klane_lp) - abs(new_desired_curvature)
+        assist = min(shortfall, ENTRY_ASSIST_CAP, ENTRY_ASSIST_REL * abs(new_desired_curvature))
+        new_desired_curvature = new_desired_curvature + float(np.sign(new_desired_curvature)) * assist
 
     # Model uncertainty damping: when the model is unsure about lane position
     # (e.g. lead car occluding lane lines, ambiguous lane split), blend toward
@@ -501,22 +589,20 @@ class Controls(ControlsExt):
     # AND laneLineProbs MIN < 0.5 (left/right inner-lane confidence). When
     # either fires, scale confidence proportionally and blend with previous.
     if CC.latActive and self.CP.steerControlType == car.CarParams.SteerControlType.angle:
-      y_std_list = model_v2.position.yStd
-      lane_probs = model_v2.laneLineProbs
-      y_std = float(y_std_list[5]) if len(y_std_list) > 5 else 0.0
-      lane_min = min(float(lane_probs[1]), float(lane_probs[2])) if len(lane_probs) >= 4 else 1.0
-      conf_y = float(np.interp(y_std,    [0.05, 0.30], [1.0, 0.0]))
-      conf_l = float(np.interp(lane_min, [0.05, 0.30], [0.0, 1.0]))
+      y_std = mf.y_std
+      lane_min = mf.lane_min
+      conf_y = float(_interp(y_std,    [0.05, 0.30], [1.0, 0.0]))
+      conf_l = float(_interp(lane_min, [0.05, 0.30], [0.0, 1.0]))
       # Phase 6g-1/6g-2: floor the damping so a low-confidence corner-entry
       # transition cannot freeze op near-straight (it ran the car wide to the
       # outside line) — but TAPER the floor to 0 at a true dropout so a spiking
       # low-confidence command is frozen out instead of half-passed (6g-2).
-      floor_eff = LAT_CONF_FLOOR * float(np.clip(
+      floor_eff = LAT_CONF_FLOOR * float(_clip(
         (lane_min - CONF_FLOOR_LANE_LO) / (CONF_FLOOR_LANE_HI - CONF_FLOOR_LANE_LO), 0.0, 1.0))
       confidence = max(min(conf_y, conf_l), floor_eff)
       # Phase 39 / 39-2: dropout latch (see constants)
       if LANE_DROPOUT_LATCH:
-        lc_busy = (model_v2.meta.laneChangeState != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
+        lc_busy = (mf.lane_change_state != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
         if lc_busy:
           self.lane_dropout_lc_holdoff = int(LANE_DROPOUT_LC_HOLDOFF_S / DT_CTRL)
         else:
@@ -578,19 +664,15 @@ class Controls(ControlsExt):
       # latched an exhausted counter across the BSM-off gap and silently
       # left the next episode unguarded.
       if BSM_LANE_GUARD_M > 0.0:
-        try:
-          _lls = model_v2.laneLines
-          _lp = model_v2.laneLineProbs
-          if len(_lls) >= 3 and len(_lp) >= 3 and len(_lls[1].y) > 0 and len(_lls[2].y) > 0:
-            new_desired_curvature, _ = self.bsm_guard.update(
-              new_desired_curvature, self.desired_curvature,
-              bool(CS.leftBlindspot), bool(CS.rightBlindspot),
-              bool(CS.leftBlinker), bool(CS.rightBlinker),
-              float(_lls[1].y[0]), float(_lls[2].y[0]), float(_lp[1]), float(_lp[2]),
-              BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB)
-          else:
-            self.bsm_guard.reset()
-        except (IndexError, TypeError, ValueError):
+        if mf.bsm_lane is not None:      # (lane-line inputs read once per model frame; unreadable -> reset, as before)
+          _yl, _yr, _pl, _pr = mf.bsm_lane
+          new_desired_curvature, _ = self.bsm_guard.update(
+            new_desired_curvature, self.desired_curvature,
+            bool(CS.leftBlindspot), bool(CS.rightBlindspot),
+            bool(CS.leftBlinker), bool(CS.rightBlinker),
+            _yl, _yr, _pl, _pr,
+            BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB)
+        else:
           self.bsm_guard.reset()
 
     # Temporal command smoothing w/ lead compensation (see constants). Applied AFTER

@@ -111,6 +111,7 @@ def mk_controls():
   s.lane_dropout = False; s.lane_dropout_clear_frames = 0; s.lane_dropout_frames = 0   # Phase 39
   s.lane_dropout_low_frames = 0; s.lane_dropout_armed = True; s.lane_dropout_rearm_frames = 0   # Phase 39-2
   s.lane_dropout_lc_holdoff = 0; s.lane_dropout_hold_k = 0.0; s.lane_dropout_k_hist = collections.deque(maxlen=31)
+  s._mf = None   # _ModelFrame cache
   s._model_nonfinite_frames = 0
   return s
 

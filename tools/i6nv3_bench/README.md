@@ -30,6 +30,15 @@ DRIVELOG_SEG=$SEG DRIVELOG_DROPOUT_SEG=$SEG bash tools/i6nv3_bench/acceptance.sh
 | [6] 프리플라이트 | `tools/ccnc_analysis/preflight_replay.py <route> <segs>` | 현재 CarController 가 다시 만든 LKAS_ALT 를 판다 안전 코드(libsafety)에 폐루프로 통과, 거부율 < 0.5 % |
 | [7] E2E 차선 드롭아웃 | `replay_e2e_dropout.py <seg>` | 실제 controlsd 래치(Phase 39) → 실제 selfdrived 시각 경고까지 한 줄로 |
 | (수동) card 패리티 | `replay_card_parity.py <seg>` | 실제 card 재생 프레임 수/활성 비율/각도 차이 요약 |
+| (수동) controlsd 프로파일 | `profile_controlsd.py <seg> 2800 --dump out.pkl` | 실제 Controls 를 로그로 구동해 프레임당 wall 시간 + cProfile 핫스팟; `--dump` 출력을 최적화 전후로 비교하면 패리티 검증 |
+
+controlsd 최적화(2026-09-07): modelV2 한 메시지(20 Hz)에서만 정해지는 값(계획점 12/24개 3차 다항 적합, 차선확률,
+진입보조 차선중심 곡률, BSM 가드 입력, 차선변경 상태)을 `_ModelFrame` 으로 한 번만 계산해 100 Hz 프레임이 재사용.
+비싼 항목(다항 적합·차선중심 곡률·BSM 입력)은 처음 읽을 때만 계산해 비활성 프레임은 비용이 없음. 스칼라
+np.interp/np.clip 은 같은 산술의 순수 파이썬 `_interp/_clip` 으로. 프레임당(x86, 2800 프레임) 활성 구간 seg 13
+0.41 → 0.27 ms, 비활성 위주 seg 25 0.21 ms(변화 없음). 출력은 실제 데몬 리플레이 3 세그먼트 35,620행 비트 동일.
+selfdrived 는 코어 4(card·controlsd 와 공유, 95–98 %)에서 코어 5(radard·plannerd CTRL_LOW)로 이동. 코어 6 은
+camerad 의 격리 코어(비실시간 단일 폴 루프)라 실시간 이웃을 두지 않음.
 
 리플레이 도구가 놓쳤던 세 구멍(2026-09-07 발견, 모두 도구 쪽 결함):
 1. `process_replay` 의 fingerprint 경로는 `get_non_essential_params` 의 **일반 Ioniq 6 N 파라미터(토크 조향, CCNC 플래그 없음, safetyParam 2089)** 를 쓴다 →
