@@ -57,6 +57,7 @@ PRESS_DEBOUNCE_FRAMES = 5
 
 class Sim:
   def __init__(self):
+    self._mdps_can_prev = None   # Phase 38-3
     self._orig_packer = ccmod.CANPacker
     ccmod.CANPacker = FakePacker
     try:
@@ -95,7 +96,7 @@ class Sim:
            pressed=None, blinker=False, lead_dist=None, gear='drive',
            door=False, belt=False, standstill=None, cruise_available=True,
            v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
-           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None, tx_rejected=False):
+           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None, tx_rejected=False, mdps_step_can=None):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -133,6 +134,10 @@ class Sim:
                                wiper_front_on=bool(wiper), wiper_stale=bool(wiper_stale),
                                mdps_angle_2=float(mdps_angle_2) if mdps_angle_2 is not None else (float(wheel) if np.isfinite(wheel) else 0.0),
                                tx_rejected=bool(tx_rejected))
+    # Phase 38-3: per-CAN-sample wheel step (carstate.mdps_angle_2_step_can); default = one sample per frame
+    _m_can = int(round(CS.mdps_angle_2 * 10.0))
+    CS.mdps_angle_2_step_can = int(mdps_step_can) if mdps_step_can is not None else (abs(_m_can - self._mdps_can_prev) if self._mdps_can_prev is not None else 0)
+    self._mdps_can_prev = _m_can
 
     CC = structs.CarControl()
     CC.latActive = bool(lat_active)

@@ -486,6 +486,24 @@ class CarControllerParams:
   # instead of a rejection cascade. Follow-up: count src-192 echoes in carstate.
   TX_GOVERNOR_RESYNC_FRAMES = 100   # 38-2 backup only: the rejected-echo detector (carstate, bus ACAN+192 — rlog-confirmed src 192) realigns exactly; each blind resync costs one dropped frame
   TX_GOVERNOR_RESYNC_DEG    = 1.0
+  # Phase 38-3 (route 00000005 seg 18, 91 km/h ALC with the driver pushing 190 Nm, wheel
+  # 35 deg/s): the panda lets an ACTIVE command move <= its VM delta per frame (0.2 deg at
+  # 91 km/h) from its last accepted value, and on a violation resets that reference to
+  # the wheel — but our copy of the wheel is 1-2 frames stale, so while the driver moves
+  # the wheel faster than that allowance every other active frame is rejected (6 echoes,
+  # cluster ADAS chime). A PASSIVE frame (LKAS_ANGLE_ACTIVE=1, gain 0, angle = the wheel)
+  # is judged against the panda's 6-sample wheel window instead and always lands. While
+  # the wheel steps more than the allowance (+margin) per frame the frame goes passive;
+  # active resumes after EXIT_FRAMES quiet frames from the measured angle (the panda's
+  # reference too). ACIGain has already yielded in this state, so nothing is lost.
+  # Kill: WHEEL_OUTRUN_PASSIVE = False.
+  WHEEL_OUTRUN_PASSIVE      = True
+  WHEEL_OUTRUN_MARGIN_CAN   = 2      # CAN units (0.1 deg) above the panda per-frame allowance
+  WHEEL_OUTRUN_ENTRY_FRAMES = 2      # consecutive over-allowance frames before going passive (review: no single-frame trigger)
+  WHEEL_OUTRUN_EXIT_FRAMES  = 5      # consecutive frames within the allowance before going active again
+  WHEEL_OUTRUN_MAX_FRAMES   = 100    # passive dwell cap (1 s): then active resumes from the wheel and must re-qualify
+  # the step is measured per MDPS CAN SAMPLE (carstate mdps_angle_2_step_can), not per control frame: card's
+  # loop and the 100 Hz MDPS drift and a frame that swallows two samples would double a frame-differenced step
   # Phase 37a: high-speed RECOVERY softening ("correct the error over a longer
   # time at speed"). Two levers, both inert on planned driving:
   # (1) ACIGain rise-rate cap tapered with speed. The 0.04/frame rise (full

@@ -241,8 +241,20 @@ def hardware_thread(end_event, hw_queue) -> None:
   chestnut = Chestnut()
   big_model_available = (MODELS_DIR / 'big_driving_supercombo.onnx').is_file() or usbgpu_compiled()
 
+  loop_t_prev = time.monotonic(); _t_sm = loop_t_prev; sm_update_s = 0.0
   while not end_event.is_set():
+    _t_loop = time.monotonic()
+    # i6n: a 7 s gap in deviceState (route 00000005 seg 19) could not be attributed from the
+    # logs; split the loop time so the next stall names its half. The body is measured from the
+    # previous sm.update to this iteration start, so the statlog / params writes after the
+    # publish (the likeliest filesystem stall) are inside it, and the 2 Hz `continue` cannot skip it.
+    if (_t_loop - loop_t_prev) > 1.0:
+      cloudlog.error(f"hardwared loop stall: {_t_loop - loop_t_prev:.2f}s between iterations "
+                     f"(previous body {_t_loop - _t_sm:.2f}s, previous sm.update {sm_update_s:.2f}s)")
+    loop_t_prev = _t_loop
     sm.update(PANDA_STATES_TIMEOUT)
+    _t_sm = time.monotonic()
+    sm_update_s = _t_sm - _t_loop
 
     pandaStates = sm['pandaStates']
     peripheralState = sm['peripheralState']

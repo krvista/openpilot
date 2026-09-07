@@ -42,7 +42,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
                              apply_angle=0.0, lkas_alt_cam_msg=None,
                              mads_lka_icon=None, effective_aci_gain=None,
                              mads_force_assist=False, cam_invalid=False,
-                             lfa_sync_pulse=False, meas_angle=None):
+                             lfa_sync_pulse=False, meas_angle=None, wire_active=None):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEER_MSG_ALT` flags; Ioniq 6 N
@@ -80,6 +80,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     # to MDPS. ACIGain (continuous 0.0..1.0) modulates effort while the
     # ACTIVE flag stays stable.
     steering_active = bool(lat_active)
+    # Phase 38-3: the ANGLE part of the frame (active bit, angle, gain) may be passive while op is
+    # still lat-active (wheel outrunning the panda allowance); icons / warnings / assist stay on
+    # steering_active so the cluster does not flicker or get the camera's warning handed back
+    angle_active = steering_active if wire_active is None else bool(wire_active)
 
     if mads_lka_icon is not None:
       icon_value = mads_lka_icon
@@ -120,7 +124,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       # anyway (LKAS_ANGLE_ACTIVE = inactive, gain 0), so the measured angle
       # is the neutral value. Camera mirror kept only as a fallback when the
       # caller passes no measurement.
-      if steering_active:
+      if angle_active:
         effective_angle = apply_angle
       elif meas_angle is not None:
         effective_angle = meas_angle
@@ -184,10 +188,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         # steer_angle_req from these wire bits, and a mirrored camera 0/2 would
         # put the frame under the active rate check (review). Corpus: the camera
         # sends 1 whenever idle (29,635/29,635 frames, route 00000003).
-        "LKAS_ANGLE_ACTIVE":         2 if steering_active else 1,
+        "LKAS_ANGLE_ACTIVE":         2 if angle_active else 1,
         "HAS_LANE_SAFETY":           lkas_alt_cam_msg["HAS_LANE_SAFETY"],
         "ADAS_StrAnglReqVal":        effective_angle,
-        "ADAS_ACIAnglTqRedcGainVal": (effective_aci_gain if steering_active else 0.0),
+        "ADAS_ACIAnglTqRedcGainVal": (effective_aci_gain if angle_active else 0.0),
         "LKAS_BYTE7_BITS4_5":        3 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BITS4_5"],
         "LKAS_BYTE7_BIT7":           1 if steering_active else lkas_alt_cam_msg["LKAS_BYTE7_BIT7"],
         "LKAS_BYTE13":               lkas_alt_cam_msg["LKAS_BYTE13"] if lkas_alt_cam_msg["LKAS_BYTE13"] else (0x09 if steering_active else 0),

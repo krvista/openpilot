@@ -32,6 +32,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     EsccCarStateBase.__init__(self)
     MadsCarState.__init__(self, CP, CP_SP)
     CarStateExt.__init__(self, CP, CP_SP)
+    self._mdps2_last_sample = None   # Phase 38-3: last MDPS.STEERING_ANGLE_2 CAN sample of the previous frame
+    self.mdps_angle_2_step_can = 0   # Phase 38-3: largest sample-to-sample step this frame, CAN units (0.1 deg)
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
@@ -383,6 +385,13 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       # the passive LKAS_ALT angle must be THIS value. Control keeps using
       # steeringAngleDeg.
       self.mdps_angle_2 = float(cp.vl["MDPS"]["STEERING_ANGLE_2"])
+      # Phase 38-3: the wheel's per-SAMPLE step (not per control frame — card's 100 Hz loop and the
+      # 100 Hz MDPS drift, and a frame that swallows two samples would double a frame-differenced step)
+      _vals = [float(x) for x in cp.vl_all["MDPS"]["STEERING_ANGLE_2"]]
+      _seq = ([self._mdps2_last_sample] if self._mdps2_last_sample is not None else []) + _vals
+      self.mdps_angle_2_step_can = max((abs(int(round(b * 10.0)) - int(round(a * 10.0))) for a, b in zip(_seq, _seq[1:])), default=0)
+      if _vals:
+        self._mdps2_last_sample = _vals[-1]
       # Phase 38-2: rejected-echo flag for this frame (see get_can_parsers)
       _rej = can_parsers.get(Bus.loopback)
       self.tx_rejected = bool(_rej is not None and len(_rej.vl_all["LKAS_ALT"]["COUNTER"]) > 0)

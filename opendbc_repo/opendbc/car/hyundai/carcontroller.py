@@ -494,6 +494,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.blinker_concession = False
     self.tx_angle_last = 0.0   # Phase 38: last TRANSMITTED angle (panda desired_angle_last mirror)
     self.tx_sat_frames = 0     # Phase 38: consecutive frames the governor clipped by > RESYNC_DEG
+    self.wheel_outrun_passive = False   # Phase 38-3: wheel moving faster than the panda allows an active command to follow
+    self.wheel_outrun_quiet = 0
+    self.wheel_outrun_hot = 0           # consecutive over-allowance frames (entry debounce)
+    self.wheel_outrun_frames = 0        # frames spent passive in this episode (dwell cap)
+    self.meas_can_prev = None
     # Phase 37a rain mode: wiper debounce counters and the ramped weight 0..1
     self.wiper_on_frames = 0
     self.wiper_off_frames = 0
@@ -1780,6 +1785,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # never exceeds the panda's per-frame VM delta / max angle relative to the
     # last transmitted value; passive frames reset the reference to the
     # measured angle exactly as the panda resets desired_angle_last.
+    wire_active = effective_lat_active
     if effective_lat_active and CarControllerParams.TX_GOVERNOR:
       # Phase 38-2: a rejected echo means the panda's reference is now the
       # measured angle — realign ours before the next frame (exact mirror)
@@ -1792,6 +1798,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # integer CAN units (0.1 deg): panda allows int(delta*10)+1 units; stay one unit inside
       _d_can = max(int(_dmax * 10.0) - 1, 1)
       _a_can = max(int(_amax * 10.0) - 1, 5)
+      # Phase 38-3: is the wheel itself outrunning what an active frame may move per frame?
+      # per-CAN-sample step from carstate when available (immune to two samples landing in one frame)
+      _meas_can = int(round(meas_angle_for_panda * 10.0))
+      _step_cs = getattr(CS, "mdps_angle_2_step_can", None)
+      if _step_cs is not None:
+        _wheel_step = int(_step_cs)
+      else:
+        _wheel_step = abs(_meas_can - self.meas_can_prev) if self.meas_can_prev is not None else 0
+      if CarControllerParams.WHEEL_OUTRUN_PASSIVE:
+        _over = _wheel_step > _d_can + CarControllerParams.WHEEL_OUTRUN_MARGIN_CAN
+        self.wheel_outrun_hot = self.wheel_outrun_hot + 1 if _over else 0
+        if not self.wheel_outrun_passive:
+          if self.wheel_outrun_hot >= CarControllerParams.WHEEL_OUTRUN_ENTRY_FRAMES:
+            self.wheel_outrun_passive = True
+            self.wheel_outrun_quiet = 0
+            self.wheel_outrun_frames = 0
+        else:
+          self.wheel_outrun_frames += 1
+          self.wheel_outrun_quiet = 0 if _over else self.wheel_outrun_quiet + 1
+          if (self.wheel_outrun_quiet >= CarControllerParams.WHEEL_OUTRUN_EXIT_FRAMES
+              or self.wheel_outrun_frames >= CarControllerParams.WHEEL_OUTRUN_MAX_FRAMES):
+            self.wheel_outrun_passive = False     # quiet, or dwell cap: active from the wheel, re-qualify from zero
+            self.wheel_outrun_hot = 0
+      else:
+        self.wheel_outrun_passive = False
+        self.wheel_outrun_hot = 0
       _last_can = int(round(self.tx_angle_last * 10.0))
       _want_can = int(round(self.apply_angle_last * 10.0))
       _tx_can = int(np.clip(_want_can, _last_can - _d_can, _last_can + _d_can))
@@ -1805,12 +1837,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if self.tx_sat_frames >= CarControllerParams.TX_GOVERNOR_RESYNC_FRAMES:
         tx_angle = meas_angle_for_panda
         self.tx_sat_frames = 0
+      if self.wheel_outrun_passive:
+        # passive frame at the measured angle; the panda's reference follows the wheel and so does ours
+        wire_active = False
+        tx_angle = meas_angle_for_panda
+        self.tx_sat_frames = 0
     else:
       tx_angle = meas_angle_for_panda if not effective_lat_active else self.apply_angle_last
       self.tx_sat_frames = 0
+      self.wheel_outrun_passive = False
+      self.wheel_outrun_quiet = 0
+      self.wheel_outrun_hot = 0
+      self.wheel_outrun_frames = 0
+    self.meas_can_prev = int(round(meas_angle_for_panda * 10.0))
     self.tx_angle_last = tx_angle
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
-                                                         apply_angle=tx_angle, lkas_alt_cam_msg=lkas_alt_cam_msg,
+                                                         apply_angle=tx_angle, lkas_alt_cam_msg=lkas_alt_cam_msg, wire_active=wire_active,
                                                          mads_lka_icon=mads_lka_icon,
                                                          effective_aci_gain=effective_aci_gain,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
