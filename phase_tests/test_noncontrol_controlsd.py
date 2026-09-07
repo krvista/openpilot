@@ -13,9 +13,13 @@ import openpilot.selfdrive.controls.controlsd as cd
 
 
 class StubSelf:
+  _model_frame = cd.Controls._model_frame     # the per-model-frame cache is part of the real method's contract
+
   def __init__(self, desired_curvature=0.002):
     self.desired_curvature = desired_curvature
     self._model_nonfinite_frames = 0
+    self._mf = None
+    self.sm = types.SimpleNamespace(logMonoTime={})
 
 
 def mk_model(xs, ys, fallback=0.002):

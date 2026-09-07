@@ -726,7 +726,13 @@ class SelfdriveD(CruiseHelper):
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  # i6n: card + controlsd + selfdrived shared core 4 at 95-98 % on comma 4 (route 00000005: 49 + 22 + 23 %),
+  # the source of the p99 loop jitter. selfdrived only consumes messages and builds events/alerts, so it
+  # moves to core 5 (radard + plannerd, both CTRL_LOW at 20 Hz; the rest of that core's load is unpinned
+  # SCHED_OTHER work the scheduler can move). Not core 6: camerad's isolated core is meant to hold a
+  # single non-RT poll loop (system/camerad/main.cc), which a SCHED_FIFO neighbour would preempt.
+  # Upstream pins all three to core 4.
+  config_realtime_process(5, Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 
