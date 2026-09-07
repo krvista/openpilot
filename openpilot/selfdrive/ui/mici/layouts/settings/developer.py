@@ -1,4 +1,8 @@
+import os
 from collections.abc import Callable
+from pathlib import Path
+from openpilot.common.hardware import PC
+from openpilot.common.hardware.hw import Paths
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigToggle, BigParamControl, BigCircleParamControl, GreyBigButton
@@ -27,6 +31,12 @@ class AlphaLongConfirmPage(NavScroller):
       GreyBigButton("", "Changing this setting will restart openpilot if the car is powered on."),
       accept,
     ])
+
+
+# sunnypilot Quickboot: launch_chffrplus.sh skips build.py (scons) when this file exists. manager.py re-creates it
+# after every boot while QuickBootToggle is on, so an update (which replaces the tree) rebuilds exactly once.
+# Same path/semantics as the comma 3X layout (sunnypilot/layouts/settings/developer.py), which is not used on comma 4.
+PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/openpilot/prebuilt"
 
 
 class DeveloperLayoutMici(NavScroller):
@@ -85,6 +95,9 @@ class DeveloperLayoutMici(NavScroller):
     self._debug_mode_toggle = BigParamControl("ui debug mode", "ShowDebugInfo",
                                               toggle_callback=lambda checked: (gui_app.set_show_touches(checked),
                                                                                gui_app.set_show_fps(checked)))
+    self._quickboot_toggle = BigToggle("quickboot mode", "skip the boot-time build check",
+                                       initial_state=os.path.exists(PREBUILT_PATH),
+                                       toggle_callback=self._on_quickboot_toggled)
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -95,6 +108,7 @@ class DeveloperLayoutMici(NavScroller):
       self._lat_maneuver_toggle,
       self._alpha_long_toggle,
       self._debug_mode_toggle,
+      self._quickboot_toggle,
     ])
 
     # Toggle lists
@@ -161,6 +175,23 @@ class DeveloperLayoutMici(NavScroller):
     # Refresh toggles from params to mirror external changes
     for key, item in self._refresh_toggles:
       item.set_checked(ui_state.params.get_bool(key))
+    # quickboot: the file on disk is the truth (an update removes it; manager re-creates it when the param is on)
+    prebuilt_file = os.path.exists(PREBUILT_PATH)
+    if prebuilt_file != ui_state.params.get_bool("QuickBootToggle"):
+      ui_state.params.put_bool("QuickBootToggle", prebuilt_file)
+    self._quickboot_toggle.set_checked(prebuilt_file)
+
+  def _on_quickboot_toggled(self, state: bool):
+    try:
+      if state:
+        Path(PREBUILT_PATH).touch(exist_ok=True)
+      elif os.path.exists(PREBUILT_PATH):
+        os.remove(PREBUILT_PATH)
+    except OSError as e:
+      gui_app.push_widget(BigDialog("", f"Could not update quickboot file: {e}"))
+      self._quickboot_toggle.set_checked(os.path.exists(PREBUILT_PATH))
+      return
+    ui_state.params.put_bool("QuickBootToggle", state, block=True)
 
   def _on_joystick_debug_mode(self, state: bool):
     ui_state.params.put_bool("JoystickDebugMode", state, block=True)
