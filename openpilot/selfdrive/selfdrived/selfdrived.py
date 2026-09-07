@@ -34,6 +34,7 @@ from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.con
 from openpilot.sunnypilot.selfdrive.selfdrived.button_state_tracker import ButtonStateTracker
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
+DEVICE_STATE_DEAD_S = 15.0   # i6n: hardwared silent this long -> commIssue (a 7 s hiccup is not)
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
@@ -104,13 +105,21 @@ class SelfdriveD(CruiseHelper):
     if REPLAY:
       # no vipc in replay will make them ignored anyways
       ignore += ['narrowRoadCameraState', 'wideRoadCameraState']
+    # i6n (route 00000005 seg 19): hardwared's 2 Hz deviceState stalled for 7.2 s once in a
+    # 38-min drive (nothing else in the control path missed a frame) and that alone raised
+    # commIssue -> "TAKE CONTROL IMMEDIATELY" + soft disable at 14 km/h. deviceState is not
+    # in the control loop, so a hiccup is not a takeover; a hardwared that is truly gone is
+    # still caught: process death via managerState (processNotRunning) and a hung thread via
+    # the DEVICE_STATE_DEAD_S escalation below (the thermal values it carries would be frozen).
+    ignore_liveness = ignore + ['deviceState']
+    self.device_state_dead_frames = 0
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'extrinsicsCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'deviceMotion', 'lateralDelay',
                                    'managerState', 'vehicleParameters', 'radarState', 'lateralTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark',
                                    'lateralManeuverPlan', 'modelDataV2SP', 'longitudinalPlanSP'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
-                                  ignore_alive=ignore, ignore_avg_freq=ignore,
+                                  ignore_alive=ignore_liveness, ignore_avg_freq=ignore_liveness,
                                   ignore_valid=ignore, frequency=int(1/DT_CTRL))
 
     # read params
@@ -459,6 +468,10 @@ class SelfdriveD(CruiseHelper):
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
     warmup_sec = 5.
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec
+    # i6n: deviceState is exempt from the alive check above; escalate only a long silence
+    self.device_state_dead_frames = 0 if self.sm.alive['deviceState'] else self.device_state_dead_frames + 1
+    if self.device_state_dead_frames > int(DEVICE_STATE_DEAD_S / DT_CTRL) and not SIMULATION:
+      self.events.add(EventName.commIssue)
     if not self.sm.all_checks() and no_system_errors and not big_model_settling:  # the load holds modelV2 and friends back on purpose
       if not self.sm.all_alive():
         self.events.add(EventName.commIssue)

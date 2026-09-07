@@ -15,7 +15,8 @@ items=[
  ("37c 양보 시작점 속도 테이블 (60 km/h+ 50 Nm, 강우 30)", ["ACIGAIN_GRIP_START_V","ACIGAIN_GRIP_START_RAIN_NM     = 30.0"], "test_phase37c"),
  ("38 송신각 거버너 + 비활성 gain 0 + 실측각(MDPS_2) 비활성 프레임", ["TX_GOVERNOR","meas_angle","mdps_angle_2"], "test_phase38"),
  ("38-2 거부 에코 기반 기준 재정렬", ["tx_rejected","Bus.loopback"], "TestPhase38EchoResync"),
- ("39 차선 드롭아웃 래치 (실측 곡률로 감쇠)", ["LANE_DROPOUT_LATCH","LANE_DROPOUT_TAU_S"], "TestLaneDropoutLatch"),
+ ("39-2 차선 드롭아웃 래치 (직전 명령 홀드, 0.15/0.3 s 진입, 40 km/h+, 지시등·차선변경 금지, 재무장)", ["LANE_DROPOUT_LATCH","LANE_DROPOUT_ENTRY_LM","LANE_DROPOUT_REARM_S"], "TestLaneDropoutLatch"),
+ ("38-3 핸들 추월 시 passive 프레임 (샘플 단위 스텝, 2프레임 진입, 1 s 상한)", ["WHEEL_OUTRUN_PASSIVE","mdps_angle_2_step_can","wire_active"], "TestPhase38_3WheelOutrunPassive"),
  ("i6nv3 안전 계층: CCNC 2048, 모델 11, 안전 스위트 1907+159", ["HYUNDAI_ANGLE_MODEL_HYUNDAI_IONIQ_6_N","HYUNDAI_PARAM_CCNC"], "test_hyundai_canfd_i6n"),
 ]
 paths=["opendbc_repo/opendbc/car/hyundai","openpilot/selfdrive/controls","openpilot/cereal/custom.capnp","opendbc_repo/opendbc/safety/modes","opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd.dbc"]

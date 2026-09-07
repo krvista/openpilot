@@ -3,6 +3,7 @@ import math
 from numbers import Number
 
 import numpy as np
+from collections import deque
 
 from openpilot.cereal import log
 from opendbc.car.structs import car
@@ -160,12 +161,28 @@ CONF_FLOOR_LANE_HI = 0.30
 # "hold what the road/driver has" instead of freezing a stale command for the
 # whole blackout (offline replay: peak -11.1e-3 -> -5.3e-3 with a plain freeze,
 # lower still with the decay). Kill: LANE_DROPOUT_LATCH = False.
+# Phase 39-2 (i6nv3 route 00000005, 09-07 commute, 38 min): the 39 latch fired 74 times
+# (175 s latched): 39 below 25 km/h (intersection turns / unmarked lanes, where the
+# lines leave the camera view and the plan is RIGHT), 33 with a blinker or an ALC in
+# progress (crossing a line drops the probs by design), 41 ran into the 3 s cap and
+# re-latched every 6 s on unmarked roads, and in real corners the decay-to-straight
+# pulled op out of the curve (seg 8: cmd -9.1e-3 decayed to -1.2e-3 while the road
+# was -14e-3 — the driver steered through at 664 Nm). Rework:
+#   * HOLD the pre-dropout command instead of decaying it to straight (a corner is
+#     kept, a straight stays straight; the decay had no basis in the road);
+#   * enter only after ENTRY_S continuous frames below ENTRY_LM (single-frame dips
+#     at 0.13-0.19 were most of the 74), and only above MIN_SPEED;
+#   * never during / right after a lane change or with a blinker on;
+#   * after any release, re-arm only once the lines are back (LANE_HI for REARM_S) —
+#     an unmarked road gets ONE hold, then the 6g blend follows the model as before.
 LANE_DROPOUT_LATCH = True
-LANE_DROPOUT_EXIT_S = 0.5     # continuous frames above LANE_HI to release
-LANE_DROPOUT_TAU_S = 1.5      # decay of the command toward STRAIGHT (review: the measured curvature
-                              # is a loop with no restoring term — it would lock in the pre-dropout error)
-LANE_DROPOUT_MAX_S = 3.0      # hand back to the 6g blend after this long, so a single sub-LO frame
-                              # cannot hold op off through a whole corner entry in the [LO, HI] band
+LANE_DROPOUT_ENTRY_LM = 0.15      # entry threshold (the 6g blend floor still tapers from LANE_LO)
+LANE_DROPOUT_ENTRY_S = 0.3        # continuous frames below ENTRY_LM before latching
+LANE_DROPOUT_MIN_SPEED = 40.0 / 3.6
+LANE_DROPOUT_EXIT_S = 0.5         # continuous frames above LANE_HI to release
+LANE_DROPOUT_MAX_S = 3.0          # hand back to the 6g blend after this long
+LANE_DROPOUT_REARM_S = 1.0        # lines back above LANE_HI this long before a new latch may start
+LANE_DROPOUT_LC_HOLDOFF_S = 1.0   # no latch this long after a lane change ends
 
 # Non-finite model action handling. A NaN/inf model_v2.action.desiredCurvature
 # bypasses every isfinite check in _lookahead_curvature (they only cover the
@@ -209,7 +226,12 @@ class Controls(ControlsExt):
     self.lane_dropout = False                # Phase 39
     self.lane_dropout_clear_frames = 0
     self.lane_dropout_frames = 0
-    self.lane_dropout_cooldown = 0
+    self.lane_dropout_low_frames = 0         # 39-2: consecutive frames below ENTRY_LM
+    self.lane_dropout_armed = True           # 39-2: cleared on release, set back after REARM_S above LANE_HI
+    self.lane_dropout_rearm_frames = 0
+    self.lane_dropout_lc_holdoff = 0         # 39-2: frames left after a lane change / blinker
+    self.lane_dropout_hold_k = 0.0           # 39-2: the command held while latched
+    self.lane_dropout_k_hist = deque(maxlen=int(LANE_DROPOUT_ENTRY_S / DT_CTRL) + 1)   # 39-2: commands of the last ENTRY_S
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
     self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
@@ -421,7 +443,10 @@ class Controls(ControlsExt):
       self.lane_dropout = False   # Phase 39
       self.lane_dropout_clear_frames = 0
       self.lane_dropout_frames = 0
-      self.lane_dropout_cooldown = 0
+      self.lane_dropout_low_frames = 0
+      self.lane_dropout_k_hist.clear()      # 39-2 review: a stale command must never become the hold value
+      self.lane_dropout_lc_holdoff = 0
+      # lane_dropout_armed is deliberately NOT reset: a one-frame steer fault must not grant a second hold
     if not CC.longActive:
       self.LoC.reset()
 
@@ -489,26 +514,46 @@ class Controls(ControlsExt):
       floor_eff = LAT_CONF_FLOOR * float(np.clip(
         (lane_min - CONF_FLOOR_LANE_LO) / (CONF_FLOOR_LANE_HI - CONF_FLOOR_LANE_LO), 0.0, 1.0))
       confidence = max(min(conf_y, conf_l), floor_eff)
-      # Phase 39: dropout latch (see constants)
+      # Phase 39 / 39-2: dropout latch (see constants)
       if LANE_DROPOUT_LATCH:
-        self.lane_dropout_cooldown = max(self.lane_dropout_cooldown - 1, 0)
-        if lane_min < CONF_FLOOR_LANE_LO and not self.lane_dropout and self.lane_dropout_cooldown == 0:
+        lc_busy = (model_v2.meta.laneChangeState != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
+        if lc_busy:
+          self.lane_dropout_lc_holdoff = int(LANE_DROPOUT_LC_HOLDOFF_S / DT_CTRL)
+        else:
+          self.lane_dropout_lc_holdoff = max(self.lane_dropout_lc_holdoff - 1, 0)
+        self.lane_dropout_low_frames = self.lane_dropout_low_frames + 1 if lane_min < LANE_DROPOUT_ENTRY_LM else 0
+        if not self.lane_dropout:
+          self.lane_dropout_k_hist.append(float(self.desired_curvature))
+        if not self.lane_dropout_armed:
+          self.lane_dropout_rearm_frames = self.lane_dropout_rearm_frames + 1 if lane_min > CONF_FLOOR_LANE_HI else 0
+          if self.lane_dropout_rearm_frames >= int(LANE_DROPOUT_REARM_S / DT_CTRL):
+            self.lane_dropout_armed = True
+        if self.lane_dropout and (self.lane_dropout_lc_holdoff > 0 or CS.vEgo < LANE_DROPOUT_MIN_SPEED):
+          self.lane_dropout = False                   # a lane change / slowing down ends the hold at once
+          self.lane_dropout_armed = False; self.lane_dropout_rearm_frames = 0
+          self.lane_dropout_k_hist.clear()
+        if (not self.lane_dropout and self.lane_dropout_armed and self.lane_dropout_lc_holdoff == 0
+            and CS.vEgo >= LANE_DROPOUT_MIN_SPEED
+            and self.lane_dropout_low_frames >= int(LANE_DROPOUT_ENTRY_S / DT_CTRL)):
           self.lane_dropout = True
           self.lane_dropout_clear_frames = 0
           self.lane_dropout_frames = 0
+          # hold what op was doing BEFORE the blackout (ENTRY_S ago), not what the blend let through meanwhile
+          self.lane_dropout_hold_k = float(self.lane_dropout_k_hist[0]) if len(self.lane_dropout_k_hist) else float(self.desired_curvature)
         elif self.lane_dropout:
           self.lane_dropout_clear_frames = self.lane_dropout_clear_frames + 1 if lane_min > CONF_FLOOR_LANE_HI else 0
           if self.lane_dropout_clear_frames >= int(LANE_DROPOUT_EXIT_S / DT_CTRL):
-            self.lane_dropout = False
+            self.lane_dropout = False                 # lines are back: the blend takes over (armed stays True)
+            self.lane_dropout_k_hist.clear()          # the next hold value must be from AFTER this release
         if self.lane_dropout:
           self.lane_dropout_frames += 1
           if self.lane_dropout_frames > int(LANE_DROPOUT_MAX_S / DT_CTRL):
-            self.lane_dropout = False                 # max duration: back to the 6g blend ...
-            self.lane_dropout_cooldown = int(LANE_DROPOUT_MAX_S / DT_CTRL)   # ... for at least as long (no immediate re-latch)
+            self.lane_dropout = False                 # max duration: back to the 6g blend, no re-latch until the lines return
+            self.lane_dropout_armed = False; self.lane_dropout_rearm_frames = 0
+            self.lane_dropout_k_hist.clear()
       if self.lane_dropout:
-        _a = DT_CTRL / (LANE_DROPOUT_TAU_S + DT_CTRL)
-        new_desired_curvature = self.desired_curvature + _a * (0.0 - self.desired_curvature)
-        self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the decay to the stale command
+        new_desired_curvature = self.lane_dropout_hold_k
+        self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
       elif confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
 
