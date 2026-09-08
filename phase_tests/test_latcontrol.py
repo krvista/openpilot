@@ -25,6 +25,7 @@ def make_lac():
   lac = lca.LatControlAngle.__new__(lca.LatControlAngle)
   # minimal base state used by update()
   lac.sat_check_min_speed = 5.0
+  lac._trim_7a6 = False
   lac.use_steer_limited_by_safety = True
   lac.dt = DT
   lac._roll_lp = 0.0
@@ -98,56 +99,47 @@ class TestLatFbInteg:
     assert lp._fb_integ == pytest.approx(-ln._fb_integ, abs=1e-15)
 
 
-import contextlib
-
-
-@contextlib.contextmanager
-def fb_7a6(deadband=0.2e-3, tau=5.0):
-  """7a-6 is OFF by default after route 00000008 (see latcontrol_angle.py); these tests keep the code path honest."""
-  old = (lca.LAT_FB_ERR_DEADBAND, lca.LAT_FB_LEAK_TAU)
-  lca.LAT_FB_ERR_DEADBAND, lca.LAT_FB_LEAK_TAU = deadband, tau
-  try:
-    yield
-  finally:
-    lca.LAT_FB_ERR_DEADBAND, lca.LAT_FB_LEAK_TAU = old
+def make_lac_7a6():
+  lac, VM = make_lac(); lac._trim_7a6 = True   # Params LatFbTrimDeadband on
+  return lac, VM
 
 
 class TestLatFbInteg7a6:
   def test_default_is_7a5(self):
-    assert lca.LAT_FB_ERR_DEADBAND == 0.0 and lca.LAT_FB_LEAK_TAU == 0.0
     lac, VM = make_lac()
+    assert lac._trim_7a6 is False
     for _ in range(3000):
       step(lac, VM, v=14.0, desired=1e-4)
     cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / 14.0 ** 2)
     assert abs(lac._fb_integ) >= 0.95 * cap                 # 7a-5 behaviour: a constant bias winds to the cap
 
   def test_sub_deadband_bias_does_not_wind_up(self):
-    with fb_7a6():
-      lac, VM = make_lac()
+    if True:
+      lac, VM = make_lac_7a6()
       for _ in range(3000):
         step(lac, VM, v=14.0, desired=1e-4)
       assert abs(lac._fb_integ) < 0.05e-3, lac._fb_integ
 
   def test_corner_deficit_still_reaches_cap(self):
-    with fb_7a6():
-      lac, VM = make_lac()
+    if True:
+      lac, VM = make_lac_7a6()
       for _ in range(300):
         step(lac, VM, v=14.0, desired=8e-4)
       cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / 14.0 ** 2)
       assert abs(lac._fb_integ) >= 0.95 * cap, (lac._fb_integ, cap)
 
   def test_leak_settles_below_cap_for_moderate_bias(self):
-    with fb_7a6():
-      lac, VM = make_lac()
+    if True:
+      lac, VM = make_lac_7a6()
       for _ in range(6000):
         step(lac, VM, v=14.0, desired=4e-4)
       expected = lca.LAT_FB_KI * lca.LAT_FB_LEAK_TAU * (4e-4 - lca.LAT_FB_ERR_DEADBAND)
       assert abs(abs(lac._fb_integ) - expected) < 0.1e-3, (lac._fb_integ, expected)
 
   def test_leak_scales_with_cap_so_highway_does_not_saturate_on_a_small_bias(self):
-    with fb_7a6():
+    if True:
       for v in (14.0, 30.0, 36.0):
-        lac, VM = make_lac()
+        lac, VM = make_lac_7a6()
         for _ in range(6000):
           step(lac, VM, v=v, desired=3e-4)
         cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / v ** 2)
