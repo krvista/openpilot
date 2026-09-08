@@ -262,7 +262,7 @@ def sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, senso
 
 
 def main():
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process([0, 1, 2], 5)  # i6n: core 3 is pandad's
 
   DEBUG = bool(int(os.getenv("DEBUG", "0")))
   SIMULATION = bool(int(os.getenv("SIMULATION", "0")))
