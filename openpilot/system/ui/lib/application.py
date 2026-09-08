@@ -235,6 +235,7 @@ class GuiApplication(GuiApplicationExt):
     self._ffmpeg_stop_event: threading.Event | None = None
     self._textures: dict[str, rl.Texture] = {}
     self._target_fps: int = _DEFAULT_FPS
+    self._vblank_skip: int = 0
     self._last_fps_log_time: float = time.monotonic()
     self._frame = 0
     self._window_close_requested = False
@@ -336,6 +337,9 @@ class GuiApplication(GuiApplicationExt):
       # four display runs slightly faster than 60 FPS, let it dictate rate so we don't drift and drop frames
       vblank_control = HARDWARE.get_device_type() == 'mici'
       rl.set_target_fps(0 if OFFSCREEN or vblank_control else fps)
+      # i6n: under vblank pacing the target fps is ignored, so a lower target is met by rendering every
+      # other vblank (see render()); the display keeps the last frame in between.
+      self._vblank_skip = int(round(60 / fps)) - 1 if (vblank_control and not OFFSCREEN and fps < 60) else 0
 
       self._target_fps = fps
       self._set_styles()
@@ -607,6 +611,15 @@ class GuiApplication(GuiApplicationExt):
 
       while not (self._window_close_requested or rl.window_should_close()):
         frame_start = time.monotonic()
+
+        # i6n: vblank-paced device rendering below the display rate — sit out this vblank period
+        # (no swap, so the panel keeps the last frame; input stays queued for the rendered frame)
+        if self._vblank_skip and (self._frame % (self._vblank_skip + 1)) != 0 and self._should_render:
+          self._mouse_events = []          # consumers run on every yield; do not hand them last frame's events twice
+          time.sleep(1.0 / 60.0)
+          self._frame += 1
+          yield False, 0.0, 0.0
+          continue
 
         if PC:
           # Thread is not used on PC, need to manually add mouse events
