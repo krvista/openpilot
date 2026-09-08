@@ -55,3 +55,12 @@ scp .../JEEP_GRAND_CHEROKEE_2019.json comma@<장치IP>:/data/openpilot/sunnypilo
 python3 collect_check.py <route>--0--qlog.zst <route>--1*--qlog.zst   # 세그먼트 0 포함 필수
 ```
 기대 출력: build `d67c5fe` · feedforward `LINEAR (NNLC OFF)` · liveTorque `useParams=True` · liveDelay `estimated` · active below minSteerSpeed > 0% · grip p90 < 40
+
+## G. 로컬에 rlog를 두지 않는 운용 (장치 → 브랜치 → 서버 추출 → PC는 Julia만)
+1. 장치 업로드 스크립트 그대로: rlog/qlog → `wk2-drivelog`(또는 전용 데이터 리포) 브랜치
+2. 서버(Claude 세션)에서 `make_trainset.sh`: 브랜치에서 라우트별 rlog를 블롭 단위로 꺼내 추출·점수·프루닝·그립제거 → `train/JEEP_GRAND_CHEROKEE_2019.csv.gz` + `coverage.png` + `score.txt`
+3. 결과물만 **orphan 브랜치 `wk2-nnlc-train`**(openpilot 트리 없음, 수십 MB)에 푸시
+4. PC: `git clone --depth 1 -b wk2-nnlc-train https://github.com/krvista/openpilot.git wk2-train && gunzip wk2-train/train/*.csv.gz`
+5. PC: `bash training/run.sh ../wk2-train/train/` (GPU 자동, 없으면 `--cpu`) → `training_results/…/JEEP_GRAND_CHEROKEE_2019.json`
+6. JSON을 장치로 scp → NNLC ON → 주행 로그 업로드 → 서버에서 전/후 비교
+PC에는 rlog가 한 번도 내려오지 않고, Python 도구도 필요 없습니다(Julia + training/ 디렉토리만).
