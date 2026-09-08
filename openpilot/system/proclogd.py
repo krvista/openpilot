@@ -273,6 +273,12 @@ def build_proc_log_message(msg) -> None:
 
 
 def main() -> NoReturn:
+  # i6n: the 2 s /proc sweep bursts to ~60 % of a core and was the source of core 0's p99 spikes
+  # (route 00000008); it is a logger, so let everything else on cores 0-2 go first.
+  try:
+    os.nice(10)
+  except OSError:
+    pass
   pm = messaging.PubMaster(['procLog'])
   rk = Ratekeeper(0.5)
   while True:

@@ -88,8 +88,16 @@ LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
 # reach the cap: 0.9 s on a rising entry (7b boost), 2.7 s steady, at 14 m/s. Offline replay of route
 # 7: time at cap 46 % -> 0 %, released trim on a grab 2.8 deg -> 0.8 deg (verifier probes).
 # Kill switch: LAT_FB_ERR_DEADBAND = 0.0 and LAT_FB_LEAK_TAU = 0.0 (bit-identical to 7a-5).
-LAT_FB_ERR_DEADBAND = 0.2e-3  # 1/m; ~0.56 deg of wheel at 50 km/h
-LAT_FB_LEAK_TAU     = 5.0     # s at the full 10e-4 cap; 0 = no leak
+# 7a-6 RESULT (route 00000008, the first drive with it, same evening road as route 00000006 = 7a-5): the
+# trim did drop as predicted (time at cap 46 % -> 7 %, cmd-wheel gap 2.8 -> 1.6 deg) but lane keeping
+# got WORSE — lane-centre |offset| median 0.03 -> 0.12 m, >0.5 m off-centre 0.2 % -> 4.9 %, driver
+# corrections 2.6 -> 4.4 /min, most of the big grabs in moderate corners with good lane lines (cmd ~=
+# wheel, the driver adding what op no longer asked for). The "useless" standing trim was holding the
+# car centred on crowned / gently curved roads through the EPS deadband after all: the 0.2e-3
+# deadband + leak cut exactly the moderate-corner band (0.3-0.6e-3 deficits). Both OFF again = 7a-5,
+# bit-identical. The code path and tests stay for a future speed/curve-gated variant.
+LAT_FB_ERR_DEADBAND = 0.0     # 1/m; 7a-6 value was 0.2e-3 (~0.56 deg of wheel at 50 km/h)
+LAT_FB_LEAK_TAU     = 0.0     # s at the full 10e-4 cap; 7a-6 value was 5.0; 0 = no leak
 # Phase 7b: entry-scheduled gain. The base KI reaches the cap in ~0.5 s — half
 # the 1 s entry window. While the commanded curvature magnitude is RISING
 # (corner building) integrate faster so the trim arrives within ~0.2 s of
