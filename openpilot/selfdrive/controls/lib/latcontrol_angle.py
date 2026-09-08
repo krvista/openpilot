@@ -100,8 +100,8 @@ LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
 # A/B (2026-09-08): the route-8 comparison is confounded — hands-off share 26 % vs 10 %, median speed 57 vs
 # 47 km/h, and on GPS+speed-matched locations (133 pairs) route 8 was BETTER (|offset| 0.09 vs 0.20 m) while
 # the speed-binned aggregate says worse. So 7a-6 is neither confirmed nor refuted: it sits behind the
-# Params bool LatFbTrimDeadband (default off = 7a-5, bit-identical) for a controlled A/B over matched drives
-# (tools/i6nv3_bench/ab_lane_compare.py).
+# Params bool LatFbTrim7a6 — ON by default for the on-road validation (driver's call, 2026-09-08); 0 = 7a-5,
+# bit-identical. Judge with tools/i6nv3_bench/ab_lane_compare.py over matched drives.
 LAT_FB_ERR_DEADBAND = 0.2e-3  # 1/m when LatFbTrimDeadband is on; ~0.56 deg of wheel at 50 km/h
 LAT_FB_LEAK_TAU     = 5.0     # s at the full 10e-4 cap when on; scaled with the speed-aware cap
 # Phase 7b: entry-scheduled gain. The base KI reaches the cap in ~0.5 s — half
@@ -122,9 +122,9 @@ class LatControlAngle(LatControl):
     self._fb_integ = 0.0  # Phase 7a closed-loop curvature trim state
     self._des_slow = 0.0  # Phase 7b rising-entry detector (EMA 0.5 s)
     self._fb_err_lp = 0.0  # Phase 7a-4: 0.3 s LP of fb_err for the sustained-error gate
-    self._trim_7a6 = False  # Phase 7a-6 A/B toggle (Params LatFbTrimDeadband), read once at start
+    self._trim_7a6 = True   # Phase 7a-6 (Params LatFbTrim7a6, default on for the on-road validation), read once at start
     try:
-      self._trim_7a6 = bool(Params().get_bool("LatFbTrimDeadband"))
+      self._trim_7a6 = bool(Params().get_bool("LatFbTrim7a6"))
     except Exception:
       pass
 
