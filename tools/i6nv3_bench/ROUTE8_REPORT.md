@@ -30,9 +30,9 @@ isolcpus=6,7 재확인. /proc/stat 누적: IRQ+softirq 는 모든 코어에서 �
 
 속도 구간별 집계는 라우트 8 이 나쁘지만, 가장 통제된 비교(같은 지점·같은 속도)는 라우트 8 이 좋다. 손 뗀 비율이 10 % 라
 "손 뗀 프레임"의 선택 편향도 크고, 보정 에피소드 4.4/분은 운전자가 90 % 시간 핸들을 잡고 있었던 결과이기도 하다.
-→ 회귀라고 단정할 수 없다. 7a-6 은 Params `LatFbTrimDeadband`(기본 off = 7a-5, 비트 동일) 뒤에 두고, 같은 구간을
-켜고/끄고 번갈아 달린 로그를 `tools/i6nv3_bench/ab_lane_compare.py` 로 짝지어 판정한다. 켜기: SSH 에서
-`echo -n 1 > /data/params/d/LatFbTrimDeadband` (재부팅 후 적용), 끄기: 0.
+→ 회귀라고 단정할 수 없다. 7a-6 은 Params `LatFbTrim7a6` 뒤에 두되 실차 검증을 위해 기본 ON(운전자 결정, 09-08).
+끄기: SSH 에서 `echo -n 0 > /data/params/d/LatFbTrim7a6` (재부팅 후 적용). 판정은 같은 구간 로그를
+`tools/i6nv3_bench/ab_lane_compare.py` 로 짝지어서(라우트 7 = 꺼짐 기준, 이후 출퇴근 = 켜짐).
 
 ## 3. 그 밖의 수정
 - 38-3: 주차 모드 등 다른 passive 원인에서 active 로 돌아올 때도 게인 계단(seg 25, 0.064)이 남아 있어, 모든 passive

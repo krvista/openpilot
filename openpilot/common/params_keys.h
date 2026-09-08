@@ -59,7 +59,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"IsDriverViewEnabled", {CLEAR_ON_MANAGER_START, BOOL}},
     {"IsEngaged", {PERSISTENT, BOOL}},
     {"IsLdwEnabled", {PERSISTENT | BACKUP, BOOL}},
-    {"LatFbTrimDeadband", {PERSISTENT | BACKUP, BOOL, "0"}},  // i6n Phase 7a-6 A/B: deadband + leak on the curvature trim
+    {"LatFbTrim7a6", {PERSISTENT | BACKUP, BOOL, "1"}},  // i6n Phase 7a-6 (deadband + leak on the curvature trim): ON for the on-road validation; 0 = 7a-5
     {"IsLiveStreaming", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
     {"IsMetric", {PERSISTENT | BACKUP, BOOL}},
     {"IsOffroad", {CLEAR_ON_MANAGER_START, BOOL}},
