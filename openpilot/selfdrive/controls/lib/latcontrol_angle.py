@@ -3,6 +3,7 @@ import numpy as np
 
 from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
+from openpilot.common.params import Params
 
 # TODO This is speed dependent
 STEER_ANGLE_SATURATION_THRESHOLD = 2.5  # Degrees
@@ -96,8 +97,13 @@ LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
 # car centred on crowned / gently curved roads through the EPS deadband after all: the 0.2e-3
 # deadband + leak cut exactly the moderate-corner band (0.3-0.6e-3 deficits). Both OFF again = 7a-5,
 # bit-identical. The code path and tests stay for a future speed/curve-gated variant.
-LAT_FB_ERR_DEADBAND = 0.0     # 1/m; 7a-6 value was 0.2e-3 (~0.56 deg of wheel at 50 km/h)
-LAT_FB_LEAK_TAU     = 0.0     # s at the full 10e-4 cap; 7a-6 value was 5.0; 0 = no leak
+# A/B (2026-09-08): the route-8 comparison is confounded — hands-off share 26 % vs 10 %, median speed 57 vs
+# 47 km/h, and on GPS+speed-matched locations (133 pairs) route 8 was BETTER (|offset| 0.09 vs 0.20 m) while
+# the speed-binned aggregate says worse. So 7a-6 is neither confirmed nor refuted: it sits behind the
+# Params bool LatFbTrimDeadband (default off = 7a-5, bit-identical) for a controlled A/B over matched drives
+# (tools/i6nv3_bench/ab_lane_compare.py).
+LAT_FB_ERR_DEADBAND = 0.2e-3  # 1/m when LatFbTrimDeadband is on; ~0.56 deg of wheel at 50 km/h
+LAT_FB_LEAK_TAU     = 5.0     # s at the full 10e-4 cap when on; scaled with the speed-aware cap
 # Phase 7b: entry-scheduled gain. The base KI reaches the cap in ~0.5 s — half
 # the 1 s entry window. While the commanded curvature magnitude is RISING
 # (corner building) integrate faster so the trim arrives within ~0.2 s of
@@ -116,6 +122,11 @@ class LatControlAngle(LatControl):
     self._fb_integ = 0.0  # Phase 7a closed-loop curvature trim state
     self._des_slow = 0.0  # Phase 7b rising-entry detector (EMA 0.5 s)
     self._fb_err_lp = 0.0  # Phase 7a-4: 0.3 s LP of fb_err for the sustained-error gate
+    self._trim_7a6 = False  # Phase 7a-6 A/B toggle (Params LatFbTrimDeadband), read once at start
+    try:
+      self._trim_7a6 = bool(Params().get_bool("LatFbTrimDeadband"))
+    except Exception:
+      pass
 
   def _filtered_roll(self, roll: float) -> float:
     if ROLL_LP_TAU <= 0.0:
@@ -165,8 +176,10 @@ class LatControlAngle(LatControl):
         rising = abs(desired_curvature) > self._des_slow * 1.02
         ki = LAT_FB_KI * (LAT_FB_ENTRY_BOOST if rising else 1.0)
         # 7a-6: deadband on the error, slow leak on the state (see constants)
-        err_eff = 0.0 if abs(fb_err) < LAT_FB_ERR_DEADBAND else fb_err - math.copysign(LAT_FB_ERR_DEADBAND, fb_err)
-        leak = (self._fb_integ * self.dt / (LAT_FB_LEAK_TAU * cap / LAT_FB_CAP)) if LAT_FB_LEAK_TAU > 0.0 else 0.0
+        db = LAT_FB_ERR_DEADBAND if self._trim_7a6 else 0.0
+        tau = LAT_FB_LEAK_TAU if self._trim_7a6 else 0.0
+        err_eff = 0.0 if abs(fb_err) < db else fb_err - math.copysign(db, fb_err)
+        leak = (self._fb_integ * self.dt / (tau * cap / LAT_FB_CAP)) if tau > 0.0 else 0.0
         self._fb_integ = float(np.clip(self._fb_integ + ki * err_eff * self.dt - leak, -cap, cap))
       # (same guard for the 7b rising-entry EMA — recursive state)
       if math.isfinite(desired_curvature):
