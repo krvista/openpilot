@@ -41,8 +41,11 @@ def manager_init() -> None:
   if params.get("DeviceBootMode") == 1:  # start in Always Offroad mode
     params.put_bool("OffroadMode", True, block=True)
 
-  # quick boot
-  if params.get_bool("QuickBootToggle") and not PC:
+  # quick boot. i6n: QuickBootAuto (default on) makes this automatic — the updater replaces the tree
+  # (marker gone), the first boot after a push runs build.py once, manager re-creates the marker here,
+  # every later boot skips the scons check. Deploy is push-only on this branch, so on-device edits
+  # needing a rebuild are not a concern; set QuickBootAuto=0 to get the stock behaviour back.
+  if (params.get_bool("QuickBootToggle") or params.get_bool("QuickBootAuto")) and not PC:
     prebuilt_path = "/data/openpilot/prebuilt"
     if not os.path.exists(prebuilt_path):
       open(prebuilt_path, 'x').close()

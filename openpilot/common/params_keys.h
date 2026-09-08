@@ -177,6 +177,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"OnroadScreenOffTimerMigrated", {PERSISTENT | BACKUP, STRING, "0.0"}},
     {"OnroadUploads", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"QuickBootToggle", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"QuickBootAuto", {PERSISTENT | BACKUP, BOOL, "1"}},  // i6n: re-create the prebuilt marker after every boot -> the scons check runs once per update only
     {"QuietMode", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RainbowMode", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RoadEdgeLaneChangeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
