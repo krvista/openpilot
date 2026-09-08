@@ -223,7 +223,14 @@ def _log_cpu_topology(tag: str) -> None:
         irqs.append((sum(counts), num, name, aff, counts))
     irqs.sort(reverse=True)
     top = [{"irq": n, "name": name, "affinity": aff, "per_cpu": c} for _, n, name, aff, c in irqs[:16]]
-    cloudlog.event("cpu_topology", tag=tag, isolation=isol, top_irqs=top, ncpu=ncpu)
+    # per-core jiffies (user, nice, system, idle, iowait, irq, softirq) — the delta between the two
+    # snapshots splits each core's load into process time vs interrupt work
+    stat = {}
+    with open("/proc/stat") as f:
+      for line in f:
+        if line.startswith("cpu") and line[3:4].isdigit():
+          parts = line.split(); stat[parts[0]] = [int(x) for x in parts[1:8]]
+    cloudlog.event("cpu_topology", tag=tag, isolation=isol, top_irqs=top, ncpu=ncpu, proc_stat=stat)
   except Exception:
     cloudlog.exception("cpu_topology snapshot failed")
 

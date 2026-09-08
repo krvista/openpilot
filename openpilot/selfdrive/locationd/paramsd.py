@@ -243,7 +243,7 @@ def retrieve_initial_vehicle_params(params: Params, CP: car.CarParams, replay: b
 
 
 def main():
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process([0, 1, 2], 5)  # i6n: core 3 is pandad's
 
   DEBUG = bool(int(os.getenv("DEBUG", "0")))
   REPLAY = bool(int(os.getenv("REPLAY", "0")))

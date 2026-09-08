@@ -6,7 +6,7 @@ from openpilot.selfdrive.monitoring.policy import DriverMonitoring
 
 
 def dmonitoringd_thread():
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process([0, 1, 2], 5)  # i6n: core 3 is pandad's
 
   params = Params()
   pm = messaging.PubMaster(['driverMonitoringState'])

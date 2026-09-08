@@ -240,7 +240,7 @@ def main(exit_event: threading.Event | None = None) -> None:
     exit_event = threading.Event()
 
   try:
-    set_core_affinity([0, 1, 2, 3])
+    set_core_affinity([0, 1, 2])  # i6n: core 3 is pandad's
   except Exception:
     cloudlog.exception("failed to set core affinity")
 

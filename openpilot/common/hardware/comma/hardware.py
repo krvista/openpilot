@@ -362,8 +362,12 @@ class HardwareComma(HardwareBase):
 
     # *** GPU config ***
     # https://github.com/commaai/agnos-kernel-sdm845/blob/master/arch/arm64/boot/dts/qcom/sdm845-gpu.dtsi#L216
-    affine_irq(5, "fts_ts")    # touch
-    affine_irq(5, "msm_drm")   # display
+    # i6n: display + touch IRQ work off core 5 (selfdrived / plannerd / radard live there; with them
+    # on 5 it was the busiest core of the drive, 87 % mean on route 00000007) onto LITTLE core 1,
+    # which holds only sensord + the encoder/sensor IRQs. The pool daemons are kept off core 1's
+    # neighbours by the 0-2 affinity below, and the UI renders at 30 fps on comma 4.
+    affine_irq(1, "fts_ts")    # touch
+    affine_irq(1, "msm_drm")   # display
     sudo_write("1", "/sys/class/kgsl/kgsl-3d0/min_pwrlevel")
     sudo_write("1", "/sys/class/kgsl/kgsl-3d0/max_pwrlevel")
     sudo_write("1", "/sys/class/kgsl/kgsl-3d0/force_bus_on")

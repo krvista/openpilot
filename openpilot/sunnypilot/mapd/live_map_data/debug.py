@@ -27,7 +27,7 @@ def excepthook(args):
 
 
 def live_map_data_sp_thread():
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process([0, 1, 2], 5)  # i6n: core 3 is pandad's
 
   params = Params()
   gps_location_service = get_gps_location_service(params)

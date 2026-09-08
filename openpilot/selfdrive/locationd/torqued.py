@@ -253,7 +253,7 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
 
 
 def main(demo=False):
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process([0, 1, 2], 5)  # i6n: core 3 is pandad's
 
   DEBUG = bool(int(os.getenv("DEBUG", "0")))
 

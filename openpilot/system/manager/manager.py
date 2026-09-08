@@ -193,6 +193,15 @@ def manager_thread() -> None:
 
 
 def main() -> None:
+  # i6n: everything manager spawns inherits this mask unless it pins itself (card/controlsd 4,
+  # selfdrived/plannerd/radard 5, camerad 6, modeld 7, pandad/encoderd 3, ui 0, sensord 1). Without
+  # it the unpinned daemons drifted onto the non-isolated control cores 4 and 5 (route 00000007).
+  # PC / non-comma hardware: leave the scheduler alone.
+  if not PC:
+    try:
+      os.sched_setaffinity(0, {0, 1, 2})
+    except OSError as e:
+      cloudlog.warning(f"manager affinity not set: {e}")
   manager_init()
   if os.getenv("PREPAREONLY") is not None:
     return

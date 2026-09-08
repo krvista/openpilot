@@ -345,7 +345,7 @@ void loggerd_thread() {
 int main(int argc, char** argv) {
   if (!Hardware::PC()) {
     int ret;
-    ret = util::set_core_affinity({0, 1, 2, 3});
+    ret = util::set_core_affinity({0, 1, 2});  // i6n: core 3 is pandad's
     assert(ret == 0);
     // TODO: why does this impact camerad timings?
     //ret = util::set_realtime_priority(1);
