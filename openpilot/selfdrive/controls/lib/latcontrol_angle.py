@@ -74,6 +74,22 @@ LAT_FB_ERR_MAX_HARD = 30e-4 # 1/m; redundant when LP_TAU=0 (15e-4 gate subsumes 
 LAT_FB_BLEED_FROZEN = 2.0   # s
 LAT_FB_BLEED_INACTIVE = 0.5 # s
 LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
+# Phase 7a-6 (i6nv3 route 00000007, first drive with angleFbInteg logged): hands-off the trim sat AT ITS
+# CAP 46 % of the time (30-50 km/h: 50 %) while the curvature error it integrates was tiny (|median|
+# 0.14e-3, mean -0.13e-3) — a constant sub-deadband bias of the EPS/VM chain that the EPS never acts
+# on, so the command stood ~2 deg beyond the wheel (steerCmdGapDeg median 2.8 deg) for nothing, and
+# that stored 2 deg was released whenever the EPS did respond (corner entry, driver touch; 16 % of the
+# driver grabs had the trim at cap vs 9 % baseline). Two changes, both in the "less trim" direction the
+# 7a-5 revert already chose: (1) errors inside ERR_DEADBAND integrate as 0 (the EPS cannot act on
+# them either), (2) a slow leak so a constant residual bias settles at KI*tau*(e-db) instead of the
+# cap. The leak time constant scales with the speed-aware cap (tau_eff = LEAK_TAU * cap / LAT_FB_CAP,
+# review) so the error that would saturate the trim, db + cap/(KI*tau_eff), stays ~0.45e-3 at every
+# speed instead of collapsing toward the deadband on the highway. Corner deficits (0.8-1.0e-3) still
+# reach the cap: 0.9 s on a rising entry (7b boost), 2.7 s steady, at 14 m/s. Offline replay of route
+# 7: time at cap 46 % -> 0 %, released trim on a grab 2.8 deg -> 0.8 deg (verifier probes).
+# Kill switch: LAT_FB_ERR_DEADBAND = 0.0 and LAT_FB_LEAK_TAU = 0.0 (bit-identical to 7a-5).
+LAT_FB_ERR_DEADBAND = 0.2e-3  # 1/m; ~0.56 deg of wheel at 50 km/h
+LAT_FB_LEAK_TAU     = 5.0     # s at the full 10e-4 cap; 0 = no leak
 # Phase 7b: entry-scheduled gain. The base KI reaches the cap in ~0.5 s — half
 # the 1 s entry window. While the commanded curvature magnitude is RISING
 # (corner building) integrate faster so the trim arrives within ~0.2 s of
@@ -140,7 +156,10 @@ class LatControlAngle(LatControl):
         cap = min(LAT_FB_CAP, LAT_FB_ACCEL_CAP / max(CS.vEgo, 5.0) ** 2)
         rising = abs(desired_curvature) > self._des_slow * 1.02
         ki = LAT_FB_KI * (LAT_FB_ENTRY_BOOST if rising else 1.0)
-        self._fb_integ = float(np.clip(self._fb_integ + ki * fb_err * self.dt, -cap, cap))
+        # 7a-6: deadband on the error, slow leak on the state (see constants)
+        err_eff = 0.0 if abs(fb_err) < LAT_FB_ERR_DEADBAND else fb_err - math.copysign(LAT_FB_ERR_DEADBAND, fb_err)
+        leak = (self._fb_integ * self.dt / (LAT_FB_LEAK_TAU * cap / LAT_FB_CAP)) if LAT_FB_LEAK_TAU > 0.0 else 0.0
+        self._fb_integ = float(np.clip(self._fb_integ + ki * err_eff * self.dt - leak, -cap, cap))
       # (same guard for the 7b rising-entry EMA — recursive state)
       if math.isfinite(desired_curvature):
         self._des_slow += (self.dt / 0.5) * (abs(desired_curvature) - self._des_slow)

@@ -96,3 +96,47 @@ class TestLatFbInteg:
       step(lp, VMp, v=20.0, desired=d, angle=a)
       step(ln, VMn, v=20.0, desired=-d, angle=-a)
     assert lp._fb_integ == pytest.approx(-ln._fb_integ, abs=1e-15)
+
+
+class TestLatFbInteg7a6:
+  # Phase 7a-6: a constant sub-deadband bias must not wind the trim to the cap; a corner deficit still must.
+  def test_sub_deadband_bias_does_not_wind_up(self):
+    lac, VM = make_lac()
+    for _ in range(3000):                                  # 30 s of a 0.1e-3 bias (route 7 hands-off median 0.14e-3)
+      step(lac, VM, v=14.0, desired=1e-4)
+    assert abs(lac._fb_integ) < 0.05e-3, lac._fb_integ
+
+  def test_corner_deficit_still_reaches_cap(self):
+    lac, VM = make_lac()
+    for _ in range(300):                                   # 3 s of a 0.8e-3 corner deficit
+      step(lac, VM, v=14.0, desired=8e-4)
+    cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / 14.0 ** 2)
+    assert abs(lac._fb_integ) >= 0.95 * cap, (lac._fb_integ, cap)
+
+  def test_leak_settles_below_cap_for_moderate_bias(self):
+    lac, VM = make_lac()
+    for _ in range(6000):                                  # 60 s of 0.4e-3
+      step(lac, VM, v=14.0, desired=4e-4)
+    expected = lca.LAT_FB_KI * lca.LAT_FB_LEAK_TAU * (4e-4 - lca.LAT_FB_ERR_DEADBAND)   # 0.8e-3 steady state
+    assert abs(abs(lac._fb_integ) - expected) < 0.1e-3, (lac._fb_integ, expected)
+
+  def test_kill_switch_restores_7a5(self):
+    old = (lca.LAT_FB_ERR_DEADBAND, lca.LAT_FB_LEAK_TAU)
+    try:
+      lca.LAT_FB_ERR_DEADBAND = 0.0; lca.LAT_FB_LEAK_TAU = 0.0
+      lac, VM = make_lac()
+      for _ in range(3000):
+        step(lac, VM, v=14.0, desired=1e-4)
+      cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / 14.0 ** 2)
+      assert abs(lac._fb_integ) >= 0.95 * cap                 # 7a-5 behaviour: a constant bias winds to the cap
+    finally:
+      lca.LAT_FB_ERR_DEADBAND, lca.LAT_FB_LEAK_TAU = old
+
+  def test_leak_scales_with_cap_so_highway_does_not_saturate_on_a_small_bias(self):
+    # review: with a fixed leak tau the cap (0.5/v^2) shrank faster than the leak ceiling on the highway
+    for v in (14.0, 30.0, 36.0):
+      lac, VM = make_lac()
+      for _ in range(6000):
+        step(lac, VM, v=v, desired=3e-4)                   # 0.3e-3 steady bias, 60 s
+      cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / v ** 2)
+      assert abs(lac._fb_integ) < 0.9 * cap, (v, lac._fb_integ, cap)

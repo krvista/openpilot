@@ -90,5 +90,7 @@ if __name__ == "__main__":
   text = sys.argv[1] if len(sys.argv) > 1 else DEMO_TEXT
   gui_app.init_window("Text Viewer")
   text_window = TextWindow(text)
-  for _ in gui_app.render():
+  for should_render, _, _ in gui_app.render():
+    if not should_render:   # i6n: vblank-skip frames have no active drawing context
+      continue
     text_window.render(rl.Rectangle(0, 0, gui_app.width, gui_app.height))

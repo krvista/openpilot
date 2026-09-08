@@ -105,7 +105,9 @@ def _read_stdin():
 def main():
   gui_app.init_window("Spinner")
   spinner = Spinner()
-  for _ in gui_app.render():
+  for should_render, _, _ in gui_app.render():
+    if not should_render:   # i6n: vblank-skip frames have no active drawing context
+      continue
     text_list = _read_stdin()
     if text_list:
       spinner.set_text(text_list[-1])
