@@ -41,15 +41,6 @@ def manager_init() -> None:
   if params.get("DeviceBootMode") == 1:  # start in Always Offroad mode
     params.put_bool("OffroadMode", True, block=True)
 
-  # quick boot. i6n: QuickBootAuto (default on) makes this automatic — the updater replaces the tree
-  # (marker gone), the first boot after a push runs build.py once, manager re-creates the marker here,
-  # every later boot skips the scons check. Deploy is push-only on this branch, so on-device edits
-  # needing a rebuild are not a concern; set QuickBootAuto=0 to get the stock behaviour back.
-  if (params.get_bool("QuickBootToggle") or params.get_bool("QuickBootAuto")) and not PC:
-    prebuilt_path = "/data/openpilot/prebuilt"
-    if not os.path.exists(prebuilt_path):
-      open(prebuilt_path, 'x').close()
-
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True, block=True)
 
@@ -61,6 +52,18 @@ def manager_init() -> None:
     default_value = params.get_default_value(k)
     if default_value is not None and params.get(k) is None:
       params.put(k, default_value, block=True)
+
+  # quick boot (after the defaults loop so QuickBootAuto's default counts on the first boot after an
+  # update — route 00000009 showed the marker was only created from the second boot). i6n: QuickBootAuto
+  # (default on) makes this automatic — the updater replaces the tree
+  # (marker gone), the first boot after a push runs build.py once, manager re-creates the marker here,
+  # every later boot skips the scons check. Deploy is push-only on this branch, so on-device edits
+  # needing a rebuild are not a concern; set QuickBootAuto=0 to get the stock behaviour back.
+  if (params.get_bool("QuickBootToggle") or params.get_bool("QuickBootAuto")) and not PC:
+    prebuilt_path = "/data/openpilot/prebuilt"
+    if not os.path.exists(prebuilt_path):
+      open(prebuilt_path, 'x').close()
+
 
   # Create folders needed for msgq
   try:

@@ -277,6 +277,7 @@ def main() -> NoReturn:
   # (route 00000008); it is a logger, so let everything else on cores 0-2 go first.
   try:
     os.nice(10)
+    os.sched_setaffinity(0, {2})   # off core 0 (ui, RT): the burst still counted 100 % on core 0 with nice alone (route 00000009)
   except OSError:
     pass
   pm = messaging.PubMaster(['procLog'])
