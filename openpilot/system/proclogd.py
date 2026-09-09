@@ -202,7 +202,11 @@ def _procs() -> list[ProcStat]:
       with open(f'/proc/{pid_str}/stat') as f:
         stat = f.read()
       parsed = _parse_proc_stat(stat)
-      if parsed is not None:
+      # i6n: skip kernel threads (no address space -> vsize 0). On the comma 4 they were 487 of the
+      # 569 /proc entries, so the 2 s sweep (stat + cmdline + exe + capnp per entry, and the 40 s PSS
+      # pass) cost ~7x more than the 82 user-space processes it is actually kept for. Their CPU time
+      # is still visible in aggregate through cpuTimes (/proc/stat) below.
+      if parsed is not None and parsed['vms'] > 0:
         stats.append(parsed)
     except OSError:
       continue
