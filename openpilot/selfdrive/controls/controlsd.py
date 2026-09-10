@@ -238,7 +238,8 @@ ENTRY_ASSIST_CAP = 1e-3       # 1/m absolute cap
 ENTRY_ASSIST_REL = 0.5        # ... and at most +50% of the plan
 ENTRY_ASSIST_KLANE_MIN = 0.003
 ENTRY_ASSIST_LANE_MIN = 0.6
-ENTRY_ASSIST_MIN_SPEED = 7.0  # m/s
+ENTRY_ASSIST_MIN_SPEED = 8.3  # m/s; aligned with latcontrol_angle.LAT_FB_MIN_SPEED (7a-7) so open-loop entry assist
+                              # never runs in the 7.0-8.3 m/s band where the closed-loop trim is off (was 7.0)
 
 # Phase 6g-1: floor on the model-confidence damping below. The damping blends the
 # command toward the PREVIOUS (straighter) curvature when lane/position confidence

@@ -169,3 +169,9 @@ class TestLatFbMinSpeed7a7:
     for _ in range(300):
       step(lac, VM, v=8.5, angle=0.0, desired=1.0e-3)
     assert lac._fb_integ > 0.3e-3
+
+
+def test_entry_assist_never_runs_without_the_trim():
+  """7c open-loop entry assist must not run in a band where the 7a closed-loop trim is off (7a-7 alignment)."""
+  import openpilot.selfdrive.controls.controlsd as controlsd
+  assert controlsd.ENTRY_ASSIST_MIN_SPEED >= lca.LAT_FB_MIN_SPEED

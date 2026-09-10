@@ -182,11 +182,12 @@ def _get_smaps_cached(pid: int) -> SmapsData:
   return _smaps_cache[pid]
 
 
-def _advance_smaps_cycle(live_pids: set[int]) -> None:
-  """End of a sweep: step the slot counter and drop cache entries of processes that are gone."""
+def _end_sweep(live_pids: set[int]) -> None:
+  """End of a sweep: step the slot counter and drop cache entries of processes that are gone (smaps, slot
+  and the exe/cmdline cache, so pid churn over a long drive does not grow them without bound)."""
   global _smaps_cycle
   _smaps_cycle = (_smaps_cycle + 1) % _SMAPS_EVERY
-  for cache in (_smaps_cache, _smaps_slot):
+  for cache in (_smaps_cache, _smaps_slot, _proc_cache):
     for pid in [k for k in cache if k not in live_pids]:
       del cache[pid]
 
@@ -299,7 +300,7 @@ def build_proc_log_message(msg) -> None:
   pl.mem.inactive = mem_info["Inactive:"]
   pl.mem.shared = mem_info["Shmem:"]
 
-  _advance_smaps_cycle({r['pid'] for r in procs})
+  _end_sweep({r['pid'] for r in procs})
 
 
 def main() -> NoReturn:

@@ -23,6 +23,7 @@ def proclogd(monkeypatch):
 
 
 def _reset(proclogd):
+  proclogd._proc_cache.clear()
   proclogd._smaps_cache.clear()
   proclogd._smaps_slot.clear()
   proclogd._smaps_next_slot = 0
@@ -38,7 +39,7 @@ def test_each_pid_refreshed_once_per_period_in_own_slot(proclogd, monkeypatch):
   for _cycle in range(3 * proclogd._SMAPS_EVERY):
     for pid in pids:
       assert proclogd._get_smaps_cached(pid)['pss'] == pid
-    proclogd._advance_smaps_cycle(set(pids))   # the production increment, wrap included
+    proclogd._end_sweep(set(pids))   # the production increment, wrap included
     assert 0 <= proclogd._smaps_cycle < proclogd._SMAPS_EVERY
     tick[0] += 1
   per_cycle = Counter(c for c, _ in reads[len(pids):])  # skip the initial population reads
@@ -62,7 +63,16 @@ def test_dead_pids_are_evicted_and_reused_pid_gets_fresh_slot(proclogd, monkeypa
   _reset(proclogd)
   for pid in (10, 11, 12):
     proclogd._get_smaps_cached(pid)
-  proclogd._advance_smaps_cycle({10, 12})
+  proclogd._end_sweep({10, 12})
   assert 11 not in proclogd._smaps_cache and 11 not in proclogd._smaps_slot
   proclogd._get_smaps_cached(11)               # pid reused by a new process: re-read and re-slotted
   assert proclogd._smaps_slot[11] == 3
+
+
+def test_exe_cmdline_cache_evicted_with_dead_pids(proclogd):
+  _reset(proclogd)
+  proclogd._proc_cache.clear()
+  for pid in (20, 21):
+    proclogd._proc_cache[pid] = {'pid': pid, 'name': 'x', 'exe': '', 'cmdline': []}
+  proclogd._end_sweep({20})
+  assert 21 not in proclogd._proc_cache and 20 in proclogd._proc_cache
