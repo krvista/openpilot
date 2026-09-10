@@ -293,6 +293,14 @@ void mads_set_current_disengage_reason(int reason) {
   m_mads_state.current_disengage.active_reason = reason;
 }
 
+void mads_exit_controls_with_reason(int reason) {
+  mads_exit_controls((DisengageReason)reason);
+}
+
+int mads_get_pending_disengage_reasons(void) {
+  return get_mads_state()->current_disengage.pending_reasons;
+}
+
 void set_controls_requested_lateral(bool c){
   m_mads_state.controls_requested_lateral = c;
 }

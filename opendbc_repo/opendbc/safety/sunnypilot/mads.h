@@ -141,6 +141,20 @@ inline void mads_heartbeat_engaged_check(void) {
     }
   } else {
     heartbeat_engaged_mads_mismatches = 0U;
+    // i6n: a grant that was revoked only because openpilot was not ready yet (heartbeat mismatch while
+    // selfdrived was still initialising after a boot with main cruise already on) is re-requested once
+    // the heartbeat reports MADS engaged. Without this the safety kept lateral off while selfdrived's
+    // boot auto-enable turned MADS on, and 2 s later "Controls Mismatch: Lateral" took over
+    // (route 0000000b seg 0). The request still goes through m_update_control_state's normal gates, and
+    // every other exit reason (button, brake, ACC main off, desync, lag) still needs a fresh driver edge:
+    // active_reason is only rewritten while lateral is allowed, so a second exit while lateral is already
+    // off (ACC main turned off, brake, desync) only ORs into pending_reasons — hence the heartbeat must be
+    // the ONLY pending reason as well (same pattern as the brake-release re-request above).
+    if (!controls_allowed_lateral && heartbeat_engaged_mads && m_mads_state.system_enabled &&
+        (m_mads_state.current_disengage.active_reason == MADS_DISENGAGE_REASON_HEARTBEAT_ENGAGED_MISMATCH) &&
+        (m_mads_state.current_disengage.pending_reasons == MADS_DISENGAGE_REASON_HEARTBEAT_ENGAGED_MISMATCH)) {
+      m_mads_state.controls_requested_lateral = true;
+    }
   }
 }
 
@@ -166,10 +180,14 @@ extern inline void mads_set_system_state(const bool enabled, const bool disengag
 inline void mads_exit_controls(const DisengageReason reason) {
   // Always track this as a pending reason
   m_mads_state.current_disengage.pending_reasons |= reason;
+  // i6n: any exit also drops a request that is still waiting to be consumed (the heartbeat re-request is
+  // set at 1 Hz and consumed on the next CAN message; a brake / ACC-main-off / override exit landing in
+  // that gap must win). The brake-release re-request is set after the exit calls in the same
+  // m_update_control_state pass, so it is unaffected.
+  m_mads_state.controls_requested_lateral = false;
 
   if (controls_allowed_lateral) {
     m_mads_state.current_disengage.active_reason = reason;
-    m_mads_state.controls_requested_lateral = false;
     controls_allowed_lateral = false;
   }
 }

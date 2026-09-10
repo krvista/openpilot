@@ -385,6 +385,114 @@ class MadsSafetyTestBase(unittest.TestCase):
     self.assertFalse(self.safety.get_controls_allowed_lateral(),
                      "Should disengage after exactly 3 mismatches")
 
+  # MADS_DISENGAGE_REASON_* values from opendbc/safety/sunnypilot/mads_declarations.h
+  _REASON_BRAKE, _REASON_LAG, _REASON_BUTTON, _REASON_ACC_MAIN_OFF, _REASON_DESYNC, _REASON_HEARTBEAT, _REASON_STEERING = 1, 2, 4, 8, 16, 32, 64
+
+  def _heartbeat_exit(self, disengage_on_brake=False):
+    """ACC main rising edge grants lateral, then 3 heartbeat mismatches revoke it (openpilot not ready yet)."""
+    self.safety.set_mads_params(True, disengage_on_brake, False)
+    self.safety.tick_mads_state(True, False, False, False, False)
+    self.safety.tick_mads_state(True, True, False, False, False)   # acc main rising -> request -> granted
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self.safety.set_heartbeat_engaged_mads(False)
+    for _ in range(3):
+      self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self.assertEqual(self.safety.mads_get_current_disengage_reason(), self._REASON_HEARTBEAT)
+    self.assertFalse(self.safety.get_controls_requested_lateral())
+
+  def test_heartbeat_engaged_re_request_after_mismatch_exit(self):
+    """i6n: lateral revoked only because openpilot was not ready (heartbeat mismatch) is re-requested and
+    re-granted once the heartbeat reports MADS engaged, with ACC main still on and nothing else pending."""
+    self._heartbeat_exit()
+    self.safety.set_heartbeat_engaged_mads(True)
+    self.safety.mads_heartbeat_engaged_check()
+    self.assertTrue(self.safety.get_controls_requested_lateral())
+    self.safety.tick_mads_state(True, True, False, False, False)   # acc main still on, no edge
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self.assertEqual(self.safety.mads_get_current_disengage_reason(), 0)
+    # and again through the real rx path (a brake-off message runs mads_state_update with the harness'
+    # acc_main_on global, so keep main cruise on there too)
+    self.safety.set_acc_main_on(True)
+    self.safety.set_heartbeat_engaged_mads(False)
+    for _ in range(3):
+      self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self.safety.set_heartbeat_engaged_mads(True)
+    self.safety.mads_heartbeat_engaged_check()
+    self._rx(self._user_brake_msg(False))
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+
+  def test_heartbeat_re_request_refused_when_another_exit_is_pending(self):
+    """A second exit while lateral is already off (ACC main off, brake, desync, lag, button, steering) only
+    ORs into pending_reasons and leaves active_reason at HEARTBEAT: the heartbeat alone must not re-grant."""
+    # ACC main turned off after the heartbeat revoke (the falling edge exits with lateral already off)
+    self._heartbeat_exit()
+    self.safety.tick_mads_state(True, False, False, False, False)
+    self.assertEqual(self.safety.mads_get_current_disengage_reason(), self._REASON_HEARTBEAT)  # stale, by design
+    self.safety.set_heartbeat_engaged_mads(True)
+    for _ in range(4):
+      self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_requested_lateral())
+    self.safety.tick_mads_state(True, False, False, False, False)
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+    # brake held with disengage-on-brake after the heartbeat revoke
+    self.safety.set_mads_params(True, True, False)
+    self.safety.tick_mads_state(True, False, False, False, False)
+    self.safety.tick_mads_state(True, True, False, False, False)
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self.safety.set_heartbeat_engaged_mads(False)
+    for _ in range(3):
+      self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self.safety.tick_mads_state(True, True, False, True, False)    # brake rising while lateral is off
+    self.safety.set_heartbeat_engaged_mads(True)
+    for _ in range(4):
+      self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_requested_lateral())
+    self.safety.tick_mads_state(True, True, False, True, False)
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+    # any other reason set on top of a heartbeat exit (desync, lag, button, steering disengage)
+    for reason in (self._REASON_DESYNC, self._REASON_LAG, self._REASON_BUTTON, self._REASON_STEERING, self._REASON_ACC_MAIN_OFF, self._REASON_BRAKE):
+      with self.subTest(reason=reason):
+        self._heartbeat_exit()
+        self.safety.mads_exit_controls_with_reason(reason)          # lateral already off: ORs into pending only
+        self.assertEqual(self.safety.mads_get_current_disengage_reason(), self._REASON_HEARTBEAT)
+        self.assertEqual(self.safety.mads_get_pending_disengage_reasons(), self._REASON_HEARTBEAT | reason)
+        self.safety.set_heartbeat_engaged_mads(True)
+        for _ in range(4):
+          self.safety.mads_heartbeat_engaged_check()
+        self.assertFalse(self.safety.get_controls_requested_lateral())
+        self.safety.tick_mads_state(True, True, False, False, False)
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+    # a request already latched by the heartbeat check is dropped by an exit that lands before it is consumed
+    for blocker in ("acc_main_off", "brake", "steering"):
+      with self.subTest(latched_then=blocker):
+        self._heartbeat_exit(disengage_on_brake=True)
+        self.safety.set_heartbeat_engaged_mads(True)
+        self.safety.mads_heartbeat_engaged_check()
+        self.assertTrue(self.safety.get_controls_requested_lateral())
+        acc_main = blocker != "acc_main_off"
+        self.safety.tick_mads_state(True, acc_main, False, blocker == "brake", blocker == "steering")
+        self.assertFalse(self.safety.get_controls_requested_lateral())
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+        self.safety.tick_mads_state(True, acc_main, False, blocker == "brake", blocker == "steering")
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+    # MADS disabled in the safety (stock build): never re-request, even with active and pending both HEARTBEAT
+    self.safety.set_mads_params(False, False, False)
+    self.safety.set_controls_allowed_lateral(False)
+    self.safety.set_controls_requested_lateral(False)
+    self.safety.mads_set_current_disengage_reason(self._REASON_HEARTBEAT)
+    self.safety.mads_exit_controls_with_reason(self._REASON_HEARTBEAT)   # pending = HEARTBEAT (init cleared it)
+    self.assertEqual(self.safety.mads_get_pending_disengage_reasons(), self._REASON_HEARTBEAT)
+    self.safety.set_heartbeat_engaged_mads(True)
+    self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_requested_lateral())
+
   def test_heartbeat_engaged_mads_reset_on_match(self):
     """Test that mismatch counter resets when heartbeat matches"""
     self.safety.set_mads_params(True, False, False)
