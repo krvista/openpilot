@@ -74,7 +74,19 @@ LAT_FB_ERR_MAX      = 15e-4 # 1/m; instantaneous error above this = yield/bleed 
 LAT_FB_ERR_MAX_HARD = 30e-4 # 1/m; redundant when LP_TAU=0 (15e-4 gate subsumes it); kept for the code path
 LAT_FB_BLEED_FROZEN = 2.0   # s
 LAT_FB_BLEED_INACTIVE = 0.5 # s
-LAT_FB_MIN_SPEED = 6.0      # m/s (below: passthrough region, bleed)
+# Phase 7a-7 (i6nv3 routes 0000000b/c): below ~30 km/h the CCNC EPS does not act on small angle
+# commands (trim-free 18-21 km/h band: |cmd-wheel| > 3 deg on 38-46 % of hands-off frames; 30-33 km/h
+# still 36-40 %, clearing only from ~33-36 km/h), so the trim wound to its cap against a wheel that never
+# moved (10-15 % of frames at cap at 22-30 km/h vs 2-7 % above 30 km/h) and stored up to 2.6 deg that
+# was released as a jump the moment the plan crossed the deadband — Banpo bridge ramp (route c
+# 1571.5-1572.6 s, 27 km/h): in the worst aligned 1 s the command swung 7.8 deg, the plan 5.4 deg and
+# the stale trim flipping sign under the 7b entry boost the other 2.4 deg. Passthrough (bleed) below
+# 8.3 m/s: replay of routes b/c — plan-quiet 1-s command swing p95 below 30 km/h 1.75/1.08 -> 0.75/0.74
+# deg, stale-trim frames 4.9/3.8 % -> 0, that ramp window 7.8 -> 5.4 deg; 30-54 km/h swing p99
+# unchanged (trim-at-cap 3.0 -> 2.5 % / 6.3 -> 5.5 % from decel carry-over), above 54 km/h identical.
+# What is given up at 22-30 km/h where the EPS did track: trim p50 0.3-0.4 deg, p90 1.2 deg
+# (<= 0.07 m/s^2 of lateral accel at 8 m/s). Kill switch: LAT_FB_MIN_SPEED = 6.0 (7a-5/7a-6 behaviour).
+LAT_FB_MIN_SPEED = 8.3      # m/s (below: passthrough region, bleed); 7a-7, was 6.0
 # Phase 7a-6 (i6nv3 route 00000007, first drive with angleFbInteg logged): hands-off the trim sat AT ITS
 # CAP 46 % of the time (30-50 km/h: 50 %) while the curvature error it integrates was tiny (|median|
 # 0.14e-3, mean -0.13e-3) — a constant sub-deadband bias of the EPS/VM chain that the EPS never acts

@@ -144,3 +144,28 @@ class TestLatFbInteg7a6:
           step(lac, VM, v=v, desired=3e-4)
         cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / v ** 2)
         assert abs(lac._fb_integ) < 0.9 * cap, (v, lac._fb_integ, cap)
+
+
+class TestLatFbMinSpeed7a7:
+  """Phase 7a-7: no trim below 8.3 m/s (the EPS deadband region), full trim just above."""
+
+  def test_no_windup_below_min_speed(self):
+    lac, VM = make_lac_7a6()
+    for _ in range(300):   # 3 s of a 1e-3 deficit at 27 km/h (7.5 m/s), wheel straight
+      step(lac, VM, v=7.5, angle=0.0, desired=1.0e-3)
+    assert abs(lac._fb_integ) < 1e-6
+
+  def test_trim_bleeds_when_slowing_into_passthrough(self):
+    lac, VM = make_lac_7a6()
+    for _ in range(300):
+      step(lac, VM, v=10.0, angle=0.0, desired=1.0e-3)
+    assert lac._fb_integ > 0.5e-3       # wound up at 36 km/h
+    for _ in range(200):                # 2 s below the threshold: bleed tau 0.5 s -> e^-4
+      step(lac, VM, v=7.5, angle=0.0, desired=1.0e-3)
+    assert abs(lac._fb_integ) < 0.05e-3
+
+  def test_trim_still_integrates_just_above_min_speed(self):
+    lac, VM = make_lac_7a6()
+    for _ in range(300):
+      step(lac, VM, v=8.5, angle=0.0, desired=1.0e-3)
+    assert lac._fb_integ > 0.3e-3
