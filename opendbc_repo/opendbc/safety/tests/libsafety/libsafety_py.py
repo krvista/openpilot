@@ -136,6 +136,8 @@ bool get_mads_acc_main(void);
 void set_acc_main_on(bool c);
 int get_mads_button_press(void);
 void mads_set_current_disengage_reason(int reason);
+void mads_exit_controls_with_reason(int reason);
+int mads_get_pending_disengage_reasons(void);
 int mads_get_current_disengage_reason(void);
 int get_temp_debug(void);
 uint32_t get_acc_main_on_mismatches(void);
