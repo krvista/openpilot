@@ -18,15 +18,24 @@ from opendbc.car.structs import car
 from openpilot.cereal import log
 import openpilot.selfdrive.controls.controlsd as cd
 
-N_PTS = 20
+from openpilot.selfdrive.modeld.constants import ModelConstants
+
+# The real modelV2 x grid (33 points, 0..192 m). The old fixture stopped at 38 m, so the Phase 7c lane
+# curvature (sampled at 0 / 25 / 50 m, np.interp clamps past the last point) came out ~6.5x low and the
+# entry assist never fired at a realistic magnitude in these tests (verifier, 2026-09-10).
+XS = [float(x) for x in ModelConstants.X_IDXS]
+N_PTS = len(XS)
 K = 0.006
 
 
-def mk_model(fallback=K, lane_nan_idx=None):
-  xs = [2.0 * i for i in range(N_PTS)]
+def mk_model(fallback=K, lane_nan_idx=None, k_lane=None):
+  """Parabolic path of curvature K (lane lines follow k_lane if given, else the path)."""
+  xs = list(XS)
   ys = [0.5 * K * x * x for x in xs]
-  yl = [-1.8 + y for y in ys]
-  yr = [1.8 + y for y in ys]
+  kl = K if k_lane is None else k_lane
+  yls = [0.5 * kl * x * x for x in xs]
+  yl = [-1.8 + y for y in yls]
+  yr = [1.8 + y for y in yls]
   if lane_nan_idx is not None:
     yl[lane_nan_idx] = float('nan')
   ln = lambda Y: types.SimpleNamespace(x=list(xs), y=Y)  # noqa: E731
@@ -274,3 +283,43 @@ class TestLaneDropoutLatch:
     for _ in range(4):                                          # 4 x (0.4 s above HI, 1 frame in band): never 0.5 s continuous
       run(s, 40, mk_model_dropout(k_plan=K, lane_prob=0.5)); run(s, 1, mk_model_dropout(k_plan=K, lane_prob=0.25))
     assert s.lane_dropout
+
+
+class TestFixtureHorizonAndEntryAssist:
+  """The fixture must reach past the 50 m klane sample, and 7c must fire at real magnitude on it."""
+
+  def test_fixture_lane_curvature_matches_K(self):
+    s = mk_controls()
+    mf = cd.Controls._model_frame(s, mk_model())
+    assert XS[-1] >= 72.0
+    assert mf.klane_raw == pytest.approx(K, rel=0.05)
+
+  @staticmethod
+  def _rising_entry(v, cap):
+    """Settle on the lane geometry, then 5 frames of a rising plan short of the lane; returns the last command."""
+    saved = cd.ENTRY_ASSIST_CAP
+    cd.ENTRY_ASSIST_CAP = cap
+    try:
+      s = mk_controls(); s.sm['carState'].vEgo = v
+      k_lane = 0.0064
+      run(s, 200, mk_model(fallback=0.001, k_lane=k_lane))
+      out = None
+      for k_plan in (0.0040, 0.0041, 0.0042, 0.0043, 0.0044):
+        out = run(s, 1, mk_model(fallback=k_plan, k_lane=k_lane))[0]
+      if cap > 0.0:   # the klane EMA only runs while the assist is enabled
+        assert s._klane_lp == pytest.approx(k_lane, rel=0.05)
+      return out
+    finally:
+      cd.ENTRY_ASSIST_CAP = saved
+
+  def test_entry_assist_fires_at_realistic_magnitude(self):
+    # lane geometry 1.6x the plan, plan rising at 9 m/s: the assist (<= min(shortfall, 1e-3, 0.5*plan)) must
+    # show up in the command versus the same run with the assist disabled (the 6h-1 LP lags the plan, so
+    # compare assisted vs unassisted rather than against the raw plan)
+    assisted = self._rising_entry(9.0, 1e-3)
+    plain = self._rising_entry(9.0, 0.0)
+    assert assisted - plain > 2e-4
+
+  def test_entry_assist_off_below_min_speed(self):
+    v = cd.ENTRY_ASSIST_MIN_SPEED - 0.5
+    assert self._rising_entry(v, 1e-3) == self._rising_entry(v, 0.0)
