@@ -184,7 +184,7 @@ class LatControlAngle(LatControl):
             or abs(self._fb_err_lp) > LAT_FB_ERR_MAX or abs(fb_err) > LAT_FB_ERR_MAX_HARD):
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_FROZEN, 0.0)
       else:
-        cap = min(LAT_FB_CAP, LAT_FB_ACCEL_CAP / max(CS.vEgo, 5.0) ** 2)
+        cap = min(LAT_FB_CAP, LAT_FB_ACCEL_CAP / max(CS.vEgo, LAT_FB_MIN_SPEED, 1.0) ** 2)  # branch runs at vEgo >= MIN_SPEED; 1.0 = unconditional /0 guard
         rising = abs(desired_curvature) > self._des_slow * 1.02
         ki = LAT_FB_KI * (LAT_FB_ENTRY_BOOST if rising else 1.0)
         # 7a-6: deadband on the error, slow leak on the state (see constants)
