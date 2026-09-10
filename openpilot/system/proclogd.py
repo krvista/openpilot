@@ -129,9 +129,17 @@ _smaps_path: str | None = None  # auto-detected on first call
 
 # per-VMA smaps is expensive (kernel walks page tables for every VMA).
 # cache results and only refresh every N cycles to keep CPU low.
+# i6n: refreshing every process in the same cycle made a 40 s-periodic burst (~1.1 s CPU for 46
+# processes, 59 % of a core over the 2 s window; every core-2 >=95 % sample on route 0000000c sat
+# within 2 s of one). Each pid now gets a round-robin slot on first sight and is refreshed only in
+# that slot, so the same 40 s freshness costs at most ceil(N / _SMAPS_EVERY) smaps reads per cycle
+# (3 for N = 46) instead of all N at once. Slots are assigned round-robin rather than pid % N so a
+# fork burst with an even pid stride cannot pile onto a few slots.
 _smaps_cache: dict[int, SmapsData] = {}
+_smaps_slot: dict[int, int] = {}
+_smaps_next_slot = 0
 _smaps_cycle = 0
-_SMAPS_EVERY = 20  # refresh every 20th cycle (40s at 0.5Hz)
+_SMAPS_EVERY = 20  # each pid refreshed every 20th cycle (40s at 0.5Hz), staggered by slot
 
 
 def _read_smaps(pid: int) -> SmapsData:
@@ -157,11 +165,30 @@ def _read_smaps(pid: int) -> SmapsData:
     return {'pss': 0, 'pss_anon': 0, 'pss_shmem': 0}
 
 
+def _smaps_due(pid: int, cycle: int) -> bool:
+  global _smaps_next_slot
+  slot = _smaps_slot.get(pid)
+  if slot is None:
+    slot = _smaps_slot[pid] = _smaps_next_slot
+    _smaps_next_slot = (_smaps_next_slot + 1) % _SMAPS_EVERY
+  return slot == cycle
+
+
 def _get_smaps_cached(pid: int) -> SmapsData:
-  """Return cached smaps data, refreshing every _SMAPS_EVERY cycles."""
-  if _smaps_cycle == 0 or pid not in _smaps_cache:
+  """Return cached smaps data; each pid is refreshed once per _SMAPS_EVERY cycles, in its own slot."""
+  due = _smaps_due(pid, _smaps_cycle)   # also assigns the slot on first sight
+  if pid not in _smaps_cache or due:
     _smaps_cache[pid] = _read_smaps(pid)
-  return _smaps_cache.get(pid, {'pss': 0, 'pss_anon': 0, 'pss_shmem': 0})
+  return _smaps_cache[pid]
+
+
+def _advance_smaps_cycle(live_pids: set[int]) -> None:
+  """End of a sweep: step the slot counter and drop cache entries of processes that are gone."""
+  global _smaps_cycle
+  _smaps_cycle = (_smaps_cycle + 1) % _SMAPS_EVERY
+  for cache in (_smaps_cache, _smaps_slot):
+    for pid in [k for k in cache if k not in live_pids]:
+      del cache[pid]
 
 
 class ProcExtra(TypedDict):
@@ -272,8 +299,7 @@ def build_proc_log_message(msg) -> None:
   pl.mem.inactive = mem_info["Inactive:"]
   pl.mem.shared = mem_info["Shmem:"]
 
-  global _smaps_cycle
-  _smaps_cycle = (_smaps_cycle + 1) % _SMAPS_EVERY
+  _advance_smaps_cycle({r['pid'] for r in procs})
 
 
 def main() -> NoReturn:
