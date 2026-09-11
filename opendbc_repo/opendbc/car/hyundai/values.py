@@ -540,8 +540,16 @@ class CarControllerParams:
   # rate_dn ~0.005/frame at 60-70 Nm, not by the slope.
   # Speed table keeps the city value (30) below 40 km/h. Rain: 30 at all
   # speeds (field decision: 30, not 20). Kill: GRIP_START_V = [30, 30].
+  # Phase 39b (i6nv3 routes e/f, 09-11): the city value 30 -> 60 Nm. At 30-45 km/h
+  # 71-75 % of the hands-off frames with |cmd-wheel| > 3 deg carried >= 100 Nm on the
+  # column (a hand below the 350 Nm pressed line) and 45-54 % had the sent gain < 0.5:
+  # the wheel was not "ignored by the EPS", op had yielded to a resting hand from 30 Nm
+  # up. 60 keeps ~full authority under a 50-100 Nm hand (8-12 % of those frames); the
+  # 100 Nm+ hold still yields on the same slope to ho_full 140, and driver_pressed
+  # (230 driver-domain) still yields fully. >= 60 km/h unchanged (50). Rain still pins
+  # to ACIGAIN_GRIP_START_RAIN_NM. Kill: GRIP_START_V = [30.0, 50.0] (= 37c).
   ACIGAIN_GRIP_START_SPEEDS_KPH  = [40.0, 60.0]
-  ACIGAIN_GRIP_START_V           = [30.0, 50.0]
+  ACIGAIN_GRIP_START_V           = [60.0, 50.0]
   ACIGAIN_GRIP_START_RAIN_NM     = 30.0
   # Rain mode input: front-wiper switch state from ECAN 0x35c byte 18 bit 0
   # (CCNC_WIPER.FRONT_WIPER_ON). 2026-09-01 rain routes (0x58/0x59): bit held
@@ -570,6 +578,20 @@ class CarControllerParams:
   ANCHORED_RECOVERY_FRAMES     = 150   # 1.5 s
   ANCHORED_RECOVERY_SPEED_KPH  = 40.0
   ANCHORED_RECOVERY_RATE_UP    = 0.012
+  # Phase 39a (i6nv3 routes e/f, 09-11): city-speed post-release recovery. At 30-45 km/h
+  # 61-71 % of the driver grabs came within 3 s of the previous release (median gap
+  # 1.4-2.5 s): after a release the sent gain sat at p50 0.28-0.41 for 0-2 s and 0.75 at
+  # 2-3 s (|cmd-wheel| > 3 deg on 52-63 % / 29-45 % of those frames) because the post-grip
+  # regime recovers beyond 2 deg at the reference 0.004/frame (2.5 s) with the boost held
+  # off, so the wheel did not follow and the driver grabbed again. Below
+  # CITY_RELEASE_SPEED_KPH, with the driver-domain torque under CITY_RELEASE_HANDS_OFF_NM
+  # (hands really off) and no real grip, the post-grip tail beyond 2 deg recovers at
+  # CITY_RELEASE_RATE_UP (0.8 s) instead. Phase 29's stale-command slam was a >= 60 km/h
+  # finding; at city speed delivery is bounded by the VM angle-rate limits (2.5-5 deg/
+  # frame), and the 0.25 s boost hold-off is unchanged. Kill: CITY_RELEASE_SPEED_KPH = 0.
+  CITY_RELEASE_SPEED_KPH       = 45.0
+  CITY_RELEASE_HANDS_OFF_NM    = 30.0   # driver-domain
+  CITY_RELEASE_RATE_UP         = 0.012  # per frame, post-grip tail beyond 2 deg (was 0.004)
   # Phase 31: hold-torque model refit. The Phase 22 linear fit
   # (0.8*(122 + 132*lat_acc), cap 240) had no speed term and a slope the
   # binned corpus contradicts — settling measurement (1.1M hands-off

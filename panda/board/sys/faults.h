@@ -19,6 +19,9 @@ void fault_occurred(uint32_t fault) {
 void fault_recovered(uint32_t fault) {
   if ((PERMANENT_FAULTS & fault) == 0U) {
     faults &= ~fault;
+    if (faults == 0U) {
+      fault_status = FAULT_STATUS_NONE;
+    }
   } else {
     print("Cannot recover from a permanent fault!\n");
   }

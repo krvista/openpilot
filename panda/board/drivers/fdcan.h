@@ -67,6 +67,18 @@ void update_can_health_pkt(uint8_t can_number, uint32_t ir_reg) {
     // Clear error interrupts
     FDCANx->IR |= (FDCAN_IR_PED | FDCAN_IR_PEA | FDCAN_IR_EP | FDCAN_IR_BO | FDCAN_IR_RF0L);
     can_health[can_number].total_error_cnt += 1U;
+    // Protocol-error interrupt storm guard: a bus the core cannot decode (e.g. bus 1 while
+    // multiplexed to the OBD-II port during the boot-time FW query on the Ioniq 6 N: REC pinned
+    // at 127, ~18k stuff/form errors per second, no frames) fires PED/PEA faster than the CAN
+    // interrupt rate limit. Once this IRQ has fired more than CAN_ERROR_IRQ_STORM_LIMIT times in
+    // the current second, mask the two protocol-error interrupts until the next llcan_init (every
+    // mode switch / speed change re-enables them). Bus-off, error-passive and RX-lost interrupts
+    // stay enabled, frames keep flowing, only the per-error bookkeeping stops.
+    if (((ir_reg & (FDCAN_IR_PED | FDCAN_IR_PEA)) != 0U) &&
+        (interrupts[can_irq_number[can_number][0]].call_counter > CAN_ERROR_IRQ_STORM_LIMIT)) {
+      FDCANx->IE &= ~(FDCAN_IE_PEDE | FDCAN_IE_PEAE);
+      print(CAN_NAME_FROM_CANIF(FDCANx)); print(" protocol-error IRQ storm, PED/PEA masked until re-init\n");
+    }
     // Check for RX FIFO overflow
     if ((ir_reg & (FDCAN_IR_RF0L)) != 0U) {
       can_health[can_number].total_rx_lost_cnt += 1U;

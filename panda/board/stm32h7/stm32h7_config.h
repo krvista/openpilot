@@ -24,6 +24,9 @@ separate IRQs for RX and TX.
 1 / ((29 bits / 0.5Mbps) + (23 bits / 2Mbps)) = 14388Hz
 */
 #define CAN_INTERRUPT_RATE 16000U
+// Protocol-error IRQs per second on one FDCAN IT0 line above which PED/PEA are masked until the
+// next llcan_init (see update_can_health_pkt). Half the rate-fault limit: the guard trips first.
+#define CAN_ERROR_IRQ_STORM_LIMIT 8000U
 
 #define MAX_LED_FADE 10240U
 

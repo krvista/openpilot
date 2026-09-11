@@ -47,15 +47,27 @@ void handle_interrupt(IRQn_Type irq_type){
 // Every second
 void interrupt_timer_handler(void) {
   if (INTERRUPT_TIMER->SR != 0U) {
+    uint32_t over_rate_faults = 0U;
+    uint32_t registered_faults = 0U;
     for (uint16_t i = 0U; i < NUM_INTERRUPTS; i++) {
       // Log IRQ call rate faults
       if (check_interrupt_rate && (interrupts[i].call_counter > interrupts[i].max_call_rate)) {
         print("Interrupt 0x"); puth(i); print(" fired too often (0x"); puth(interrupts[i].call_counter); print("/s)!\n");
+        over_rate_faults |= interrupts[i].call_rate_fault;
       }
+      registered_faults |= interrupts[i].call_rate_fault;
 
       // Reset interrupt counters
       interrupts[i].call_rate = interrupts[i].call_counter;
       interrupts[i].call_counter = 0U;
+    }
+
+    // IRQ rate faults are temporary by definition (PERMANENT_FAULTS excludes them): clear the
+    // ones whose every IRQ stayed under its limit this second, so a one-off burst (e.g. the
+    // FDCAN error-interrupt storm while bus 1 is multiplexed to the OBD-II port during the
+    // boot-time FW query) does not stay latched for the whole drive.
+    if (check_interrupt_rate) {
+      fault_recovered(registered_faults & ~over_rate_faults);
     }
 
     // Calculate interrupt load
