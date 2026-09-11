@@ -164,7 +164,7 @@ def run_signal(sim, n, tq_fn=None, **fixed):
   """Step n frames; tq_fn(i)->Nm. Returns dict of traces."""
   traces = {k: [] for k in ('low_speed_cam_latched', 'low_speed_scen_ok', 'in_low_speed_zone',
                             'angle_passive_active', 'blinker_anchor_on', 'parking_mode_active',
-                            'traffic_following', 'eff_active', 'apply', 'trim', 'gain')}
+                            'traffic_following', 'eff_active', 'apply', 'trim', 'gain', 'kick')}
   for i in range(n):
     kw = dict(fixed)
     if tq_fn is not None:
@@ -185,4 +185,5 @@ def run_signal(sim, n, tq_fn=None, **fixed):
     traces['apply'].append(s.apply_angle_last)
     traces['trim'].append(s.curve_trim)
     traces['gain'].append(s.aci_gain_last)
+    traces['kick'].append(getattr(s, 'stall_kick_deg', 0.0))
   return traces

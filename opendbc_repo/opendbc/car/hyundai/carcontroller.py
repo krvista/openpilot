@@ -516,6 +516,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
     # re-arm edge for the release re-anchor / boost hold-off.
     self.reanchor_arm = 0
+    # Phase 40: stall kick state (see values.py STALL_KICK_*)
+    self.kick_off = 0.0           # current offset magnitude (deg)
+    self.kick_up_left = 0         # frames left in the fast step
+    self.kick_sign = 0.0
+    self.kick_count = 0           # steps used in the current stall episode
+    self.kick_since_start = 10 ** 6  # frames since the last step started
+    self.kick_idle_frames = 0     # frames since the stall condition last held
+    self.kick_wheel_hist = []     # last STALL_KICK_QUIET_FRAMES measured angles
+    self.kick_req_hist = []       # last STALL_KICK_QUIET_FRAMES sent angles
+    self.stall_kick_deg = 0.0     # offset applied this frame (for logging/tests)
     # Phase 35b: frames since apply was last pinned to the wheel
     self.frames_since_apply_anchor = 10**6
     # Phase 36: asymmetric EMA (rise 0.15 s / fall 0.5 s) of |commanded angle|
@@ -569,6 +579,59 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_exit_frames = 0
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
+
+  def _stall_kick(self, wheel: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool) -> float:
+    """Phase 40: request offset (deg) for this frame. Fast step away from a stuck wheel, slow decay back
+    (the CCNC MDPS follows request RATE, not error — values.py STALL_KICK_*)."""
+    P = CarControllerParams
+    n = P.STALL_KICK_QUIET_FRAMES
+    self.kick_wheel_hist.append(float(wheel))
+    self.kick_req_hist.append(float(self.apply_angle_last))
+    if len(self.kick_wheel_hist) > n:
+      self.kick_wheel_hist.pop(0)
+      self.kick_req_hist.pop(0)
+    amp = P.STALL_KICK_AMPLITUDE_DEG
+    if amp <= 0.0 or not lat_active:
+      self.kick_off = 0.0
+      self.kick_up_left = 0
+      self.kick_count = 0
+      self.kick_since_start = 10 ** 6
+      self.stall_kick_deg = 0.0
+      return 0.0
+    gap = self.apply_angle_last - wheel
+    v_kph = v_ego * CV.MS_TO_KPH
+    full = len(self.kick_wheel_hist) >= n
+    wheel_moved = (max(self.kick_wheel_hist) - min(self.kick_wheel_hist)) if full else 0.0
+    req_moved = (max(self.kick_req_hist) - min(self.kick_req_hist)) if full else 0.0
+    stall = (full and driver_tq < P.STALL_KICK_HANDS_OFF_NM and self.aci_gain_last >= P.STALL_KICK_MIN_GAIN
+             and not blinker_on and P.STALL_KICK_SPEEDS_KPH[0] <= v_kph < P.STALL_KICK_SPEEDS_KPH[1]
+             and abs(gap) > P.STALL_KICK_GAP_DEG and wheel_moved < P.STALL_KICK_WHEEL_STILL_DEG
+             and req_moved < P.STALL_KICK_REQ_STILL_DEG and self.vm_reject_consecutive_frames == 0)
+    abort = (driver_tq >= P.STALL_KICK_ABORT_NM or blinker_on or self.vm_reject_consecutive_frames > 0)
+    # episode bookkeeping: the step budget comes back after 1 s without the stall condition
+    if stall:
+      self.kick_idle_frames = 0
+    else:
+      self.kick_idle_frames += 1
+      if self.kick_idle_frames >= P.STALL_KICK_EPISODE_RESET_FRAMES:
+        self.kick_count = 0
+    self.kick_since_start += 1
+    if abort:
+      self.kick_up_left = 0
+    elif (stall and self.kick_up_left == 0 and self.kick_count < P.STALL_KICK_MAX_PULSES
+          and self.kick_off <= P.STALL_KICK_RETRIGGER_DEG and self.kick_since_start >= P.STALL_KICK_MIN_GAP_FRAMES):
+      self.kick_up_left = P.STALL_KICK_UP_FRAMES
+      self.kick_sign = 1.0 if gap > 0 else -1.0
+      self.kick_count += 1
+      self.kick_since_start = 0
+    if self.kick_up_left > 0:
+      self.kick_off += amp / P.STALL_KICK_UP_FRAMES
+      self.kick_up_left -= 1
+    else:
+      down = P.STALL_KICK_ABORT_DOWN_FRAMES if abort else P.STALL_KICK_DOWN_FRAMES
+      self.kick_off = max(0.0, self.kick_off - amp / down)
+    self.stall_kick_deg = self.kick_sign * self.kick_off
+    return self.stall_kick_deg
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -1376,6 +1439,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       if abs(v_ego_safe) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_safe, desired_angle, self.apply_angle_last)
+
+      # Phase 40: stall kick — a short request pulse away from a stuck wheel (values.py STALL_KICK_*).
+      # Added after the smoothing so it reaches TX in full; the VM/panda rate limits below still bound it.
+      desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive))
 
       # Phase 9 (yield-by-authority): op keeps its own clean commanded angle — the
       # driver yield is done entirely on the ACIGain authority axis below, so the
