@@ -1,3 +1,14 @@
+i6nv3 (Ioniq 6 N, CCNC 각도 제어) — 2026-09-11, sunnypilot hkg-angle-steering-2025 (cfb38312, 2026.003.000) 기반 rebase
+========================
+* 기반: i6n 포트 + Phase 1–34 스택 3-way 이식, opendbc/panda 트리 내 벤더링, 패널 안전 스위트 1907/1907 순정 동일, phase_tests 294건
+* 조향(CCNC 각도): Phase 35 고속 파지 즉각 양보·앵커 회복 가속, 36 저속 커브 hands-off 천장, 37a 고속 회복 완만화·와이퍼 강우 모드, 37b 사각지대 보호 3계층, 37c 양보 시작 속도 테이블, 38 송신각 거버너·비활성 프레임 실측각·거부 에코 재정렬, 39 차선 드롭아웃 래치·경고
+* latcontrol 7a 곡률 트림: 7a-6 데드밴드·누설(Params LatFbTrim7a6), 7a-7 30 km/h 미만 통과(저속 EPS 데드밴드에 감기지 않게), 7c 진입 보조 하한 정렬
+* Phase 39a/39b: 45 km/h 이하 놓은 뒤 권한 회복 0.004→0.012/프레임, 40 km/h 이하 얹은 손 양보 시작 30→60 Nm (실차: 놓은 뒤 갭>3° 68→36 %, 잡기 절반)
+* Phase 40: MDPS 가 요청 속도만 따르는 특성에 맞춘 정지 킥 — 1.5° 를 0.1 s 스텝 뒤 1 °/s 복귀, 에피소드당 4회 (Kill: STALL_KICK_AMPLITUDE_DEG=0)
+* panda: MADS 측면 허용이 하트비트로만 회수됐을 때 op 준비 뒤 재요청(부팅 "Controls Mismatch: Lateral" 제거), IRQ 속도 폴트 자동 해제, FDCAN 오류 IRQ 폭주 가드
+* 부팅·성능: QuickBootAuto(푸시 후 첫 부팅만 scons), CarParamsCache VIN 없이 사용 + CarParamsPersistent 폴백(FW 조회 8 s·OBD 창 생략), controlsd 모델 프레임 캐시 −30 %, card 스칼라 경로 −40 %, selfdrived/proclogd 코어 배치, proclogd 커널 스레드 제외·PSS 분산, comma 4 UI 30 fps·IRQ 코어 배치
+* 도구: tools/i6nv3_bench(리플레이 관문, A/B, 추종 오차, 실차 프로브), phase_tests, ROUTE8_REPORT §1–15
+
 sunnypilot Version 2026.002.000 (2026-06-28)
 ========================
 * What's Changed (sunnypilot/sunnypilot)
