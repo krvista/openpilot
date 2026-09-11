@@ -27,6 +27,13 @@ def stat(mask, tag):
     b=a[mask]
     if len(b)<200: return
     print(f"   {tag:34s} n={len(b):6d} | realized centre y0: mean {b[:,5].mean():+.3f} med {np.median(b[:,5]):+.3f} | intended (path15 - centre15): mean {(b[:,9]-b[:,7]).mean():+.3f} med {np.median(b[:,9]-b[:,7]):+.3f} | width {np.median(b[:,6]):.2f}")
+err=a[:,5]+(a[:,9]-a[:,7])   # realized centre at x=0 + intended (path15-centre15): ~0 when the car sits where the model meant
+def terr(mask, tag):
+    b=err[mask]
+    if len(b)<200: return
+    print(f"   TRACKING ERROR {tag:22s} n={len(b):6d} | |err| median {np.median(np.abs(b)):.3f} p90 {np.percentile(np.abs(b),90):.3f} m | signed mean {b.mean():+.3f}")
+terr(ok,"all"); terr(ok&(np.abs(a[:,10])<0.3),"straight"); terr(ok&(np.abs(a[:,10])>=0.5),"curves")
+for lo,hi in ((30,45),(45,60),(60,130)): terr(ok&(a[:,0]>=lo)&(a[:,0]<hi), f"{lo}-{hi} km/h")
 stat(ok,"all")
 stat(ok&(np.abs(a[:,10])<0.3),"straight |kD|<0.3e-3")
 stat(ok&(a[:,10]>0.5),"right-ish curve kD>0.5")
