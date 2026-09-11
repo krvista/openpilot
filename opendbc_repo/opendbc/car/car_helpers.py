@@ -83,6 +83,9 @@ def can_fingerprint(can_recv: CanRecvCallable) -> tuple[str | None, dict[int, di
 
 
 # **** for use live only ****
+FW_CACHE_WITHOUT_VIN = True  # see fingerprint(): accept CarParamsCache on its FW list when the VIN is unknown
+
+
 def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback,
                 cached_params: CarParamsT | None,
                 fixed_fingerprint: str | None) -> tuple[str | None, dict, str, list[CarParams.CarFw], CarParams.FingerprintSource, bool]:
@@ -93,9 +96,19 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
 
   start_time = time.monotonic()
   if not skip_fw_query:
+    # i6nv3 (Ioniq 6 N, CCNC): the VIN query never succeeds on this car (carVin stays
+    # 00000000000000000, "vin query retry" every boot), so the upstream VIN condition kept
+    # the cache from ever being used and every boot ran the full FW query (~8 s of the
+    # 23 s boot) with two OBD-multiplexing windows (bus 1 on the OBD-II port: FDCAN2
+    # error-interrupt storm, interruptRateCan2 fault). With FW_CACHE_WITHOUT_VIN the
+    # cache is accepted on its FW list alone (9 ECU entries, rewritten from the live
+    # CarParams every boot). The cache is single-car state: clear CarParamsCache when the
+    # device moves to another car. Kill: FW_CACHE_WITHOUT_VIN = False (upstream rule).
+    vin_ok = cached_params is not None and \
+      (cached_params.carVin != VIN_UNKNOWN or os.environ.get("REPLAY") or FW_CACHE_WITHOUT_VIN)
     if cached_params is not None and cached_params.brand != "mock" and len(cached_params.carFw) > 0 and \
-       (cached_params.carVin != VIN_UNKNOWN or os.environ.get("REPLAY")) and not disable_fw_cache:
-      carlog.warning("Using cached CarParams")
+       vin_ok and not disable_fw_cache:
+      carlog.warning("Using cached CarParams" + (" (no VIN)" if cached_params.carVin == VIN_UNKNOWN else ""))
       vin_rx_addr, vin_rx_bus, vin = -1, -1, cached_params.carVin
       car_fw = list(cached_params.carFw)
       cached = True

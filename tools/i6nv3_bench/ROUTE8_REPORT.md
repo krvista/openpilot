@@ -236,3 +236,9 @@ phase_tests 279 passed (신규 test_phase39.py 9건 포함). ruff: 신규 파일
 **폴트의 진짜 원인 (§10 정정).** 통신 리셋(0xc0)은 버퍼만 비우고 CAN 코어를 건드리지 않는다. 코어 재초기화는 `set_safety_mode` 끝의 `can_init_all` 이고, 부팅 시 card 의 FW 조회가 elm327 안전모드의 param 을 0↔1 로 네 번 토글(OBD 멀티플렉싱 on/off)하면서 일어난다. param 0 = **버스 1 트랜시버를 OBD-II 포트로 전환**: 그 동안 FDCAN2 는 해독 못 하는 버스를 듣고(REC 127 고정, 프레임 0, stuff/form 오류 초당 ~18 k) IRQ 한도를 넘긴다. 두 창(4.3–6.5 s, 6.8–7.3 s) 모두 OBD 모드 구간과 정확히 일치. 버스 0/2 오류 0.
 
 **다음 제안 (미적용).** 이 차의 VIN 조회가 항상 실패해(carVin 0000…, "vin query retry" 오류) CarParamsCache 가 한 번도 쓰이지 않고(캐시 조건: carVin ≠ UNKNOWN) 매 부팅 전체 FW 조회(4.3 → 12.6 s, 8 s)와 OBD 창 두 개가 반복된다. 캐시 조건에서 VIN 요구를 완화하면(carFw 9개 일치로 충분) 부팅→준비 8 s 단축 + OBD 창 소멸.
+
+## 12. 적용: VIN 없이 CarParamsCache 사용
+
+`opendbc/car/car_helpers.py` fingerprint(): 캐시 조건 `carVin != UNKNOWN` 을 `FW_CACHE_WITHOUT_VIN`(True)로 완화. 캐시(brand ≠ mock, carFw 비어 있지 않음)가 있으면 VIN 조회·ECU 존재 조회·FW 조회를 모두 건너뛰고 `set_obd_multiplexing(False)` 한 번만 부른다 → OBD 창 0, 안전모드 재초기화 1회. 기대: 부팅→준비 약 8 s 단축(FW 조회 4.3 → 12.6 s 구간 소멸), interruptRateCan2 폭주 원인 소멸(§11 가드와 이중). 캐시는 매 부팅 실 CarParams 로 다시 쓰이므로 단일 차량 상태 — 장치를 다른 차로 옮길 때 CarParamsCache 를 지울 것. Kill: FW_CACHE_WITHOUT_VIN = False.
+
+검증: phase_tests/test_fw_cache_without_vin.py 4건(VIN 없는 캐시 → 조회 0회·OBD [False]; 킬 → 전체 조회 복원; VIN 있는 캐시 동작 동일; 빈 캐시는 여전히 조회). 실차 확인: seg 0 로그의 "Using cached CarParams (no VIN)", 로거 시작 시각, 안전모드 elm327 → hyundaiCanfd 전환 시각, pandaStates faults.
