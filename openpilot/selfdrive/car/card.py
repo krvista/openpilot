@@ -62,6 +62,20 @@ def can_comm_callbacks(logcan: messaging.SubSocket, sendcan: messaging.PubSocket
   return can_recv, can_send
 
 
+def load_cached_params_raw(params) -> bytes | None:
+  """CarParams to seed fingerprinting from (see opendbc car_helpers.fingerprint).
+  CarParamsCache is CLEAR_ON_MANAGER_START, so at boot it is always empty and upstream's
+  cache only ever serves a card restart within one power cycle. i6nv3 (route 00000013,
+  first boot with FW_CACHE_WITHOUT_VIN): the full FW query still ran because of that.
+  Fall back to CarParamsPersistent, which card rewrites from the live CarParams every
+  drive, so the boot-time query (and its OBD-multiplexing windows) is skipped from the
+  second boot on. Kill: return params.get("CarParamsCache")."""
+  raw = params.get("CarParamsCache")
+  if raw is None:
+    raw = params.get("CarParamsPersistent")
+  return raw
+
+
 class Car:
   CI: CarInterfaceBase
   RI: RadarInterfaceBase
@@ -101,7 +115,7 @@ class Car:
       alpha_long_allowed = self.params.get_bool("AlphaLongitudinalEnabled")
 
       cached_params = None
-      cached_params_raw = self.params.get("CarParamsCache")
+      cached_params_raw = load_cached_params_raw(self.params)
       if cached_params_raw is not None:
         with car.CarParams.from_bytes(cached_params_raw) as _cached_params:
           cached_params = _cached_params

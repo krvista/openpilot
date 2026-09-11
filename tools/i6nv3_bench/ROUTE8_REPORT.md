@@ -242,3 +242,26 @@ phase_tests 279 passed (신규 test_phase39.py 9건 포함). ruff: 신규 파일
 `opendbc/car/car_helpers.py` fingerprint(): 캐시 조건 `carVin != UNKNOWN` 을 `FW_CACHE_WITHOUT_VIN`(True)로 완화. 캐시(brand ≠ mock, carFw 비어 있지 않음)가 있으면 VIN 조회·ECU 존재 조회·FW 조회를 모두 건너뛰고 `set_obd_multiplexing(False)` 한 번만 부른다 → OBD 창 0, 안전모드 재초기화 1회. 기대: 부팅→준비 약 8 s 단축(FW 조회 4.3 → 12.6 s 구간 소멸), interruptRateCan2 폭주 원인 소멸(§11 가드와 이중). 캐시는 매 부팅 실 CarParams 로 다시 쓰이므로 단일 차량 상태 — 장치를 다른 차로 옮길 때 CarParamsCache 를 지울 것. Kill: FW_CACHE_WITHOUT_VIN = False.
 
 검증: phase_tests/test_fw_cache_without_vin.py 4건(VIN 없는 캐시 → 조회 0회·OBD [False]; 킬 → 전체 조회 복원; VIN 있는 캐시 동작 동일; 빈 캐시는 여전히 조회). 실차 확인: seg 0 로그의 "Using cached CarParams (no VIN)", 로거 시작 시각, 안전모드 elm327 → hyundaiCanfd 전환 시각, pandaStates faults.
+
+## 13. 라우트 00000013 (09-12 01:23 심야 시내·간선, 33 seg, 빌드 415e4fd7 = 39a/39b + panda 가드 + FW_CACHE_WITHOUT_VIN)
+
+| 체크포인트 | 결과 |
+|---|---|
+| 부팅 | 로거 29.9 s / 준비 48.3 s — 푸시 후 첫 부팅(패널 플래시 포함). **FW 조회는 여전히 실행**("Getting VIN & FW versions" 6.6 s → "Finished" 12.0 s, OBD 창 두 개): CarParamsCache 가 CLEAR_ON_MANAGER_START 라 부팅 시 항상 비어 있어 §12 조건 완화가 닿지 않았다 → card.py 에서 CarParamsPersistent 로 폴백(아래) |
+| panda | 33 seg 모두 faults [] / faultStatus none. 부팅 seg 0 bus 1 irq/s 최대 **8001** = 폭주 가드가 8000 에서 정확히 마스크(§11) |
+| 코어 | 코어 0 p99 71, 코어 2 p99 87(풀 데몬), proclogd 최대 14 % |
+| 지연 | 2.1 / 1.6 / 7.1 ms, 에코 p99 19.0 ms |
+| 39a/39b (30–45 km/h, e 대비) | 놓은 뒤 0–2 s: 갭>3° **36 %** (e 68 %), 이득 p50 0.51 (0.54); 2–3 s: 17 % (33 %), 이득 1.00 (0.90). 잡기 16 회 (e 31, 같은 프레임 수 19.5k vs 19.9k). 3 s 이내 재파지 56 % (58 %) — 잡기 자체가 절반. 50–100 Nm 손 프레임 이득 p50 1.00 (39b). 잡기 직전 갭 중앙 1.5° (e 3.9°), 명령 방향으로 민 비율 62 % (e 33 %) |
+| 진짜 손 뗀 프레임 (<50 Nm, press 3 s 후) | 30–45 km/h 손 뗀 시간의 72 % (e 31 %): 갭>3° 22 % (e 32 %), 이득 1.00 |
+| 잔여 "순수 EPS 지연" | 30–45 km/h 갭>3° 프레임의 37 % = 손 뗀 시간의 9.5 % = **18 s / 주행**(≥0.5 s 런 12개, 12 s; e 6개, 6 s). 런: \|갭\| 4.1°(p90 5.3), 명령 5.6°, kDes ~1.0e-3(완만한 커브), 핸들 이동 0.35°, EPS 토크 0–5, 트림 상한(1.0e-3) 고정, 100 % 미달 방향. 예: seg 13 860 s, 44 km/h, cmd +5.0 vs wheel +1.0, 이득 1.00 으로 2.0 s 정지 → 명령이 3.4° 로 내려온 뒤에야 핸들이 움직임 |
+| 추종 오차 | 직선 0.027 / p90 0.086 m (주간 0.019–0.022 / 0.055), 커브 0.061 / 0.176 (0.043–0.056 / 0.13–0.15), 30–45 0.041 / 0.128. 부호 평균 −0.008 |
+| 야간 차선 | min(좌,우) 확률 p50 0.86 (e 0.93), 둘 다 >0.8 58 % (66 %), <0.3 11 % (13 %), 차선 std 0.10 (0.08), 경로 yStd 동일 — 야간이라 크게 나빠지진 않음 |
+| 이벤트 | laneDropout 6 런 (seg 16–26 반포·남산 간선), commIssue 7 / posenetInvalid 6 / locationdTemporaryError 8 은 전부 seg 0 부팅. 에코 거부 부팅 외 1 |
+
+**적용.** card.py `load_cached_params_raw`: CarParamsCache 가 비어 있으면 CarParamsPersistent(매 주행 실 CarParams 로 갱신, PERSISTENT)를 캐시로 사용 → 두 번째 부팅부터 FW 조회·OBD 창 생략. 테스트 3건. Kill: Cache 만 읽기.
+
+**수정보완 후보 (미적용).**
+1. Phase 40 후보 — EPS 온센터 데드밴드 킥: 손 뗀 상태(<50 Nm, press 3 s 후), 이득 ≥ 0.9, 명령 정지, \|갭\| > 3° 가 0.3 s 이상 지속되고 핸들 정지(\|rate\| < 2°/s)·EPS 토크 ≈ 0 이면 명령에 sign(갭) × 최대 2° 를 0.5 s 램프로 얹고, 핸들이 움직이기 시작(rate > 5°/s)하거나 갭 < 1.5° 면 0.3 s 로 회수. 효과 한도: 주행당 12–18 s 의 미추종. 리플레이로 검증 불가(MDPS 모델 없음) → 실차 A/B 필요. 위험: 킥 해제 순간 오버슈트(트림 상한 1.0e-3 + 킥 2°).
+2. 야간 커브 추종 오차 p90 0.176 m: 차선 신뢰도는 주간과 같으므로 모델 경로가 아니라 위 EPS 미추종·커브 미달(이득 1.0 에서도 kD 1e-3 커브에서 4° 부족)의 반영. 1 과 같은 항목.
+3. 코어 2 p99 87: 풀 데몬(코어 0–2) 몫, 기능 영향 없음, 보류.
+4. 72–126 km/h 갭>3° 36 %: 표본 10 s, 판단 보류.
