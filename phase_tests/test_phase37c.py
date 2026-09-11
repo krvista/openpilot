@@ -42,10 +42,18 @@ class TestPhase37cGripStart:
     tr = run_signal(sim, 300, v=20.0, wheel=0.0, cmd=0.0, tq=460.0)   # pressed grip: 35a floor path
     assert tr['gain'][-1] <= 0.08, tr['gain'][-1]
 
-  def test_city_unchanged_at_36kph(self):
+  def test_city_start_raised_by_39b_at_36kph(self):
+    # Phase 39b: the city start is 60 Nm now (was 30, the 37c value). A 40 Nm resting hand
+    # at 36 km/h keeps the full hands-off assist; the 37c kill table still yields to it.
     _, g = _resting(v=10.0, dtq=40.0)
     _, g_kill = _resting(v=10.0, dtq=40.0, kill=True)
-    assert abs(g - g_kill) <= 0.004 + 1e-9, (g, g_kill)
+    assert g > g_kill + 0.03, (g, g_kill)                # measured 0.66 vs 0.61 (40 Nm), 0.60 vs 0.48 (70 Nm)
+    _, g0 = _resting(v=10.0, dtq=0.0)
+    assert abs(g - g0) <= 0.004 + 1e-9, (g, g0)
+    # a firm 150 Nm hold at city speed yields the same way in both tables
+    _, gf = _resting(v=10.0, dtq=150.0)
+    _, gf_kill = _resting(v=10.0, dtq=150.0, kill=True)
+    assert gf <= gf_kill + 0.05 and gf <= 0.35, (gf, gf_kill)
 
   def test_ramp_is_monotone_between_40_and_60kph(self):
     gs = [_resting(v=v, dtq=40.0)[1] for v in (11.1, 12.5, 13.9, 15.3, 16.7)]

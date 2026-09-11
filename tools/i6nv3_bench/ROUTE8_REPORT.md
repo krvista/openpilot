@@ -221,3 +221,18 @@ CameraOffset 파라미터는 이 브랜치에서 UI 렌더러가 선을 그릴 �
 **개선 (펌웨어, 두 줄 수준).**
 1. `can_init_all` / 0xde(set can bitrate)에서 `canfd_enabled` 를 강제로 false 로 두지 말고 설정값에서 유도: `canfd_enabled = (can_data_speed >= can_speed)` (기본 20000 ≥ 5000 → FD). FD 코어는 클래식 프레임도 정상 수신하므로 클래식 전용 버스에 해가 없고, FD 버스에서는 클래식 창 자체가 사라져 폭주와 폴트가 없어진다. TX 는 `canfd_auto=false` 라 패킷의 fd 플래그를 그대로 따르므로 변화 없음.
 2. `interrupt_timer_handler` 에서 1 s 카운터가 한도 아래면 `fault_recovered(call_rate_fault)` — 일시 폴트를 이름대로 일시적으로. (선택) `update_can_health_pkt` 에서 초당 오류 N건 초과 시 PEDE/PEAE 인터럽트를 다음 can_init 까지 마스크해 폭주 자체를 끊음.
+
+## 11. 적용 (Phase 39a/39b + panda IRQ 폴트) — 테스트 결과
+
+| 항목 | 변경 | 검증 |
+|---|---|---|
+| 39a 놓은 뒤 회복 가속 | values.py CITY_RELEASE_SPEED_KPH 45 / HANDS_OFF_NM 30 / RATE_UP 0.012; carcontroller compute_torque_reduction_gain(city_release=) — post-grip 2° 초과 꼬리 0.004 → 0.012, 호출부 게이트 v ≤ 45 km/h ∧ driver_tq < 30 ∧ real_grip 아님. Kill: SPEED_KPH = 0 | 순수 함수: 0.19→0.60 도달 103 → 34 프레임(35 km/h, err 3.5°), 0.5–1.5° 구간·post-grip 외 경로 비트 동일. 전체 CarController 시뮬(35 km/h pressed 460 Nm → 놓음, 플랜 4° 이격): 이득 0.6 도달 프레임 on < 0.6 × kill |
+| 39b 얹은 손 양보 완화 | ACIGAIN_GRIP_START_V [30, 50] → [60, 50] (≤40 km/h 60 Nm, ≥60 km/h 50 그대로, 비 30 그대로). Kill: [30, 50] | 36 km/h 정상 이득(driver-domain): 40 Nm 0.61 → 0.66, 70 Nm 0.48 → 0.60, 100 Nm 0.34 → 0.40, 150 Nm 0.15 → 0.15(동일). test_phase37c 도시 검사는 39b 값으로 갱신 |
+| panda IRQ 속도 폴트 자동 해제 | interrupts.h 1 s 타이머: 그 초에 한도 아래였던 IRQ 의 폴트를 fault_recovered; faults.h: faults == 0 이면 fault_status = NONE | 펌웨어 빌드(panda_h7.bin.signed) 통과 |
+| panda 오류 IRQ 폭주 가드 | fdcan.h update_can_health_pkt: 같은 초에 IT0 가 CAN_ERROR_IRQ_STORM_LIMIT(8000) 넘긴 상태에서 PED/PEA 가 오면 두 인터럽트를 다음 llcan_init 까지 마스크(BO/EP/RF0L 유지, 프레임 수신 유지) | 빌드 통과; 실차: 부팅 seg 0 에서 faults 비어 있고 bus 1 irq/s 최대 < 16 k 확인 예정 |
+
+phase_tests 279 passed (신규 test_phase39.py 9건 포함). ruff: 신규 파일 클린, 기존 10건은 이전과 동일.
+
+**폴트의 진짜 원인 (§10 정정).** 통신 리셋(0xc0)은 버퍼만 비우고 CAN 코어를 건드리지 않는다. 코어 재초기화는 `set_safety_mode` 끝의 `can_init_all` 이고, 부팅 시 card 의 FW 조회가 elm327 안전모드의 param 을 0↔1 로 네 번 토글(OBD 멀티플렉싱 on/off)하면서 일어난다. param 0 = **버스 1 트랜시버를 OBD-II 포트로 전환**: 그 동안 FDCAN2 는 해독 못 하는 버스를 듣고(REC 127 고정, 프레임 0, stuff/form 오류 초당 ~18 k) IRQ 한도를 넘긴다. 두 창(4.3–6.5 s, 6.8–7.3 s) 모두 OBD 모드 구간과 정확히 일치. 버스 0/2 오류 0.
+
+**다음 제안 (미적용).** 이 차의 VIN 조회가 항상 실패해(carVin 0000…, "vin query retry" 오류) CarParamsCache 가 한 번도 쓰이지 않고(캐시 조건: carVin ≠ UNKNOWN) 매 부팅 전체 FW 조회(4.3 → 12.6 s, 8 s)와 OBD 창 두 개가 반복된다. 캐시 조건에서 VIN 요구를 완화하면(carFw 9개 일치로 충분) 부팅→준비 8 s 단축 + OBD 창 소멸.

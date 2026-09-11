@@ -134,7 +134,8 @@ def compute_hold_torque(v_ego, lat_acc):
 
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
-                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0, rate_up_cap=0.04):
+                                  post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0, rate_up_cap=0.04,
+                                  city_release=False):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -321,7 +322,15 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # one-shot) the >2 deg region is a fresh, VM-rate-limited chase of the
     # live plan, not a stale command — recover 3x faster there (see
     # values.py ANCHORED_RECOVERY_*; Hannam bridge handover case).
-    tail = CarControllerParams.ANCHORED_RECOVERY_RATE_UP if anchored_recovery else 0.004
+    # Phase 39a: at city speed with the hands really off (caller: v <= CITY_RELEASE_SPEED_KPH,
+    # driver_tq < CITY_RELEASE_HANDS_OFF_NM, no real grip) the tail recovers at CITY_RELEASE_RATE_UP
+    # so the wheel follows the plan within ~0.8 s of a release instead of 2.5 s (see values.py).
+    if anchored_recovery:
+      tail = CarControllerParams.ANCHORED_RECOVERY_RATE_UP
+    elif city_release:
+      tail = CarControllerParams.CITY_RELEASE_RATE_UP
+    else:
+      tail = 0.004
     rate_up = float(_interp(abs(steering_error), [0.5, 1.5, 2.0], [0.004, 0.04, tail]))
   else:
     rate_up = float(_interp(abs(steering_error), [0.5, 1.5], [0.004, 0.04]))
@@ -1732,6 +1741,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Phase 37c: yield-curve start by speed (resting hand keeps the assist at speed)
       grip_start_dry = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_START_SPEEDS_KPH,
                                        CarControllerParams.ACIGAIN_GRIP_START_V))
+      # Phase 39a: city-speed release recovery (see values.py CITY_RELEASE_*)
+      city_release = (v_kph_aci <= CarControllerParams.CITY_RELEASE_SPEED_KPH
+                      and driver_tq < CarControllerParams.CITY_RELEASE_HANDS_OFF_NM
+                      and not real_grip)
       effective_aci_gain = compute_torque_reduction_gain(
         driver_tq, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
@@ -1747,6 +1760,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         rate_up_cap=(rate_up_cap_dry + self.rain_w * (rate_up_cap_rain - rate_up_cap_dry)),
         grip_start=(grip_start_dry + self.rain_w * (CarControllerParams.ACIGAIN_GRIP_START_RAIN_NM - grip_start_dry)),
         anchored_recovery=anchored_recovery,         # Phase 35b
+        city_release=city_release,                   # Phase 39a
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
         # frame (the recovery transient) — G1 review: the full 2 s memory
         # suppressed 26.1% of hands-off drift-recovery frames, worse than
