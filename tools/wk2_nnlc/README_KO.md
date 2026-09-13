@@ -63,7 +63,7 @@ python3 collect_check.py <route>--0--qlog.zst <route>--1*--qlog.zst   # 세그�
    git clone https://github.com/amzoo/openpilot-nnlc-tools.git && cd openpilot-nnlc-tools
    git apply /path/to/tools/wk2_nnlc/nnlc-tools.patch && uv venv && uv pip install -e . && source .venv/bin/activate
    git clone --depth 1 --filter=blob:none --sparse -b wk2-fixes-release-mici https://github.com/krvista/openpilot.git ~/sp-cereal \
-     && git -C ~/sp-cereal sparse-checkout set cereal
+     && git -C ~/sp-cereal sparse-checkout set cereal opendbc_repo/opendbc/car   # log.capnp -> car.capnp 심링크가 opendbc를 가리킴
    export NNLC_CEREAL_DIR=~/sp-cereal/cereal      # 로그를 만든 빌드와 같은 브랜치의 cereal
    ```
 2. 라우트 수집 후 (장치와 같은 LAN):
