@@ -518,7 +518,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.reanchor_arm = 0
     # Phase 40: stall kick state (see values.py STALL_KICK_*)
     self.kick_off = 0.0           # current offset magnitude (deg)
-    self.kick_up_left = 0         # frames left in the fast step
+    self.kick_phase = 0           # 0 idle/decay, 1 ramp, 2 hold
+    self.kick_hold_left = 0
+    self.kick_ramp_base = 0.0     # offset when the current ramp started
+    self.kick_wheel_start = 0.0   # measured angle when the current ramp started
     self.kick_sign = 0.0
     self.kick_count = 0           # steps used in the current stall episode
     self.kick_since_start = 10 ** 6  # frames since the last step started
@@ -581,7 +584,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.boot_parking_pending = True
 
   def _stall_kick(self, wheel: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool) -> float:
-    """Phase 40: request offset (deg) for this frame. Fast step away from a stuck wheel, slow decay back
+    """Phase 40b: request offset (deg) for this frame. Ramp away from a stuck wheel until it moves, hold, slow decay
     (the CCNC MDPS follows request RATE, not error — values.py STALL_KICK_*)."""
     P = CarControllerParams
     n = P.STALL_KICK_QUIET_FRAMES
@@ -593,7 +596,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     amp = P.STALL_KICK_AMPLITUDE_DEG
     if amp <= 0.0 or not lat_active:
       self.kick_off = 0.0
-      self.kick_up_left = 0
+      self.kick_phase = 0
       self.kick_count = 0
       self.kick_since_start = 10 ** 6
       self.stall_kick_deg = 0.0
@@ -608,7 +611,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
              and abs(gap) > P.STALL_KICK_GAP_DEG and wheel_moved < P.STALL_KICK_WHEEL_STILL_DEG
              and req_moved < P.STALL_KICK_REQ_STILL_DEG and self.vm_reject_consecutive_frames == 0)
     abort = (driver_tq >= P.STALL_KICK_ABORT_NM or blinker_on or self.vm_reject_consecutive_frames > 0)
-    # episode bookkeeping: the step budget comes back after 1 s without the stall condition
+    # episode bookkeeping: the ramp budget comes back after 1 s without the stall condition
     if stall:
       self.kick_idle_frames = 0
     else:
@@ -616,20 +619,34 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if self.kick_idle_frames >= P.STALL_KICK_EPISODE_RESET_FRAMES:
         self.kick_count = 0
     self.kick_since_start += 1
+    # phases: 0 idle/decay, 1 ramp, 2 hold
     if abort:
-      self.kick_up_left = 0
-    elif (stall and self.kick_up_left == 0 and self.kick_count < P.STALL_KICK_MAX_PULSES
+      self.kick_phase = 0
+    elif (self.kick_phase == 0 and stall and self.kick_count < P.STALL_KICK_MAX_PULSES
           and self.kick_off <= P.STALL_KICK_RETRIGGER_DEG and self.kick_since_start >= P.STALL_KICK_MIN_GAP_FRAMES):
-      self.kick_up_left = P.STALL_KICK_UP_FRAMES
+      self.kick_phase = 1
       self.kick_sign = 1.0 if gap > 0 else -1.0
       self.kick_count += 1
       self.kick_since_start = 0
-    if self.kick_up_left > 0:
-      self.kick_off += amp / P.STALL_KICK_UP_FRAMES
-      self.kick_up_left -= 1
-    else:
-      down = P.STALL_KICK_ABORT_DOWN_FRAMES if abort else P.STALL_KICK_DOWN_FRAMES
-      self.kick_off = max(0.0, self.kick_off - amp / down)
+      self.kick_ramp_base = self.kick_off
+      self.kick_wheel_start = float(wheel)
+    if self.kick_phase == 1:
+      unstuck = abs(wheel - self.kick_wheel_start) >= P.STALL_KICK_WHEEL_MOVED_DEG
+      released = abs(gap) < P.STALL_KICK_RELEASE_DEG
+      reached = self.kick_off >= min(self.kick_ramp_base + amp, P.STALL_KICK_ENVELOPE_DEG) - 1e-9
+      if unstuck or released or reached:
+        self.kick_phase = 2
+        self.kick_hold_left = P.STALL_KICK_HOLD_FRAMES
+      else:
+        self.kick_off = min(self.kick_off + P.STALL_KICK_RAMP_DPS * DT_CTRL,
+                            self.kick_ramp_base + amp, P.STALL_KICK_ENVELOPE_DEG)
+    if self.kick_phase == 2:
+      self.kick_hold_left -= 1
+      if self.kick_hold_left <= 0:
+        self.kick_phase = 0
+    if self.kick_phase == 0:
+      rate = P.STALL_KICK_ABORT_DECAY_DPS if abort else P.STALL_KICK_DECAY_DPS
+      self.kick_off = max(0.0, self.kick_off - rate * DT_CTRL)
     self.stall_kick_deg = self.kick_sign * self.kick_off
     return self.stall_kick_deg
 
