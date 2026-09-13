@@ -592,46 +592,53 @@ class CarControllerParams:
   CITY_RELEASE_SPEED_KPH       = 45.0
   CITY_RELEASE_HANDS_OFF_NM    = 30.0   # driver-domain
   CITY_RELEASE_RATE_UP         = 0.012  # per frame, post-grip tail beyond 2 deg (was 0.004)
-  # Phase 40 (i6nv3 routes 00000013/e, ROUTE8_REPORT §14-15): stall kick. probes/wire_response.py
+  # Phase 40 (i6nv3 routes 00000013/e, ROUTE8_REPORT §14-16): stall kick. probes/wire_response.py
   # (transmitted ADAS_StrAnglReqVal vs measured wheel, hands off, sent gain >= 0.9, 30-60 km/h):
   # the CCNC MDPS is a RATE follower with almost no position stiffness — the wheel rate is 0.0
   # deg/s at every error from 0 to 10 deg while the request moves slower than 1 deg/s, 0-0.5
-  # at 1-3 deg/s (the 7a / curve-trim ramp regime), 0.5-2.6 at 3-6, and 3-8 deg/s once the
-  # request moves faster than 6 deg/s even with a 0-1 deg error; a request moving TOWARD the
-  # wheel drags the wheel the same way. MDPS reports angle mode active, no fault, gain 1.0.
-  # So the trims, ramping at 1.8-2 deg/s, never move a stuck wheel (route 13 seg 13 860-864 s:
-  # wire 5.8 -> 8.9 deg at 2 deg/s, wheel 0.6-1.2 for 3 s; 12-18 s of this per drive, all in
-  # moderate curves). The kick exploits the rate dead-zone asymmetrically: when a stall is
-  # detected (hands really off, gain >= 0.9, 25-60 km/h, |apply-wheel| > 2.5 deg, wheel and
-  # request quiet for 0.3 s) the request steps AWAY from the wheel by STALL_KICK_AMPLITUDE_DEG
-  # in STALL_KICK_UP_FRAMES (15 deg/s: the MDPS follows) and then decays back to the target at
-  # STALL_KICK_AMPLITUDE_DEG / STALL_KICK_DOWN_FRAMES (1 deg/s: below the response floor, so the
-  # wheel keeps what it gained). A new step may start once the offset has decayed below
-  # STALL_KICK_RETRIGGER_DEG and STALL_KICK_MIN_GAP_FRAMES have passed, up to
-  # STALL_KICK_MAX_PULSES per stall episode; the envelope stays under RETRIGGER + AMPLITUDE.
-  # Nothing is stored: the offset always decays to 0. Aborts (fast 0.2 s decay) on a hand
-  # (>= STALL_KICK_ABORT_NM), blinker, lat inactive or a VM-limiter reject; stops stepping once the
-  # wheel moves (>= STALL_KICK_WHEEL_MOVED_DEG in the window) or the gap closes below
-  # STALL_KICK_RELEASE_DEG. Not replay-verifiable (no MDPS model): first on-road run judged with
-  # probes/eps_lag.py, wire_response.py and the 1-s command swing p95. Kill: STALL_KICK_AMPLITUDE_DEG = 0.0.
-  STALL_KICK_AMPLITUDE_DEG   = 1.5
-  STALL_KICK_MAX_PULSES      = 4
-  STALL_KICK_UP_FRAMES       = 10    # 0.1 s step (15 deg/s)
-  STALL_KICK_DOWN_FRAMES     = 150   # 1.5 s decay (1 deg/s, under the MDPS response floor)
-  STALL_KICK_ABORT_DOWN_FRAMES = 20  # 0.2 s decay on abort
-  STALL_KICK_RETRIGGER_DEG   = 0.5   # next step allowed once the offset has decayed to this
-  STALL_KICK_MIN_GAP_FRAMES  = 50    # ... and at least 0.5 s after the previous step
+  # at 1-3 deg/s (the 7a / curve-trim ramp regime), and 3-8 deg/s once the request moves faster
+  # than 6 deg/s; a request moving TOWARD the wheel drags the wheel the same way. MDPS reports
+  # angle mode active, no fault, gain 1.0. So the trims, ramping at 1.8-2 deg/s, never move a
+  # stuck wheel (route 13 seg 13 860-864 s: wire 5.8 -> 8.9 deg at 2 deg/s, wheel 0.6-1.2 for 3 s;
+  # 12-18 s of this per drive, all in moderate curves).
+  # 40 (route 14, 50 kicks): a 1.5 deg / 0.1 s STEP with a 1 deg/s decay was under the MDPS's
+  # threshold — first kick +0.3 deg at 0.5 s / +0.8 at 1 s, follow-ups 0, 25-45 km/h 0 (-0.4 at
+  # 1.5 s: the decay dragged it back); the 9 steps that happened to reach >= 1.8 deg gave +3.4 at
+  # 0.5 s, and a plan-driven SUSTAINED rise (>= 6 deg/s for >= 0.3 s) gave +2.9 (25-45 km/h:
+  # +4.1) at 0.5 s and +7.5 at 1.5 s. Cost: plan-quiet 1-s command swing p95 1.3 -> 2.3 deg.
+  # 40b: RAMP instead of step. On a stall (hands really off, gain >= 0.9, 25-60 km/h,
+  # |apply-wheel| > 2.5 deg, wheel and request quiet for 0.3 s) the request ramps away from the
+  # wheel at STALL_KICK_RAMP_DPS until the wheel has moved STALL_KICK_WHEEL_MOVED_DEG from where the
+  # ramp started (only as much as needed) or STALL_KICK_AMPLITUDE_DEG is reached, holds
+  # STALL_KICK_HOLD_FRAMES, then decays at STALL_KICK_DECAY_DPS (well under the response floor so the
+  # wheel keeps what it gained). A new ramp may start once the offset is below
+  # STALL_KICK_RETRIGGER_DEG and STALL_KICK_MIN_GAP_FRAMES have passed, up to STALL_KICK_MAX_PULSES
+  # per stall episode; the total offset never exceeds STALL_KICK_ENVELOPE_DEG. Nothing is stored:
+  # the offset always decays to 0. Abort (STALL_KICK_ABORT_DECAY_DPS) on a hand (>=
+  # STALL_KICK_ABORT_NM), blinker, lat inactive or a VM-limiter reject; the ramp also stops when the
+  # gap closes below STALL_KICK_RELEASE_DEG. Not replay-verifiable (no MDPS model): judged with
+  # probes/kick_detail.py (wheel trajectory after each kick vs natural rises), the 1-s command swing
+  # p95 and grabs within 2 s of a kick. Kill: STALL_KICK_AMPLITUDE_DEG = 0.0.
+  STALL_KICK_AMPLITUDE_DEG   = 3.0   # max excursion of one ramp
+  STALL_KICK_ENVELOPE_DEG    = 4.0   # hard cap on the total offset (ramp on top of a decaying one)
+  STALL_KICK_RAMP_DPS        = 10.0  # request rate while ramping (MDPS follows from ~6 deg/s)
+  STALL_KICK_HOLD_FRAMES     = 20    # 0.2 s hold after the ramp
+  STALL_KICK_DECAY_DPS       = 0.5   # return to the target (under the ~1 deg/s response floor)
+  STALL_KICK_ABORT_DECAY_DPS = 15.0  # hand / blinker / lat off / VM reject: gone in ~0.2 s
+  STALL_KICK_MAX_PULSES      = 3
+  STALL_KICK_RETRIGGER_DEG   = 1.0   # next ramp allowed once the offset has decayed to this
+  STALL_KICK_MIN_GAP_FRAMES  = 100   # ... and at least 1 s after the previous ramp started
   STALL_KICK_SPEEDS_KPH      = [25.0, 60.0]
   STALL_KICK_GAP_DEG         = 2.5   # |apply - wheel| to arm
-  STALL_KICK_RELEASE_DEG     = 1.5   # gap below this ends the episode
+  STALL_KICK_RELEASE_DEG     = 1.5   # gap below this ends the ramp / episode
   STALL_KICK_QUIET_FRAMES    = 30    # 0.3 s window for the wheel/request stillness test
   STALL_KICK_WHEEL_STILL_DEG = 0.3   # wheel moved less than this in the window = stuck
-  STALL_KICK_WHEEL_MOVED_DEG = 0.5   # wheel moved at least this in the window = unstuck, stop stepping
+  STALL_KICK_WHEEL_MOVED_DEG = 0.5   # wheel moved this much since the ramp started = unstuck, stop ramping
   STALL_KICK_REQ_STILL_DEG   = 1.0   # request moved less than this in the window = quiet (trim ramps qualify)
   STALL_KICK_HANDS_OFF_NM    = 30.0  # driver-domain, to arm
   STALL_KICK_ABORT_NM        = 50.0  # driver-domain, to abort
   STALL_KICK_MIN_GAIN        = 0.9   # sent ACI gain (previous frame)
-  STALL_KICK_EPISODE_RESET_FRAMES = 100  # 1 s without the stall condition resets the pulse budget
+  STALL_KICK_EPISODE_RESET_FRAMES = 100  # 1 s without the stall condition resets the ramp budget
   # Phase 31: hold-torque model refit. The Phase 22 linear fit
   # (0.8*(122 + 132*lat_acc), cap 240) had no speed term and a slope the
   # binned corpus contradicts — settling measurement (1.1M hands-off
