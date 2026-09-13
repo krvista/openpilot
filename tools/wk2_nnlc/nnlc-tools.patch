@@ -1,5 +1,5 @@
 diff --git a/nnlc_tools/extract_lateral_data.py b/nnlc_tools/extract_lateral_data.py
-index 7bafb01..39560bc 100644
+index 7bafb01..1afc05e 100644
 --- a/nnlc_tools/extract_lateral_data.py
 +++ b/nnlc_tools/extract_lateral_data.py
 @@ -39,6 +39,7 @@ COLUMNS = [
@@ -75,28 +75,73 @@ index 7bafb01..39560bc 100644
                      saturated,
                      roll,
                      lane_change_state,
-@@ -169,10 +195,19 @@ def add_temporal_columns(df):
-         shift_frames = int(round(offset / dt))
-         suffix = f"_t{offset:+.1f}".replace(".", "").replace("+", "p").replace("-", "m")
+@@ -161,21 +187,56 @@ def add_temporal_columns(df):
  
-+        # Rows whose shifted partner is not exactly `offset` seconds away (route
-+        # boundary, dropped frames, unsorted input) get NaN instead of a value
-+        # borrowed from an unrelated part of the drive; they are dropped below.
-+        ts_partner = df["timestamp"].shift(-shift_frames)
-+        valid = ((ts_partner - df["timestamp"]) - offset).abs() < 0.05
-         for col in temporal_cols:
-             if col in df.columns:
+     Adds columns at offsets matching nnlc.py's past_times [-0.3, -0.2, -0.1]
+     and future_times [0.3, 0.6, 1.0, 1.5].
++
++    Values are looked up by *time* (linear interpolation within each route), not
++    by row shift: controlsd drops frames under load (real logs run ~97-99 Hz),
++    so a fixed 150-row shift is not 1.5 s. A lookup is valid only when the target
++    time is bracketed by two samples less than MAX_SAMPLE_GAP apart, so route
++    ends and gaps yield NaN and those rows are dropped.
+     """
+-    dt = 0.01  # controlsState runs at 100Hz
+     temporal_cols = ["actual_lateral_accel", "desired_lateral_accel", "roll"]
++    MAX_SAMPLE_GAP = 0.1  # s; 100 Hz nominal, tolerates a few dropped frames, rejects real gaps
+ 
+-    for offset in PAST_TIMES + FUTURE_TIMES:
+-        shift_frames = int(round(offset / dt))
+-        suffix = f"_t{offset:+.1f}".replace(".", "").replace("+", "p").replace("-", "m")
+-
+-        for col in temporal_cols:
+-            if col in df.columns:
 -                df[f"{col}{suffix}"] = df[col].shift(-shift_frames)
-+                df[f"{col}{suffix}"] = df[col].shift(-shift_frames).where(valid)
++    nan_frac = {c: float(df[c].isna().mean()) for c in temporal_cols if c in df.columns}
++    print(f"Base column NaN fractions: {nan_frac}")
  
-+    temporal_generated = [c for c in df.columns if any(c.startswith(t + "_t") for t in temporal_cols)]
++    if "route_id" in df.columns:
++        df = df.sort_values(["route_id", "timestamp"], kind="stable").reset_index(drop=True)
++        groups = df.groupby("route_id", sort=False).indices
++    else:
++        df = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
++        groups = {"_all": np.arange(len(df))}
++
++    offsets = PAST_TIMES + FUTURE_TIMES
++    def suffix_for(offset):
++        return f"_t{offset:+.1f}".replace(".", "").replace("+", "p").replace("-", "m")
++
++    out = {f"{col}{suffix_for(o)}": np.full(len(df), np.nan) for o in offsets for col in temporal_cols}
++    ts_all = df["timestamp"].to_numpy(dtype=float)
++    col_all = {c: df[c].to_numpy(dtype=float) for c in temporal_cols}
++    for _, idx in groups.items():
++        idx = np.asarray(idx)
++        t = ts_all[idx]
++        if len(t) < 2:
++            continue
++        for offset in offsets:
++            tq = t + offset
++            j = np.searchsorted(t, tq)
++            lo = np.clip(j - 1, 0, len(t) - 1)
++            hi = np.clip(j, 0, len(t) - 1)
++            ok = (tq >= t[0]) & (tq <= t[-1]) & ((t[hi] - t[lo]) <= MAX_SAMPLE_GAP)
++            sfx = suffix_for(offset)
++            for col in temporal_cols:
++                vals = np.interp(tq, t, col_all[col][idx])
++                out[f"{col}{sfx}"][idx] = np.where(ok, vals, np.nan)
++
++    for k, v in out.items():
++        df[k] = v
 +    before = len(df)
-+    df = df.dropna(subset=temporal_generated).reset_index(drop=True)
-+    print(f"Dropped {before - len(df)} rows lacking a valid temporal context (boundaries/gaps)")
++    df = df.dropna(subset=list(out.keys())).reset_index(drop=True)
++    print(f"Dropped {before - len(df)} rows lacking a valid temporal context (route ends/gaps/NaN inputs)")
      return df
  
- 
-@@ -205,13 +240,16 @@ def main():
+-
+ def main():
+     parser = argparse.ArgumentParser(
+         description="Extract lateral control data from rlogs to CSV/Parquet.",
+@@ -205,13 +266,16 @@ def main():
      all_rows = []
      for rlog_path in tqdm(rlog_files, desc="Processing rlogs"):
          rows = extract_segment(rlog_path)
