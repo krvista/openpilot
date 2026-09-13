@@ -1,5 +1,5 @@
 diff --git a/nnlc_tools/extract_lateral_data.py b/nnlc_tools/extract_lateral_data.py
-index 7bafb01..1afc05e 100644
+index 7bafb01..014ad75 100644
 --- a/nnlc_tools/extract_lateral_data.py
 +++ b/nnlc_tools/extract_lateral_data.py
 @@ -39,6 +39,7 @@ COLUMNS = [
@@ -141,7 +141,23 @@ index 7bafb01..1afc05e 100644
  def main():
      parser = argparse.ArgumentParser(
          description="Extract lateral control data from rlogs to CSV/Parquet.",
-@@ -205,13 +266,16 @@ def main():
+@@ -189,6 +250,8 @@ def main():
+                         help="Add temporal lag/lead columns for NNLC training")
+     parser.add_argument("--filter-overrides", action="store_true",
+                         help="Drop rows where driver overrides (steering_pressed=True)")
++    parser.add_argument("--limit", type=int, default=None,
++                        help="Only process the first N rlog files (quick diagnostics)")
+     args = parser.parse_args()
+ 
+     if not os.path.isdir(args.input):
+@@ -200,19 +263,30 @@ def main():
+         print(f"ERROR: No rlog files found in {args.input}")
+         sys.exit(1)
+ 
++    if args.limit:
++        rlog_files = rlog_files[:args.limit]
+     print(f"Found {len(rlog_files)} rlog files")
+ 
      all_rows = []
      for rlog_path in tqdm(rlog_files, desc="Processing rlogs"):
          rows = extract_segment(rlog_path)
@@ -158,8 +174,15 @@ index 7bafb01..1afc05e 100644
 -    df = pd.DataFrame(all_rows, columns=COLUMNS)
 +    df = pd.DataFrame(all_rows, columns=COLUMNS + ["route_id"])
      print(f"Extracted {len(df)} rows")
++    # Self-diagnosis: which lateral controller state the logs carry, and whether the
++    # torque fields came through. Anything but torqueState/pidState yields NaN lat accel.
++    print("lateral_control_type counts:", df["lateral_control_type"].value_counts(dropna=False).to_dict())
++    print("active frac:", round(float(df["active"].astype(bool).mean()), 3),
++          "| NaN frac desired_lateral_accel:", round(float(df["desired_lateral_accel"].isna().mean()), 3),
++          "| NaN frac torque_output:", round(float(df["torque_output"].isna().mean()), 3))
  
      if args.filter_overrides and "steering_pressed" in df.columns:
+         before = len(df)
 diff --git a/nnlc_tools/logreader.py b/nnlc_tools/logreader.py
 index 333a030..d66cf31 100644
 --- a/nnlc_tools/logreader.py
