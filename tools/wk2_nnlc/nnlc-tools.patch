@@ -1,8 +1,16 @@
 diff --git a/nnlc_tools/extract_lateral_data.py b/nnlc_tools/extract_lateral_data.py
-index 7bafb01..d15095d 100644
+index 7bafb01..39560bc 100644
 --- a/nnlc_tools/extract_lateral_data.py
 +++ b/nnlc_tools/extract_lateral_data.py
-@@ -51,7 +51,21 @@ def find_rlogs(input_dir):
+@@ -39,6 +39,7 @@ COLUMNS = [
+     "actual_lateral_accel",
+     "desired_lateral_accel",
+     "torque_output",
++    "ff",
+     "saturated",
+     "roll",
+     "lane_change_state",
+@@ -51,7 +52,21 @@ def find_rlogs(input_dir):
      files = []
      for pattern in patterns:
          files.extend(glob.glob(os.path.join(input_dir, pattern), recursive=True))
@@ -25,7 +33,22 @@ index 7bafb01..d15095d 100644
  
  
  def extract_segment(rlog_path):
-@@ -114,8 +128,16 @@ def extract_segment(rlog_path):
+@@ -101,6 +116,7 @@ def extract_segment(rlog_path):
+                 actual_lat_accel = float("nan")
+                 desired_lat_accel = float("nan")
+                 torque_output = float("nan")
++                ff = float("nan")
+                 saturated = False
+ 
+                 if lat_type == "torqueState":
+@@ -108,14 +124,23 @@ def extract_segment(rlog_path):
+                     actual_lat_accel = ts.actualLateralAccel
+                     desired_lat_accel = ts.desiredLateralAccel
+                     torque_output = ts.output
++                    ff = ts.f
+                     saturated = ts.saturated
+                 elif lat_type == "pidState":
+                     ps = lat_state.pidState
                      torque_output = ps.output
                      saturated = ps.saturated
  
@@ -44,7 +67,15 @@ index 7bafb01..d15095d 100644
                      active = sm["selfdriveState"].active
                  else:
                      active = getattr(ctrl, "active", getattr(ctrl, "activeDEPRECATED", False))
-@@ -169,10 +191,19 @@ def add_temporal_columns(df):
+@@ -145,6 +170,7 @@ def extract_segment(rlog_path):
+                     actual_lat_accel,
+                     desired_lat_accel,
+                     torque_output,
++                    ff,
+                     saturated,
+                     roll,
+                     lane_change_state,
+@@ -169,10 +195,19 @@ def add_temporal_columns(df):
          shift_frames = int(round(offset / dt))
          suffix = f"_t{offset:+.1f}".replace(".", "").replace("+", "p").replace("-", "m")
  
@@ -65,7 +96,7 @@ index 7bafb01..d15095d 100644
      return df
  
  
-@@ -205,13 +236,16 @@ def main():
+@@ -205,13 +240,16 @@ def main():
      all_rows = []
      for rlog_path in tqdm(rlog_files, desc="Processing rlogs"):
          rows = extract_segment(rlog_path)

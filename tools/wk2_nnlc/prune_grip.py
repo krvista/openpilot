@@ -13,9 +13,14 @@ ap = argparse.ArgumentParser()
 ap.add_argument("input"); ap.add_argument("-o", "--output", required=True)
 ap.add_argument("--max-torque", type=float, default=40.0, help="|steering_torque| above this is pruned")
 ap.add_argument("--pad-frames", type=int, default=10, help="also drop this many frames after each grip episode (settling)")
+ap.add_argument("--keep-routes", default=None, help="file with one route_id per line (from route_audit.py); others are dropped")
 a = ap.parse_args()
 
 df = pd.read_csv(a.input) if a.input.endswith(".csv") else pd.read_parquet(a.input)
+if a.keep_routes and "route_id" in df.columns:
+    keep = {l.strip() for l in open(a.keep_routes) if l.strip()}
+    n0 = len(df); df = df[df["route_id"].isin(keep)].reset_index(drop=True)
+    print(f"route filter: kept {len(df)}/{n0} rows from {len(keep)} routes")
 grip = (df["steering_torque"].abs() > a.max_torque) | df["steering_pressed"].astype(bool)
 if a.pad_frames > 0:
     g = grip.to_numpy().copy()
@@ -25,5 +30,6 @@ if a.pad_frames > 0:
         g[j[j < len(g)]] = True
     grip = pd.Series(g, index=df.index)
 kept = df[~grip]
-print(f"rows {len(df)} -> {len(kept)}  (pruned {grip.mean()*100:.1f}%: |torque|>{a.max_torque} or pressed, +{a.pad_frames} settling frames)")
+pct = grip.mean() * 100 if len(df) else 0.0
+print(f"rows {len(df)} -> {len(kept)}  (pruned {pct:.1f}%: |torque|>{a.max_torque} or pressed, +{a.pad_frames} settling frames)")
 (kept.to_csv if a.output.endswith(".csv") else kept.to_parquet)(a.output, index=False)
