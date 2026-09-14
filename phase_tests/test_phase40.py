@@ -8,8 +8,11 @@ import numpy as np
 from phase_tests.harness import Sim, run_signal
 from opendbc.car.hyundai.values import CarControllerParams as P
 
+import pytest
+
 V40 = 40.0 / 3.6
 DT = 0.01
+AMP_ON = 3.0   # the 40b on-road value; the shipped default is 0.0 (off) after routes 15/16
 RAMP = P.STALL_KICK_RAMP_DPS * DT
 DECAY = P.STALL_KICK_DECAY_DPS * DT
 
@@ -30,7 +33,19 @@ def ramps(kick):
   return int(np.sum(up[1:] & ~up[:-1]) + (1 if up[0] else 0))
 
 
+@pytest.fixture(autouse=True)
+def _kick_on(monkeypatch):
+  monkeypatch.setattr(P, 'STALL_KICK_AMPLITUDE_DEG', AMP_ON)
+
+
 class TestPhase40bStallKick:
+  def test_shipped_default_is_off(self, monkeypatch):
+    monkeypatch.undo()
+    assert P.STALL_KICK_AMPLITUDE_DEG == 0.0
+    sim = Sim()
+    settle(sim)
+    assert not any(stall(sim, n=400)['kick'])
+
   def test_ramp_hold_decay_on_a_stuck_wheel(self):
     sim = Sim()
     settle(sim)
