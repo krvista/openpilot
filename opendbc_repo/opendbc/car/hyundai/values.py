@@ -619,7 +619,14 @@ class CarControllerParams:
   # gap closes below STALL_KICK_RELEASE_DEG. Not replay-verifiable (no MDPS model): judged with
   # probes/kick_detail.py (wheel trajectory after each kick vs natural rises), the 1-s command swing
   # p95 and grabs within 2 s of a kick. Kill: STALL_KICK_AMPLITUDE_DEG = 0.0.
-  STALL_KICK_AMPLITUDE_DEG   = 3.0   # max excursion of one ramp
+  # 40b RESULT (routes 15/16, 09-14 commutes, 22 ramps of p50 3.6-4.0 deg at 10 deg/s): the wheel still did not
+  # follow (toward-request median +0.1..+0.7 deg at 1.0 s, <= 0 at 1.5 s; the gap 1.5 s later was LARGER,
+  # 5.5 -> 5.9 / 4.1 -> 4.7 deg), the driver answered 77-78 % of the ramps with > 100 Nm within 1 s (route 14
+  # steps: 43 %) and the plan-quiet 1-s command swing p95 went 1.3 (no kick) -> 2.3 (40) -> 3.9 deg (40b). A
+  # request moving on its own against a resting hand is felt as a push and resisted; the plan-driven rises the
+  # design was modelled on come with the road turning. OFF by default (0.0) — the state machine and tests stay
+  # for a hands-off-only controlled test. Re-enable: 3.0.
+  STALL_KICK_AMPLITUDE_DEG   = 0.0   # max excursion of one ramp (OFF, see above; 3.0 = 40b)
   STALL_KICK_ENVELOPE_DEG    = 4.0   # hard cap on the total offset (ramp on top of a decaying one)
   STALL_KICK_RAMP_DPS        = 10.0  # request rate while ramping (MDPS follows from ~6 deg/s)
   STALL_KICK_HOLD_FRAMES     = 20    # 0.2 s hold after the ramp
