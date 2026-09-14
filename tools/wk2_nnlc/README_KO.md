@@ -4,7 +4,12 @@
 
 ## A. 장치 (주행 전 1회)
 1. 빌드 업데이트: `cd /data/openpilot && git fetch origin wk2-fixes-release-mici && git reset --hard origin/wk2-fixes-release-mici && sudo reboot` → Settings › Software 에서 Commit **d67c5fe** 확인
-2. **NNLC 끄기**: Settings › sunnypilot › **Steering** › "Neural Network Lateral Control" **OFF** (조향 자체는 그대로 동작, 피드포워드만 선형식으로 바뀜)
+2. **컨트롤러 설정 (순서 중요)**: Settings › sunnypilot › **Steering** 에서
+   ① "Neural Network Lateral Control" **OFF** → ② "Enforce Torque Lateral Control" **ON**
+   WK2는 opendbc 기본 횡제어가 **PID**라서, NNLC와 Enforce Torque가 둘 다 꺼지면 토크 컨트롤러가 아닌 PID로 조향합니다
+   (`sunnypilot/selfdrive/car/interfaces.py`: `if nnlc_enabled or enforce_torque: configure_torque_tune`). PID 로그(`pidState`)는 NNLC 학습에 쓸 수 없습니다.
+   두 토글이 동시에 ON이면 UI가 둘 다 자동으로 꺼버리므로 반드시 NNLC를 먼저 끄고 Enforce Torque를 켭니다.
+   확인: 첫 주행 세그먼트 하나로 `nnlc-extract <seg_dir> -o /tmp/d.csv --limit 1` → `lateral_control_type counts: {'torqueState': …}` 이어야 함.
 3. 학습 파라미터 살리기: `/data/params` 절대 초기화하지 말 것. 2–3회 주행 후 `collect_check.py`로 liveTorque `useParams=True`, liveDelay `estimated` 확인 후 본수집 시작
 4. 저장공간: 카메라 포함 시간당 ~2–3GB. 장치가 꽉 차면 오래된 라우트를 자동 삭제하므로 **주행 후 그날 안에 PC로 동기화**
 5. 기계 상태 고정: 얼라인먼트 완료 상태 유지, 타이어/공기압 변경 없이 수집 기간 통일
@@ -54,7 +59,7 @@ scp .../JEEP_GRAND_CHEROKEE_2019.json comma@<장치IP>:/data/openpilot/sunnypilo
 ```bash
 python3 collect_check.py <route>--0--qlog.zst <route>--1*--qlog.zst   # 세그먼트 0 포함 필수
 ```
-기대 출력: build `d67c5fe` · feedforward `LINEAR (NNLC OFF)` · liveTorque `useParams=True` · liveDelay `estimated` · active below minSteerSpeed > 0% · grip p90 < 40
+기대 출력: build `d67c5fe` · 컨트롤러 `torqueState`(pidState면 Enforce Torque 미설정) · feedforward `LINEAR (NNLC OFF)` · liveTorque `useParams=True` · liveDelay `estimated` · active below minSteerSpeed > 0% · grip p90 < 40
 
 ## H. 대용량 rlog를 GitHub에 올리지 않는 운용 (권장) — PC에서 추출, CSV만 공유
 장치에 쌓인 rlog가 GB 단위라면 G 대신 이 흐름을 씁니다. 9.6GB를 git에 올리면 쿼터를 넘고, 브랜치를 지워도 히스토리에 남아 용량이 안 줄어듭니다.

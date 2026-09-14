@@ -46,6 +46,10 @@ for route, g in df.groupby("route_id", sort=True):
     grip_p90 = float(np.percentile(act["steering_torque"].abs(), 90)) if len(act) else float("nan")
     commit = seg0_commit(route)
     reasons = []
+    lat_types = g["lateral_control_type"].value_counts(dropna=False).to_dict() if "lateral_control_type" in g.columns else {}
+    non_torque = sum(v for k, v in lat_types.items() if k != "torqueState")
+    if lat_types and non_torque > 0.5 * len(g):
+        reasons.append(f"controller={max(lat_types, key=lat_types.get)} (need torqueState: EnforceTorqueControl ON, NNLC OFF)")
     if ff_state == "NN": reasons.append("NNLC on")
     if active_s < a.min_active_s: reasons.append(f"active<{a.min_active_s:.0f}s")
     if a.expect_commit and commit and not commit.startswith(a.expect_commit): reasons.append("wrong build")
