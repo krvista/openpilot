@@ -109,3 +109,4 @@ SKILL.md
 !.claude/
 .claude/*
 !.claude/skills/
+!.claude/skills/**/SKILL.md
