@@ -3,7 +3,6 @@ threshold, and (d): sign symmetry of every latch/trim/gate."""
 import math
 import random
 
-import numpy as np
 
 from phase_tests.harness import Sim, count_transitions, run_signal
 

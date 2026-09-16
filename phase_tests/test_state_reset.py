@@ -1,6 +1,5 @@
 """Invariant (b): latActive dropping mid-latch resets counters; no stale state on
 re-engage. Invariant (c): NaN/inf robustness of every stateful path."""
-import math
 
 import numpy as np
 

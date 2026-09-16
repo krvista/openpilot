@@ -1,6 +1,5 @@
 """Phase 37a: high-speed recovery softening (rise cap, recovery jerk cap) + wiper-derived rain mode."""
 import math
-import numpy as np
 from phase_tests.harness import Sim, run_signal
 from opendbc.car.hyundai.values import CarControllerParams as P
 from opendbc.car import DT_CTRL

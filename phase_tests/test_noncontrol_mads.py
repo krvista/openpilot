@@ -3,7 +3,6 @@ driving the REAL ModularAssistiveDrivingSystem + StateMachine with real Events
 containers and a stub selfdrived."""
 import types
 
-import pytest
 
 from phase_tests.harness_noncontrol import FakeParams
 

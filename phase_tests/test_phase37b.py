@@ -1,6 +1,5 @@
 """Phase 37b: blindspot lane protection — ALC abort, no blinker concession toward BSM, BSM lane guard."""
 import types
-import numpy as np
 from phase_tests.harness import Sim, run_signal
 from opendbc.car.hyundai.values import CarControllerParams as P
 

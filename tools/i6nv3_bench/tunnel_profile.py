@@ -1,4 +1,4 @@
-import glob, sys, math, numpy as np
+import glob, sys, numpy as np
 from openpilot.tools.lib.logreader import LogReader
 r=sys.argv[1]; MINGAP=60
 files=sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--rlog.zst"), key=lambda f:int(f.split("--")[-2]))
