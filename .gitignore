@@ -104,3 +104,8 @@ SKILL.md
 !.idea/customTargets.xml
 !.idea/tools/*
 !.run/*
+
+# i6nv3: vendored Claude Code skills are tracked (settings/local state stay ignored)
+!.claude/
+.claude/*
+!.claude/skills/
