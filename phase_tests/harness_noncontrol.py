@@ -57,6 +57,19 @@ def _install_stubs():
   ppx.UnknownKeyName = UnknownKeyName
   sys.modules['openpilot.common.params_pyx'] = ppx
 
+  # openpilot.common.params loads libparams_c.so via ctypes (a scons product). On a host without the build (CI) the
+  # import raises OSError; substitute FakeParams there only, so the device/dev host keeps the real Params.
+  try:
+    import openpilot.common.params  # noqa: F401
+  except (OSError, ImportError) as e:
+    pm = types.ModuleType('openpilot.common.params')
+    pm.Params = FakeParams
+    pm.ParamKeyFlag = ppx.ParamKeyFlag
+    pm.ParamKeyType = ppx.ParamKeyType
+    pm.UnknownKeyName = UnknownKeyName
+    pm.__stub_reason__ = repr(e)
+    sys.modules['openpilot.common.params'] = pm
+
   cm = types.ModuleType('cereal.messaging')
 
   class _Sock:
