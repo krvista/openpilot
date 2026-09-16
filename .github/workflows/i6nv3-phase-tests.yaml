@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install (pure-python paths only, no scons)
-        run: pip install numpy pycapnp pycryptodome zstandard tqdm pytest ruff
+        run: pip install numpy pycapnp pycryptodome zstandard tqdm requests pyzmq setproctitle sentry-sdk pyjwt cryptography pytest ruff
       - name: ruff (fork-owned dirs)
         run: ruff check --select F --ignore F841 phase_tests tools/i6nv3_bench
       - name: phase tests
