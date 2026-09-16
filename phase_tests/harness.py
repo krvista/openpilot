@@ -14,12 +14,12 @@ for p in (os.path.join(REPO, 'opendbc_repo'), REPO):
   if p not in sys.path:
     sys.path.insert(0, p)
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from opendbc.car import structs, Bus  # noqa: E402
-import opendbc.car.hyundai.carcontroller as ccmod  # noqa: E402
-from opendbc.car.hyundai.interface import CarInterface  # noqa: E402
-from opendbc.car.hyundai.values import HyundaiFlags, CarControllerParams  # noqa: E402
+from opendbc.car import structs, Bus
+import opendbc.car.hyundai.carcontroller as ccmod
+from opendbc.car.hyundai.interface import CarInterface
+from opendbc.car.hyundai.values import HyundaiFlags
 
 DT = 0.01  # 100 Hz
 

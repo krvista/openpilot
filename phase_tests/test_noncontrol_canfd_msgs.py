@@ -2,9 +2,8 @@
 CANPacker against the platform's real DBC, plus a CarState CANFD parse smoke
 test — a misspelled/missing signal name would raise (parser) or emit a
 warning-and-drop (packer) at runtime."""
-import types
 
-from phase_tests.harness import make_cp  # noqa: F401 (path setup + CP helper)
+from phase_tests.harness import make_cp
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import structs, Bus
@@ -37,7 +36,7 @@ def unpack(msg, name="LKAS_ALT", bus=0):
   """Round-trip a packed frame through the real parser."""
   addr, dat, _ = msg
   cp = CANParser(DBC_NAME, [], bus)
-  cp.vl[name]  # lazy-register the message on the parser  # noqa: B018
+  cp.vl[name]  # lazy-register the message on the parser
   cp.update([(0, [(addr, dat, bus)])])
   return cp
 

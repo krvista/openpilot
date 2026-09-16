@@ -1,5 +1,5 @@
 """Dump the 2 s before / 1 s after each hands-off driver grab at 30-45 km/h (route arg), 0.2 s sampling."""
-import glob, sys, numpy as np
+import glob, sys
 from openpilot.tools.lib.logreader import LogReader
 r=sys.argv[1]; maxn=int(sys.argv[2]) if len(sys.argv)>2 else 10
 files=sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--rlog.zst"), key=lambda f:int(f.split("--")[-2]))[1:]

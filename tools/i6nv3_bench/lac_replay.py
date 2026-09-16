@@ -1,6 +1,6 @@
 """Replay LatControlAngle over a route with logged inputs; compare variants.
 usage: lac_replay.py ROUTE [maxseg]   (env VARIANT ignored; all variants run in one pass)"""
-import glob, sys, math, types, numpy as np
+import glob, sys, types, numpy as np
 from openpilot.tools.lib.logreader import LogReader
 from opendbc.car.vehicle_model import VehicleModel
 import openpilot.selfdrive.controls.lib.latcontrol_angle as lca

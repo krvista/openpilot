@@ -3,7 +3,6 @@
 import importlib
 import os
 import sys
-import tempfile
 import types
 from unittest.mock import MagicMock
 

@@ -1,4 +1,4 @@
-import glob, sys
+import glob
 from openpilot.tools.lib.logreader import LogReader
 f=glob.glob("/home/user/drivelog/drivelog/*_0000000b--*--0--rlog.zst")[0]
 t0=None; rows=[]
