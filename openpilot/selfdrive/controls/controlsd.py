@@ -17,6 +17,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.bsm_guard import BsmLaneGuard, BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB
+from openpilot.selfdrive.controls.lib.lowconf_rate_cap import LowConfRateCap, LOWCONF_CAP_DPS
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -221,7 +222,13 @@ LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
 # over-command beyond the J=0.7 envelope even on an uncertain reverse curve.
 # Validate at the S-curve (the overshoot worst case) before any larger step.
 # Kill switch: LOOKAHEAD_T_AHEAD_CAP = 0.25 (previous behaviour).
-LOOKAHEAD_T_AHEAD_CAP = 0.27  # s
+# Phase 41-2 (i6nv3 0x17-0x1f, 159 hands-off corner entries, report §23): plan -> vehicle-curvature half-level lag
+# p50 ~0.7 s of which controlsd's own share (LP + blend) is 0.15 s and the MDPS/vehicle share 0.55 s; authority is
+# not the binding term (gain sits above the base ceiling on ~half the entry frames via the error boost, and the
+# wire->wheel lag does not shrink with gain). The only request-side lever left is lead: one more step on the cap,
+# +50 ms, still inside the J = 0.7 m/s^3 budget (dk_max scales with t_ahead). The 7c-2 S-curve overshoot check is
+# the acceptance test on-road (swing p95 must not rise > 0.3 deg). Kill: 0.27 (7c-2).
+LOOKAHEAD_T_AHEAD_CAP = 0.32  # s
 
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
@@ -348,6 +355,7 @@ class Controls(ControlsExt):
     self._klane_lp = 0.0     # Phase 7c lane-geometry curvature (EMA 0.3 s)
     self._absdc_slow = 0.0   # Phase 7c rising-entry detector state
     self._model_nonfinite_frames = 0  # consecutive non-finite model actions
+    self.lowconf_cap = LowConfRateCap(DT_CTRL)   # Phase 41: low-lane-confidence steering-rate cap
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -539,6 +547,7 @@ class Controls(ControlsExt):
     if not CC.latActive:
       self.LaC.reset()
       self.bsm_guard.reset()   # Phase 37b: guard hold counter
+      self.lowconf_cap.reset()   # Phase 41
       self.lane_dropout = False   # Phase 39
       self.lane_dropout_clear_frames = 0
       self.lane_dropout_frames = 0
@@ -643,6 +652,17 @@ class Controls(ControlsExt):
         self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
       elif confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
+      # Phase 41: while the weaker inner lane line is below LOWCONF_LANE_MIN (merge / split / vanishing line) and the
+      # driver is not holding the wheel, the command may change no faster than LOWCONF_CAP_DPS of steer angle per
+      # second — a plan re-centring on an uncertain lane becomes a slow drift the driver can veto, not a snatch
+      # (report §23: 14 of 21 driver-fought swings sat in this band; nothing in the logs tells them from legitimate
+      # ones, so this is a rate policy, not a gate). Applied after the blend / dropout hold and before the departure
+      # and BSM guards (those only ever hold, so they cannot re-introduce a step). See lowconf_rate_cap.py.
+      if LOWCONF_CAP_DPS > 0.0:
+        blinker_or_lc = (mf.lane_change_state != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
+        k_per_deg = abs(float(self.VM.calc_curvature(math.radians(1.0), max(float(CS.vEgo), 1.0), 0.0)))
+        new_desired_curvature = self.lowconf_cap.update(new_desired_curvature, self.desired_curvature, lane_min,
+                                                        bool(CS.steeringPressed), blinker_or_lc, float(CS.vEgo), k_per_deg)
 
       # Lane-departure protection: when blinker is OFF, do not let op steer
       # FURTHER into a lane line flagged as departing. The input is
