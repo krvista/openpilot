@@ -22,11 +22,16 @@ assists in the band up no more than 30 %. Kill: LOWCONF_CAP_DPS = 0.0.
 """
 import math
 
+# UNVERIFIED judgment values (report §24): none of the four was fitted. Replaying the exact gate+ramp over the 7-route
+# corpus defuses 7 of the 21 driver-fought swings (the yank mostly lands as the lines COME BACK, lane_min ~0.31 at the
+# swing, after the instantaneous gate has dropped) while slowing 15 legitimate swings; exit hysteresis to 0.5-0.6 or a
+# 2-3 s release only reach 9/24, a 4 deg/s cap 12/24. Adoption is decided on-road by the §23 criteria, not by these.
 LOWCONF_CAP_DPS = 6.0          # steering-angle rate cap while gated (deg/s); 0.0 = off
-LOWCONF_RELEASE_DPS = 30.0     # cap at the end of the release ramp (above any corpus corner-entry rate: p50 ~20 deg/s)
+LOWCONF_RELEASE_DPS = 30.0     # cap at the end of the release ramp (corpus corner-entry request rate p50 ~20 deg/s, yank_probe)
 LOWCONF_RELEASE_S = 1.0        # ramp length after the gate drops
 LOWCONF_LANE_MIN = 0.3         # gate: min(inner-left, inner-right) lane-line prob below this
-LOWCONF_MIN_SPEED = 30.0 / 3.6 # m/s; below this the plan is right where the lines leave the camera (39-2 finding)
+LOWCONF_MIN_SPEED = 30.0 / 3.6 # m/s; 39-2 characterised only < 25 (plan right at intersections) and >= 40; 30-40 is uncharted:
+                               # 27 % of its low-confidence hands-off frames carry a > 6 deg/s request vs 10 % above 40 km/h
 NOMINAL_K_PER_DEG = math.radians(1.0) / (2.95 * 15.0)   # fallback curvature per deg of steer (Ioniq 6 wheelbase x ~steer ratio)
 
 
