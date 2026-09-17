@@ -117,6 +117,7 @@ def mk_controls():
   s.curvature = s.desired_curvature = s.predicted_lat_accel_ratio = 0.0
   s._lat_cmd_lp = s._klane_lp = s._absdc_slow = 0.0
   s.bsm_guard = cd.BsmLaneGuard(0.01)   # Phase 37b (Controls built via __new__)
+  s.lowconf_cap = cd.LowConfRateCap(0.01)   # Phase 41
   s.lane_dropout = False; s.lane_dropout_clear_frames = 0; s.lane_dropout_frames = 0   # Phase 39
   s.lane_dropout_low_frames = 0; s.lane_dropout_armed = True; s.lane_dropout_rearm_frames = 0   # Phase 39-2
   s.lane_dropout_lc_holdoff = 0; s.lane_dropout_hold_k = 0.0; s.lane_dropout_k_hist = collections.deque(maxlen=31)
@@ -240,14 +241,15 @@ class TestLaneDropoutLatch:
     run(s, 1, m); assert not s.lane_dropout                                              # a lane change ends the hold at once
 
   def test_kill_restores_blend(self):
-    old = cd.LANE_DROPOUT_LATCH
+    old = cd.LANE_DROPOUT_LATCH; old_cap = cd.LOWCONF_CAP_DPS
     try:
       cd.LANE_DROPOUT_LATCH = False
+      cd.LOWCONF_CAP_DPS = 0.0     # Phase 41 also acts at lane_prob 0.13 (rate cap); this test is about the 39 kill alone
       s = mk_controls(); run(s, 200, mk_model())
       out = run(s, 300, mk_model_dropout(k_plan=4 * K, lane_prob=0.13))
       assert not s.lane_dropout and abs(out[0]) > 1.2 * K        # blend moves TOWARD the spike (pre-39)
     finally:
-      cd.LANE_DROPOUT_LATCH = old
+      cd.LANE_DROPOUT_LATCH = old; cd.LOWCONF_CAP_DPS = old_cap
 
   def test_max_duration_hands_back_and_no_relatch_until_lines_return(self):
     s = mk_controls(); run(s, 200, mk_model())
