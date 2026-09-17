@@ -81,3 +81,10 @@ python3 collect_check.py <route>--0--qlog.zst <route>--1*--qlog.zst   # 세그�
 4. 학습: `bash training/run.sh ~/wk2-nnlc/train/` (CSV가 이미 로컬에 있으므로 브랜치를 거칠 필요 없음)
 5. 공유(선택, 수십 MB): `train/` 안의 gz·png·txt만 `wk2-nnlc-train` 브랜치에 푸시 → 커버리지·점수 리뷰를 서버에서 진행
 6. rlog는 모델이 검증될 때까지 `~/wk2-nnlc/rlogs`에 두었다가(재추출 대비) 삭제
+
+## 결정 기록 (record-the-why)
+- **2026-09-17 자가 NNLC 학습 중단, 기존 모델 사용** — 이유: 학습에 필요한 데이터(토크 컨트롤러 + NNLC OFF + 가벼운 그립, 5–10시간)를 새로 모아야 하는데, 이 차의 개입 가능 영역(≥54km/h, 횡가속 ≤1.3)이 좁아 기존 모델 대비 기대 개선폭이 작고, 지난 한 달치 로그는 PID 컨트롤러 로그라 사용 불가로 판명됨. 대안으로 남긴 것: 라이브 파라미터 수렴·보존, 그립 개선, 커뮤니티 모델 갱신에 로그 기여.
+- **2026-09 PID 회귀 사고** — NNLC를 끄자 토크 컨트롤러가 아니라 opendbc 기본 PID로 떨어짐(`sunnypilot/selfdrive/car/interfaces.py`: `if nnlc_enabled or enforce_torque`). 원인은 안내 누락("Enforce Torque Lateral Control"도 켜야 함). 결과: 21개 라우트(~15h)가 `pidState`로 기록돼 학습 불가, 토크 경로 학습도 한 달간 정지. 교훈: 설정 변경 후 첫 세그먼트에서 `lateral_control_type`을 확인하는 단계를 A-2에 추가.
+- **토크 시드(1.95/0.175)는 잠정값** — torqued 학습이 서브임계 그립(활성·미개입 프레임의 49%가 40–120 토크)에 오염됐을 수 있어 latAccelFactor가 낮게 편향됐을 가능성. 가벼운 그립으로 2–3회 주행 후 수렴값과 대조해 확정.
+- **SCC-V 리튠 폐기** — 사용자가 SCC-V를 쓰지 않아 브랜치·PR에서 제거(2026-08).
+- **홀드 하한 54km/h(15.0m/s)** — EPS가 13m/s까지 받는다는 upstream 주석은 이 차 실측이 아니며, LKAS 비트 하한(14.5)보다 위여야 램프다운이 유효하므로 보수적으로 시작. 실주행 로그로 63 미만 조향이 확인되면 52까지 확장.
