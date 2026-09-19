@@ -32,6 +32,7 @@ LP_FILTER_CUTOFF_HZ = 1.2
 JERK_LOOKAHEAD_SECONDS = 0.19
 JERK_GAIN = 0.3
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
+RELEASE_BLEND_SECONDS = 0.4  # ramp the error term back in after the driver lets go of the wheel
 VERSION = 1
 
 class LatControlTorque(LatControl):
@@ -47,6 +48,11 @@ class LatControlTorque(LatControl):
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len , maxlen=self.lat_accel_request_buffer_len)
     self.lookahead_frames = int(JERK_LOOKAHEAD_SECONDS / self.dt)
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+
+    self.release_blend_frames = max(int(RELEASE_BLEND_SECONDS / self.dt), 1)
+    self.release_frames_left = 0
+    self.release_blend = 1.0
+    self.steering_pressed_prev = False
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
@@ -67,6 +73,18 @@ class LatControlTorque(LatControl):
 
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
+
+    # Driver-release blend-in. While the driver holds the wheel the P term fights them and the
+    # request swings; on release the controller otherwise snaps to full correction at once
+    # (WK2 drivelog: requested-torque step within 300 ms of release p50 0.16, p90 0.52 of full
+    # scale). Ramp the error term back in over RELEASE_BLEND_SECONDS; feedforward is untouched
+    # and the logged error stays the true error.
+    if self.steering_pressed_prev and not CS.steeringPressed:
+      self.release_frames_left = self.release_blend_frames
+    self.steering_pressed_prev = bool(CS.steeringPressed)
+    self.release_blend = 1.0 - self.release_frames_left / self.release_blend_frames
+    if self.release_frames_left > 0:
+      self.release_frames_left -= 1
     measured_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
     measurement = measured_curvature * CS.vEgo ** 2
     future_desired_lateral_accel = desired_curvature * CS.vEgo ** 2
@@ -98,7 +116,7 @@ class LatControlTorque(LatControl):
       pid_log.error = float(error)
 
       freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
-      output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
+      output_lataccel = self.pid.update(pid_log.error * self.release_blend, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
       output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
 
       # Lateral acceleration torque controller extension updates
