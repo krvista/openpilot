@@ -399,6 +399,10 @@ class SelfdriveD(CruiseHelper):
       # controlsAllowed disagreement disengages immediately, as upstream.
       if (past_boot_grace and (safety_mismatch or self.mismatch_counter >= 200)) or rx_checks_failed:
         self.events.add(EventName.controlsMismatch)
+      elif not past_boot_grace and self.mismatch_counter >= 20:
+        # Graced MADS handshake: openpilot shows engaged while panda still blocks actuation.
+        # Make that gap visible instead of silent (up to 10 s after boot).
+        self.events_sp.add(custom.OnroadEventSP.EventName.controlsMismatchBootGrace)
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
         self.events.add(EventName.relayMalfunction)

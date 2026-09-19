@@ -105,6 +105,14 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.none, AudibleAlert.disengage, 1.),
   },
 
+  EventNameSP.controlsMismatchBootGrace: {
+    ET.WARNING: Alert(
+      "Steering assist initializing",
+      "Waiting for panda controls handshake",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .2),
+  },
+
   EventNameSP.manualLongitudinalRequired: {
     ET.WARNING: Alert(
       "Smart/Adaptive Cruise Control: OFF",
