@@ -64,7 +64,11 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt, Inte
       elif CS.out.vEgo > self.CP.minSteerSpeed:
         lkas_control_bit = True
       elif self.CP.flags & ChryslerFlags.HIGHER_MIN_STEERING_SPEED:
-        if CS.out.vEgo < (self.CP.minSteerSpeed - 3.0):
+        # -3.5 (was -3.0): WK2 drivelogs show the EPS still tracking torque commands down to
+        # minSteerSpeed - 3.0 (corr 0.93, full gain), and opendbc documents assist to 13 m/s
+        # once engaged; 14.0 m/s keeps 1 m/s above that. Lowered together with controlsd's
+        # lateral hold (-3.0) so the wind-down below still runs while the bit is up.
+        if CS.out.vEgo < (self.CP.minSteerSpeed - 3.5):
           lkas_control_bit = False
       elif self.CP.carFingerprint in RAM_CARS:
         if CS.out.vEgo < (self.CP.minSteerSpeed - 0.5):
@@ -84,7 +88,10 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt, Inte
       new_torque = int(round(CC.actuators.torque * self.params.STEER_MAX))
       apply_torque = apply_meas_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorqueEps, self.params)
       if not lkas_active or not lkas_control_bit:
-        if lkas_control_bit and not CS.out.steeringPressed and self.apply_torque_last != 0:
+        # No wind-down while the EPS reports a temporary LKAS fault: it is rejecting torque and
+        # the ramp only prolongs the fault (seen on a WK2 override-induced fault).
+        if lkas_control_bit and not CS.out.steeringPressed and not CS.out.steerFaultTemporary \
+            and self.apply_torque_last != 0:
           # Assist deactivated without driver override (e.g. speed dropped below the
           # min-steer-speed hold window mid-corner): wind torque down at STEER_DELTA_DOWN
           # instead of cutting to zero in a single step. Driver override still cuts

@@ -114,11 +114,15 @@ class Controls(ControlsExt):
     # bit to minSteerSpeed - 3). Cutting latActive exactly at minSteerSpeed removes all
     # steering torque in a single step mid-corner (drivelog: 32/32 cuts at exactly
     # minSteerSpeed, up to saturated torque). Once lateral is active, hold it down to
-    # minSteerSpeed - 2.5 (stays above the carcontroller's LKAS-bit drop at -3.0 so the
+    # minSteerSpeed - 3.0 (stays above the carcontroller's LKAS-bit drop at -3.5 so the
     # wind-down happens while the EPS still accepts torque). Entry is unchanged.
     min_lat_speed = max(self.CP.minSteerSpeed, 0.3)
     if self.lat_active_prev and self.CP.brand == 'chrysler' and self.CP.minSteerSpeed > 10.:
-      min_lat_speed = max(self.CP.minSteerSpeed - 2.5, 0.3)
+      # Widened from -2.5 after 21 WK2 routes on the -2.5 build: 12,121 assisted frames in
+      # [-2.5, 0) with EPS motor torque tracking the command (corr 0.82, gain 80% of
+      # >= minSteerSpeed), and 89 ramp-band frames in [-3.0, -2.5) with corr 0.93 / gain
+      # 100%; the only steer faults coincided with driver override, not low-speed torque.
+      min_lat_speed = max(self.CP.minSteerSpeed - 3.0, 0.3)
     standstill = abs(CS.vEgo) <= min_lat_speed or CS.standstill
 
     # Get which state to use for active lateral control
