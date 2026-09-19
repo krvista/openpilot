@@ -80,7 +80,7 @@ agg_pairs = {"ref": [], "hold": [], "ramp": []}   # (applied, eps)
 agg_cuts = []                                      # (v, pressed, out, samples_to_zero)
 agg_faults = collections.Counter()
 print(f"reading {len(files)} {use} files, {len(by_route)} routes\n")
-hdr = f"{'route':26} {'commit':9} {'ctrl':11} {'active':>7} {'>=min':>6} {'hold':>6} {'ramp':>6} {'<ramp':>6}  {'cuts@min':>8} {'cuts@hold':>9}  faults"
+hdr = f"# cuts@min / cuts@hold = non-override deactivation cuts at the engage speed / at the hold floor\n{'route':26} {'commit':9} {'ctrl':11} {'active':>7} {'>=min':>6} {'hold':>6} {'ramp':>6} {'<ramp':>6}  {'cuts@min':>8} {'cuts@hold':>9}  faults"
 print(hdr)
 for route, segs in sorted(by_route.items()):
     segs.sort()
@@ -159,8 +159,8 @@ for route, segs in sorted(by_route.items()):
                     t_zero = frames[j][0] - frames[i-1][0]
                     break
             agg_cuts.append((v[i-1], bool(pressed[i]), abs(out[i-1]), t_zero))
-            if abs(v[i-1] - ms) < 0.6: cuts_min += 1
-            if abs(v[i-1] - hold_lo) < 0.6: cuts_hold += 1
+            if abs(v[i-1] - ms) < 0.6 and not pressed[i]: cuts_min += 1
+            if abs(v[i-1] - hold_lo) < 0.6 and not pressed[i]: cuts_hold += 1
     nf = int(fT.sum()); npf = int(fP.sum())
     agg.update(dict(active=n_act, ref=int(b_ref.sum()), hold=int(b_hold.sum()), ramp=int(b_ramp.sum()), low=int(b_low.sum()),
                     faultT=nf, faultP=npf, fault_events=fault_events, fault_after_hold=fault_after_hold, cuts_min=cuts_min, cuts_hold=cuts_hold))
