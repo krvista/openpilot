@@ -88,3 +88,15 @@ python3 collect_check.py <route>--0--qlog.zst <route>--1*--qlog.zst   # 세그�
 - **토크 시드(1.95/0.175)는 잠정값** — torqued 학습이 서브임계 그립(활성·미개입 프레임의 49%가 40–120 토크)에 오염됐을 수 있어 latAccelFactor가 낮게 편향됐을 가능성. 가벼운 그립으로 2–3회 주행 후 수렴값과 대조해 확정.
 - **SCC-V 리튠 폐기** — 사용자가 SCC-V를 쓰지 않아 브랜치·PR에서 제거(2026-08).
 - **홀드 하한 54km/h(15.0m/s)** — EPS가 13m/s까지 받는다는 upstream 주석은 이 차 실측이 아니며, LKAS 비트 하한(14.5)보다 위여야 램프다운이 유효하므로 보수적으로 시작. 실주행 로그로 63 미만 조향이 확인되면 52까지 확장.
+
+## I. 54km/h 홀드 픽스 실주행 검증 (컨트롤러 무관 — PID 로그로도 가능)
+홀드 픽스(controlsd 히스테리시스 + carcontroller 램프다운)는 횡제어 컨트롤러 종류와 무관하므로, PID로 기록된 라우트도 검증에 쓸 수 있습니다. qlog만으로 충분합니다(carOutput 10Hz 포함).
+```bash
+# rlog가 PC에 남아 있으면
+NNLC_CEREAL_DIR=~/sp-cereal/cereal python hold_verify.py ~/wk2-nnlc/rlogs
+# 지웠으면 장치에서 qlog만 받기 (~0.5MB/세그)
+rsync -avz --include='*/' --include='qlog.zst' --exclude='*' comma@<장치IP>:/data/media/0/realdata/ ~/wk2-nnlc/qlogs/
+NNLC_CEREAL_DIR=~/sp-cereal/cereal python hold_verify.py ~/wk2-nnlc/qlogs
+```
+판정 항목: ① 63km/h 미만 활성 프레임 존재(홀드 동작) ② 홀드 창에서 EPS 모터토크가 명령을 따르는지(EPS 수용) ③ 램프 밴드 [52,54)에서도 EPS가 반응하는지(52 확장의 하드웨어 근거) ④ 63km/h 비개입 컷 0건 ⑤ 조향 폴트 0건.
+52km/h 확장은 홀드 하한을 LKAS 비트 하한(14.5m/s)과 같게 두는 것이라 **램프다운 창이 사라집니다** — ③이 PASS이고 ⑤가 0일 때만, 비트 히스테리시스와 함께 내리는 방식으로 검토.
