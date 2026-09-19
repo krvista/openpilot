@@ -4,8 +4,9 @@ from rlogs or qlogs. Controller-agnostic: works on pidState and torqueState logs
 
 Reports per route and in aggregate:
   - build commit (segment-0 initData)
-  - lateral-active frames by speed band: >=min, hold window [min-2.5, min), ramp band
-    [min-3.0, min-2.5) (LKAS bit still up, latActive already off), < min-3.0
+  - lateral-active frames by speed band: >=min, hold window [min-H, min), ramp band
+    [min-B, min-H) (LKAS bit still up, latActive already off), < min-B
+    H/B = --hold-margin/--bit-margin: 2.5/3.0 on d67c5fe, 3.0/3.5 on the 52 km/h build
   - EPS acceptance below the engage speed: EPS motor torque response to the applied
     command in the hold window and in the ramp band vs. the >=min reference band
   - deactivation cuts (active->inactive with |controller output| > 0.10) by speed band,
@@ -25,6 +26,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("paths", nargs="+")
 ap.add_argument("--type", choices=["auto", "rlog", "qlog"], default="auto")
 ap.add_argument("--min-steer", type=float, default=None, help="override minSteerSpeed (m/s); default from carParams or 17.5")
+ap.add_argument("--hold-margin", type=float, default=2.5, help="controlsd hold floor = minSteerSpeed - this (m/s); 2.5 on d67c5fe, 3.0 on the 52 km/h build")
+ap.add_argument("--bit-margin", type=float, default=3.0, help="LKAS-bit drop = minSteerSpeed - this (m/s); 3.0 on d67c5fe, 3.5 on the 52 km/h build")
 a = ap.parse_args()
 
 # ---- reader ---------------------------------------------------------------
@@ -134,7 +137,7 @@ for route, segs in sorted(by_route.items()):
             print(f"  partial {os.path.basename(os.path.dirname(fn)) or os.path.basename(fn)}: {str(ex)[:60]}")
             continue
     ms = min_steer or 17.5
-    hold_lo, ramp_lo = ms - 2.5, ms - 3.0
+    hold_lo, ramp_lo = ms - a.hold_margin, ms - a.bit_margin
     if not frames:
         print(f"{route:26} {commit:9} {'no frames':11}"); continue
     F = np.array([(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8]) for f in frames], dtype=float)
@@ -172,7 +175,7 @@ for route, segs in sorted(by_route.items()):
 ms = a.min_steer or 17.5
 print("\n=== AGGREGATE ===")
 A = agg
-print(f"active frames: {A['active']}  |  >= {ms*3.6:.0f}km/h: {A['ref']}  hold[{(ms-2.5)*3.6:.0f},{ms*3.6:.0f}): {A['hold']}  ramp-band: {A['ramp']}  below: {A['low']}")
+print(f"active frames: {A['active']}  |  >= {ms*3.6:.0f}km/h: {A['ref']}  hold[{(ms-a.hold_margin)*3.6:.0f},{ms*3.6:.0f}): {A['hold']}  ramp-band: {A['ramp']}  below: {A['low']}")
 def resp(key):
     P = np.array(agg_pairs[key])
     if len(P) < 30:
@@ -189,9 +192,9 @@ if C:
     c = np.array([(x[0], x[1], x[2], x[3]) for x in C], dtype=float)
     np_ = c[:, 1] == 0
     at_min = np.abs(c[:, 0] - ms) < 0.6
-    at_hold = np.abs(c[:, 0] - (ms - 2.5)) < 0.6
+    at_hold = np.abs(c[:, 0] - (ms - a.hold_margin)) < 0.6
     print(f"cuts |out|>0.10: {len(c)}  not-pressed: {int(np_.sum())}  at {ms*3.6:.0f}km/h not-pressed: {int((at_min & np_).sum())}  "
-          f"at hold floor ({(ms-2.5)*3.6:.0f}km/h) not-pressed: {int((at_hold & np_).sum())}")
+          f"at hold floor ({(ms-a.hold_margin)*3.6:.0f}km/h) not-pressed: {int((at_hold & np_).sum())}")
     wd = c[np_ & (c[:, 2] > 0.2), 3]
     if len(wd):
         print(f"wind-down after not-pressed cuts with |out|>0.2: time until applied torque ~0: median={np.median(wd):.2f}s p90={np.percentile(wd,90):.2f}s "
@@ -208,7 +211,7 @@ else:
     print("[N/A ] EPS acceptance in hold window: insufficient data")
 if R["ramp"]:
     ok = R["ramp"][1] > 0.5 and R["ref"] and R["ramp"][2] > 0.5 * R["ref"][2]
-    print(f"[{'PASS' if ok else 'WEAK'}] EPS still responds in ramp band [{(ms-3.0)*3.6:.0f},{(ms-2.5)*3.6:.0f})km/h: corr {R['ramp'][1]:.2f} gain {R['ramp'][2]:.1f} -> {'52 km/h extension has hardware support' if ok else 'no evidence for extending below the hold floor'}")
+    print(f"[{'PASS' if ok else 'WEAK'}] EPS still responds in ramp band [{(ms-a.bit_margin)*3.6:.0f},{(ms-a.hold_margin)*3.6:.0f})km/h: corr {R['ramp'][1]:.2f} gain {R['ramp'][2]:.1f} -> {'52 km/h extension has hardware support' if ok else 'no evidence for extending below the hold floor'}")
 else:
     print("[N/A ] ramp-band EPS response: no data (needs non-override deactivations while decelerating)")
 print(f"[{'PASS' if A['cuts_min']==0 else 'FAIL'}] non-override cuts at {ms*3.6:.0f}km/h: {A['cuts_min']}")
