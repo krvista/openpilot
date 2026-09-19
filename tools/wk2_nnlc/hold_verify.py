@@ -95,39 +95,44 @@ for route, segs in sorted(by_route.items()):
             msgs = read_log(fn)
         except Exception as ex:
             print(f"  skip {os.path.basename(fn)}: {str(ex)[:60]}"); continue
-        for m in msgs:
-            w = m.which()
-            if w == "initData" and seg == 0:
-                commit = str(m.initData.gitCommit)[:9]
-            elif w == "carParams" and a.min_steer is None:
-                min_steer = float(m.carParams.minSteerSpeed) or 17.5
-            elif w == "carState":
-                cs = m.carState
-                st["v"] = cs.vEgo; st["eps"] = cs.steeringTorqueEps; st["pressed"] = cs.steeringPressed
-                st["fT"] = cs.steerFaultTemporary; st["fP"] = cs.steerFaultPermanent
-            elif w == "carOutput":
-                st["applied"] = m.carOutput.actuatorsOutput.torque
-            elif w == "onroadEvents":
-                t = m.logMonoTime / 1e9
-                for e in m.onroadEvents:
-                    if str(e.name) in STEER_FAULT_EVENTS:
-                        fault_events += 1
-                        if t - st["hold_seen_t"] < 10.0:
-                            fault_after_hold += 1
-            elif w == "controlsState":
-                lcs = m.controlsState.lateralControlState
-                kind = lcs.which()
-                ctrl_types[kind] += 1
-                if kind not in ("torqueState", "pidState"):
-                    continue
-                s_ = getattr(lcs, kind)
-                t = m.logMonoTime / 1e9
-                ms = min_steer or 17.5
-                if s_.active and st["v"] < ms:
-                    st["hold_seen_t"] = t
-                frames.append((t, bool(s_.active), float(s_.output), st["v"], st["eps"],
-                               st["applied"] if st["applied"] is not None else float("nan"),
-                               bool(st["pressed"]), bool(st["fT"]), bool(st["fP"])))
+        try:
+            for m in msgs:
+                w = m.which()
+                if w == "initData" and seg == 0:
+                    commit = str(m.initData.gitCommit)[:9]
+                elif w == "carParams" and a.min_steer is None:
+                    min_steer = float(m.carParams.minSteerSpeed) or 17.5
+                elif w == "carState":
+                    cs = m.carState
+                    st["v"] = cs.vEgo; st["eps"] = cs.steeringTorqueEps; st["pressed"] = cs.steeringPressed
+                    st["fT"] = cs.steerFaultTemporary; st["fP"] = cs.steerFaultPermanent
+                elif w == "carOutput":
+                    st["applied"] = m.carOutput.actuatorsOutput.torque
+                elif w == "onroadEvents":
+                    t = m.logMonoTime / 1e9
+                    for e in m.onroadEvents:
+                        if str(e.name) in STEER_FAULT_EVENTS:
+                            fault_events += 1
+                            if t - st["hold_seen_t"] < 10.0:
+                                fault_after_hold += 1
+                elif w == "controlsState":
+                    lcs = m.controlsState.lateralControlState
+                    kind = lcs.which()
+                    ctrl_types[kind] += 1
+                    if kind not in ("torqueState", "pidState"):
+                        continue
+                    s_ = getattr(lcs, kind)
+                    t = m.logMonoTime / 1e9
+                    ms = min_steer or 17.5
+                    if s_.active and st["v"] < ms:
+                        st["hold_seen_t"] = t
+                    frames.append((t, bool(s_.active), float(s_.output), st["v"], st["eps"],
+                                   st["applied"] if st["applied"] is not None else float("nan"),
+                                   bool(st["pressed"]), bool(st["fT"]), bool(st["fP"])))
+        except Exception as ex:
+            # truncated segment (ignition off mid-write): keep what was parsed, move on
+            print(f"  partial {os.path.basename(os.path.dirname(fn)) or os.path.basename(fn)}: {str(ex)[:60]}")
+            continue
     ms = min_steer or 17.5
     hold_lo, ramp_lo = ms - 2.5, ms - 3.0
     if not frames:
