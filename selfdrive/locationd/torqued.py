@@ -32,6 +32,7 @@ MAX_FILTER_DECAY = 250
 LAT_ACC_THRESHOLD = 1
 STEER_BUCKET_BOUNDS = [(-0.5, -0.3), (-0.3, -0.2), (-0.2, -0.1), (-0.1, 0), (0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.5)]
 MIN_BUCKET_POINTS = np.array([100, 300, 500, 500, 500, 500, 300, 100])
+DRIVER_TORQUE_LEARN_MAX = 40.  # column-torque units, see handle_log
 MIN_ENGAGE_BUFFER = 2  # secs
 
 VERSION = 1  # bump this to invalidate old parameter caches
@@ -181,7 +182,11 @@ class TorqueEstimator(ParameterEstimator, TorqueEstimatorExt):
       self.raw_points["carState_t"].append(t + self.lag)
       # TODO: check if high aEgo affects resulting lateral accel
       self.raw_points["vego"].append(msg.vEgo)
-      self.raw_points["steer_override"].append(msg.steeringPressed)
+      # Also treat sub-threshold hand torque as an override for learning purposes. On the WK2 the
+      # steeringPressed threshold is 120 column-torque units and 49% of active, not-pressed frames
+      # carried 40-120 units of driver torque, which credits the driver's assist to the EPS command
+      # and biases latAccelFactor low. 40 = one third of that threshold (column-torque units).
+      self.raw_points["steer_override"].append(msg.steeringPressed or abs(msg.steeringTorque) > DRIVER_TORQUE_LEARN_MAX)
     elif which == "liveCalibration":
       self.calibrator.feed_live_calib(msg)
     elif which == "liveDelay":
