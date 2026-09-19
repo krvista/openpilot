@@ -179,9 +179,26 @@ class UIStateSP:
     CP = self.CP
 
     if CP is not None:
-      if self.params.get_bool("EnforceTorqueControl") and self.params.get_bool("NeuralNetworkLateralControl"):
-        self.params.put_bool("EnforceTorqueControl", False, block=True)
-        self.params.put_bool("NeuralNetworkLateralControl", False, block=True)
+      nnlc = self.params.get_bool("NeuralNetworkLateralControl")
+      enforce = self.params.get_bool("EnforceTorqueControl")
+      nnlc_prev = getattr(self, "_nnlc_prev", nnlc)
+      enforce_prev = getattr(self, "_enforce_prev", enforce)
+      if nnlc and enforce:
+        # Mutually exclusive torque switches: keep the one that was just switched on. The old
+        # rule cleared both, which on a stock-PID car (Chrysler/Jeep) silently dropped the
+        # lateral controller to PID.
+        if enforce_prev and not nnlc_prev:
+          self.params.put_bool("EnforceTorqueControl", False, block=True)
+          enforce = False
+        else:
+          self.params.put_bool("NeuralNetworkLateralControl", False, block=True)
+          nnlc = False
+      if CP.brand == 'chrysler' and not nnlc and not enforce:
+        # opendbc ships Chrysler/Jeep with a PID lateral tune; sunnypilot only switches to the
+        # torque controller when NNLC or Enforce Torque is on. Never leave both off.
+        self.params.put_bool("EnforceTorqueControl", True, block=True)
+        enforce = True
+      self._nnlc_prev, self._enforce_prev = nnlc, enforce
 
       # Angle steering: no torque-based lateral controls
       if CP.steerControlType == car.CarParams.SteerControlType.angle:
