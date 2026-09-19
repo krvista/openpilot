@@ -23,7 +23,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarParams", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BYTES}},
     {"CarParamsCache", {CLEAR_ON_MANAGER_START, BYTES}},
     {"CarParamsPersistent", {PERSISTENT, BYTES}},
-    {"CarParamsPrevRoute", {PERSISTENT, BYTES}},
+    {"CarParamsPrevRoute", {PERSISTENT | BACKUP, BYTES}},  // torqued/paramsd validate their caches against this; back it up with them
     {"CompletedTrainingVersion", {PERSISTENT, STRING, "0"}},
     {"ControlsReady", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},
     {"CurrentBootlog", {PERSISTENT, STRING}},
@@ -79,8 +79,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LastUpdateUptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
     {"LiveDelay", {PERSISTENT | BACKUP, BYTES}},
     {"LiveParameters", {PERSISTENT, JSON}},
-    {"LiveParametersV2", {PERSISTENT, BYTES}},
-    {"LiveTorqueParameters", {PERSISTENT | DONT_LOG, BYTES}},
+    {"LiveParametersV2", {PERSISTENT | BACKUP, BYTES}},  // fingerprint-checked by paramsd before use
+    {"LiveTorqueParameters", {PERSISTENT | DONT_LOG | BACKUP, BYTES}},  // restore key (fingerprint+version) checked by torqued
     {"LocationFilterInitialState", {PERSISTENT, BYTES}},
     {"LateralManeuverMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"LongitudinalManeuverMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
