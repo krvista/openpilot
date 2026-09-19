@@ -22,6 +22,7 @@ MAX_VOLUME = 1.0
 MIN_VOLUME = 0.1
 ALERT_RAMP_TIME = 4 # seconds to ramp to max volume for warningImmediate
 SELFDRIVE_STATE_TIMEOUT = 5 # 5 seconds
+MAX_STREAM_FAILURES = 12  # ~1-7 min of silent retries (get_stream retries up to 30 s each) before surfacing it
 FILTER_DT = 1. / (micd.SAMPLE_RATE / micd.FFT_SAMPLES)
 
 AMBIENT_DB = 24 # DB where MIN_VOLUME is applied
@@ -172,9 +173,11 @@ class Soundd(QuietMode):
     # Losing soundd silences audible alerts (warning chimes, takeover prompts)
     # — a UX/safety regression that can mask other safety alerts. Keep the
     # daemon alive across stream failures.
+    consecutive_failures = 0
     while True:
       try:
         with self.get_stream(sd) as stream:
+          consecutive_failures = 0
           rk = Ratekeeper(20)
 
           cloudlog.info(f"soundd stream started: {stream.samplerate=} {stream.channels=} {stream.dtype=} {stream.device=}, {stream.blocksize=}")
@@ -200,7 +203,13 @@ class Soundd(QuietMode):
 
             assert stream.active
       except Exception:
-        cloudlog.exception("soundd stream failed; restarting after backoff")
+        consecutive_failures += 1
+        cloudlog.exception(f"soundd stream failed; restarting after backoff ({consecutive_failures}/{MAX_STREAM_FAILURES})")
+        if consecutive_failures >= MAX_STREAM_FAILURES:
+          # Audible alerts have been gone for minutes with no way to tell the driver. Exit so the
+          # manager reports processNotRunning and selfdrived raises a visible alert; the manager
+          # relaunches soundd and the recovery loop resumes.
+          raise
         time.sleep(5)
 
 
