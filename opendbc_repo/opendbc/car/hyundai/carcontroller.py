@@ -295,6 +295,9 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
   # arm level 100 ratcheted hands-off authority down 8%).
   if rate_dn_floor > 0.0:
     rate_dn = max(rate_dn, rate_dn_floor)
+  # Phase 42b: a real shove empties authority within ~0.1 s (see values.py ACIGAIN_SHOVE_*)
+  if CarControllerParams.ACIGAIN_SHOVE_RATE_DN > 0.0 and abs(steering_torque) >= CarControllerParams.ACIGAIN_SHOVE_NM:
+    rate_dn = max(rate_dn, CarControllerParams.ACIGAIN_SHOVE_RATE_DN)
   # Phase 5c B3 (commit 41a16ad): when |steering_error| > 0.5°, climb up
   # to 10× faster so ACIGain recovers from a brief grip event within
   # ~250 ms instead of 2.5 s. Below 0.5° rate_up matches the sunnypilot
@@ -493,6 +496,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.crawl_still_on = False
     self.driver_pressed_cnt = 0
     self.driver_pressed = False
+    self.anchor_hold_left = 0      # Phase 42c: frames of wheel-anchor hold left after a pressed-arm anchor ends
+    self.anchor_hold_low = 0       # Phase 42c: consecutive frames with driver_tq below ANCHOR_HOLD_NM during the hold
     # Phase 26b (review fix): previous frame's effective_lat_active — the
     # hold compensation only applies while op was actually actuating.
     self.prev_eff_lat_active = False
@@ -1141,6 +1146,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # recency, produced 129 context-free hands-off dumps in corpus replay.
     if heavy_grip_anchor and (self.driver_pressed or bool(CS.out.steeringPressed)):
       self.anchor_recent_frames = CarControllerParams.REANCHOR_RECENT_FRAMES
+      # Phase 42c: arm the post-press anchor hold (see values.py ANCHOR_HOLD_*)
+      self.anchor_hold_left = CarControllerParams.ANCHOR_HOLD_FRAMES
+      self.anchor_hold_low = 0
+    elif self.anchor_hold_left > 0:
+      self.anchor_hold_low = self.anchor_hold_low + 1 if driver_tq < CarControllerParams.ANCHOR_HOLD_NM else 0
+      if self.anchor_hold_low >= CarControllerParams.ANCHOR_HOLD_LOW_FRAMES:
+        self.anchor_hold_left = 0               # a real let-go: hand the release to the Phase 28 re-anchor path
+      else:
+        self.anchor_hold_left -= 1
+        heavy_grip_anchor = True                # keep apply on the wheel through the flicker
 
     # Low-speed camera passthrough latch (kept-feature #11).
     # Phase 13a: the latch used to key on `hands_off` (override_factor <= 0.5),

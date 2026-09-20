@@ -672,9 +672,11 @@ class TestPhase35GripAtSpeed:
     assert g[29] <= 0.10, f"gain after 0.3 s of grip = {g[29]:.3f}"   # ~0.03/frame drop
     assert min(g) <= 0.03 + 0.004 + 1e-6                           # floor 0.03 (0.004 quantizer)
 
-  def test_city_grip_unchanged(self):
+  def test_city_grip_floor_kept_and_fast_since_42a(self):
+    # Phase 42a extends the 35a descent floor to city speed (report §25): the 40 km/h drop is now fast as well;
+    # the city FLOOR (0.08) and full-yield point are still the 35a values.
     g0, g = self._grip(v=11.0, frames=60)                          # 40 km/h (schedule start; below = passthrough in harness)
-    assert g[29] > 0.15, "city drop rate must keep the slow legacy curve"
+    assert g[29] <= 0.15, "42a: city drop must be fast (35a floor 0.03/frame now applies)"
     assert min(g) >= 0.08 - 1e-6                                   # floor 0.08 kept
 
   def test_resting_hand_keeps_slow_curve_at_speed(self):
