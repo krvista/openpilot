@@ -622,3 +622,10 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
 2. **강한 밀기 즉시 양보.** raw |tq| ≥ 700 Nm 이면 rate_dn 0.10/프레임(0.1 s 안 바닥). 1684 Nm 밀기에 0.34 → 0.15 가 0.05 s 걸린 것은 이미 빠르지만, 1 의 바닥 위에 상한 한 단으로 두면 이 구간의 잔여 저항이 사라진다. 효과 작음, 1 뒤에.
 3. **파지 깜빡임 앵커 유지.** 3457.10 에서 pressed 가 한 프레임 꺼지자 요청이 플랜(+2.6)으로 되돌아가 이득 0.19 로 다시 저항했다. driver_pressed 해제 뒤 0.3 s 동안 |driver_tq| ≥ 150 이면 요청을 핸들에 계속 앵커. 예측 수치 없음(사례 1건), 구현 전 corner/yank npz 로 빈도 산출 필요.
 4. 41 / 41-2: 유지. 라우트 22 감시.
+
+**적용 (09-20, Phase 42a/42b/42c).** 사용자 결정: 1–3 모두 적용.
+- 42a `ACIGAIN_GRIP_RATE_DN_FLOOR_V` [0.0, 0.03] → [0.03, 0.03] (게이트 불변: 디바운스 파지 또는 driver_tq ≥ 160). 35a 의 도시 테스트(test_driver_domain "city unchanged")는 42a 동작으로 갱신.
+- 42b `ACIGAIN_SHOVE_NM` 700 driver-Nm / `ACIGAIN_SHOVE_RATE_DN` 0.10 — compute_torque_reduction_gain 의 rate_dn 상한 한 단.
+- 42c `ANCHOR_HOLD_FRAMES` 30 / `ANCHOR_HOLD_NM` 150 / `ANCHOR_HOLD_LOW_FRAMES` 10 — 파지 계열 앵커가 끝난 뒤 heavy_grip_anchor 를 최대 0.3 s 유지, driver_tq < 150 이 0.1 s 이어지면 해제(Phase 28 release re-anchor 경로는 그대로).
+- 테스트 phase_tests/test_phase42.py 14건(42a 6 · 42b 3 · 42c 5) 포함 322건 통과, ruff F 통과. 시뮬: 35 km/h 450 Nm 파지 후 이득 ≤0.20 도달 0.49 → 0.14 s, 얹은 손(180 raw) 궤적은 kill 테이블과 동일, 고속(70 km/h) 동일.
+- 채택 기준(다음 5 라우트, corner npz 로 산출): 도시 20–45 km/h 파지 시작(≥400 Nm, 이득 ≥0.4) → 이득 ≤0.20 도달 p50 ≤ 0.3 s(기준선 0.80), 2 s 내 미도달 ≤ 10 %(기준선 36 %); 잡기/분·놓은 뒤 갭·스윙 p95 는 9월 기준선 범위 유지; grip_conflict 프로브의 "요청이 운전자 방향으로 앞섬" 0건 유지.

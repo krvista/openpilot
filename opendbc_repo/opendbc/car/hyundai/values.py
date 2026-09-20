@@ -403,7 +403,18 @@ class CarControllerParams:
   ACIGAIN_GRIP_FULL35_SPEEDS_KPH  = [40.0, 60.0, 120.0]
   ACIGAIN_GRIP_FULL35_V           = [110.0, 80.0, 80.0]
   ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH = [40.0, 60.0]
-  ACIGAIN_GRIP_RATE_DN_FLOOR_V    = [0.0, 0.03]
+  # Phase 42a (i6nv3 0x25 Euljiro left turn, report §25): 35a's fast descent was scoped to >= 60 km/h ("city untouched")
+  # — a scope decision, not a measured harm. City-speed press onsets (20-45 km/h, >= 400 Nm, gain >= 0.4, n=287) took
+  # p50 0.80 s to fall below 0.20 (36 % never within 2 s) vs p50 0.16 s at >= 60 km/h (n=115); in the Euljiro turn-in
+  # op held a straight request at 0.79 -> 0.15 for 0.6 s while the driver pushed to 1684 Nm and the wheel jumped
+  # 12.9 -> 5.3 -> 16 deg. Same gate as 35a (debounced press or driver_tq >= GATE_NM 160), so a resting hand
+  # (60-180 raw) never trips it. Sim (harness, 35 km/h, 450 Nm press): floor reached 0.49 -> 0.14 s. Kill: [0.0, 0.03].
+  ACIGAIN_GRIP_RATE_DN_FLOOR_V    = [0.03, 0.03]
+  # Phase 42b: a real shove (driver_tq >= SHOVE_NM) drops authority to the floor within ~0.1 s. The rate_dn table
+  # [0,300,700]->[0.004,0.01,0.04] already gives 0.04/frame at 700; this caps the residual resistance above it.
+  # Kill: ACIGAIN_SHOVE_RATE_DN = 0.0.
+  ACIGAIN_SHOVE_NM                = 700.0    # driver-torque domain
+  ACIGAIN_SHOVE_RATE_DN           = 0.10     # gain quanta per frame (0.65 -> 0.08 in 6 frames)
   # The fast-descent floor must NOT engage on a resting hand: hands-off
   # driver_tq at speed is p90 ~119 / p95 ~147 and crosses 100 about 3x per
   # second, so a gate at the arm level (100) ran a 7.5x asymmetric ratchet
@@ -829,6 +840,15 @@ class CarControllerParams:
   #    released grip starts unboosted; hands-off drift recovery elsewhere
   #    keeps its boost (the arm-based v1 gate suppressed 14.6% of hands-off
   #    boost frames — rejected in review).
+  # Phase 42c (0x25 Euljiro t=3457.10): the EPS pressed flag and the debounced driver_pressed both dropped for ~10
+  # frames mid turn-in (raw torque 20 Nm for one sample, then 338/481), the pressed anchor released and the request
+  # snapped from the wheel (+6) back to the plan (+2.6) with gain 0.19 — resistance again, before the anchor
+  # re-engaged. After a PRESSED-arm anchor ends, keep apply anchored to the wheel for up to ANCHOR_HOLD_FRAMES; the
+  # hold ends early once driver_tq has been below ANCHOR_HOLD_NM for ANCHOR_HOLD_LOW_FRAMES consecutive frames (a
+  # real let-go), so the Phase 28 release re-anchor still sees a clean release. Kill: ANCHOR_HOLD_FRAMES = 0.
+  ANCHOR_HOLD_FRAMES       = 30       # 0.3 s
+  ANCHOR_HOLD_NM           = 150.0    # driver-torque domain
+  ANCHOR_HOLD_LOW_FRAMES   = 10       # 0.1 s below ANCHOR_HOLD_NM ends the hold
   REANCHOR_ARM_NM          = 100.0
   REANCHOR_ARM_FRAMES      = 30
   REANCHOR_ARM_CAP_FRAMES  = 100
