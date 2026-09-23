@@ -413,6 +413,13 @@ class CarControllerParams:
   # Phase 42b: a real shove (driver_tq >= SHOVE_NM) drops authority to the floor within ~0.1 s. The rate_dn table
   # [0,300,700]->[0.004,0.01,0.04] already gives 0.04/frame at 700; this caps the residual resistance above it.
   # Kill: ACIGAIN_SHOVE_RATE_DN = 0.0.
+  # Phase 43a (i6nv3 0x26-0x2c, report §27): 42a regressed city-speed wheel shake. The fast-descent floor fires on
+  # real_grip OR driver_tq >= GATE_NM 160; at city speed a RESTING hand crosses 160 driver-Nm (hold_comp is small
+  # there), so the floor pumped authority down/up: hands-off authority windows with fast-descent frames 0 % -> 31 %
+  # at 20-40 km/h, and those windows shake (1.5-4 Hz wheel RMS >= 0.3 deg) 32 % vs 7 % without — overall 9-12 % ->
+  # 14 % (5-60 km/h all rose). Split the arms: a debounced press keeps the 42a table (the Euljiro case), the torque
+  # arm goes back to the 35a schedule exactly (no floor below 40, ramp to 0.03 at 60). Kill: = RATE_DN_FLOOR_V.
+  ACIGAIN_GRIP_RATE_DN_TQ_ARM_FLOOR_V = [0.0, 0.03]
   ACIGAIN_SHOVE_NM                = 700.0    # driver-torque domain
   ACIGAIN_SHOVE_RATE_DN           = 0.10     # gain quanta per frame (0.65 -> 0.08 in 6 frames)
   # The fast-descent floor must NOT engage on a resting hand: hands-off
@@ -847,6 +854,15 @@ class CarControllerParams:
   # hold ends early once driver_tq has been below ANCHOR_HOLD_NM for ANCHOR_HOLD_LOW_FRAMES consecutive frames (a
   # real let-go), so the Phase 28 release re-anchor still sees a clean release. Kill: ANCHOR_HOLD_FRAMES = 0.
   ANCHOR_HOLD_FRAMES       = 30       # 0.3 s
+  # Phase 43b (0x26-0x2c, report §27): hard acceleration by the driver. At >= 20 km/h with the accelerator pressed
+  # and aEgo >= 1.5 m/s^2 the driver press rate was 16-37 /min vs 2-11 /min cruising (70 onsets >= 30 km/h: 93 %
+  # with the pedal down, 69 % with a blinker, wheel excursion p50 6.6 vs 3.2 deg), while hands-off authority stayed
+  # at 0.5-0.72 — the driver is overtaking / merging and op's lane-keep torque is in the way. Scale the authority
+  # ceiling by ACCEL_YIELD_SCALE_V over ACCEL_YIELD_A_V while the pedal is down (the normal gain slew rates apply, so
+  # it fades in/out over ~0.5-1 s). Blinker/grip yields still apply on top. Kill: ACCEL_YIELD_SCALE_V = [1.0, 1.0].
+  ACCEL_YIELD_MIN_KPH      = 20.0
+  ACCEL_YIELD_A_V          = [1.5, 3.0]     # m/s^2
+  ACCEL_YIELD_SCALE_V      = [1.0, 0.5]
   ANCHOR_HOLD_NM           = 150.0    # driver-torque domain
   ANCHOR_HOLD_LOW_FRAMES   = 10       # 0.1 s below ANCHOR_HOLD_NM ends the hold
   REANCHOR_ARM_NM          = 100.0
