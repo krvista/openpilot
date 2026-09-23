@@ -135,7 +135,7 @@ def compute_hold_torque(v_ego, lat_acc):
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
                                   post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0, rate_up_cap=0.04,
-                                  city_release=False):
+                                  city_release=False, ceiling_scale=1.0):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -249,7 +249,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # release had anchor_recent = 103).
     big_err_taper = _interp(abs(steering_error), [2.5, 4.0], [1.0, 0.0]) if post_grip else 1.0
     error_mult = 1.0 if suppress_error_boost else (1.0 + (error_mult_raw - 1.0) * torque_suppress * big_err_taper)
-    dynamic_ceiling = min(1.0, base_ceiling * error_mult)
+    dynamic_ceiling = min(1.0, base_ceiling * error_mult) * ceiling_scale   # Phase 43b: accel yield (1.0 = off)
     # Phase 5d A2 (commit 4a4d29b): when the driver signals intent with
     # the blinker, force the MDPS ceiling down so a light-grip lane
     # change does not have to fight op torque. 0.45 mirrors the
@@ -1791,6 +1791,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                 CarControllerParams.ACIGAIN_GRIP_FULL35_V))
       grip_rate_dn_floor = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH,
                                            CarControllerParams.ACIGAIN_GRIP_RATE_DN_FLOOR_V))
+      grip_rate_dn_floor_tq = float(_interp(v_kph_aci, CarControllerParams.ACIGAIN_GRIP_RATE_DN_SPEEDS_KPH,
+                                              CarControllerParams.ACIGAIN_GRIP_RATE_DN_TQ_ARM_FLOOR_V))
+      # Phase 43b: driver hard acceleration -> lighter lane-keep authority (see values.py ACCEL_YIELD_*)
+      a_ego_safe = float(CS.out.aEgo) if math.isfinite(float(CS.out.aEgo)) else 0.0
+      accel_yield = (float(_interp(a_ego_safe, CarControllerParams.ACCEL_YIELD_A_V, CarControllerParams.ACCEL_YIELD_SCALE_V))
+                     if (bool(CS.out.gasPressed) and v_kph_aci >= CarControllerParams.ACCEL_YIELD_MIN_KPH) else 1.0)
       # Verification round (35c): "recently pinned" alone cannot tell a fresh
       # chase from a stale command when an INVISIBLE touch (driver_tq below
       # the arm level) let the arm decay so the one-shot could not fire while
@@ -1851,8 +1857,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         grip_full=(gr_full if real_grip else ho_full),
         grip_floor=(gr_floor if real_grip else ho_floor),
         # Phase 35a: fast descent only on grip evidence (see values.py GATE_NM)
-        rate_dn_floor=(grip_rate_dn_floor if (real_grip or driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM)
-                       else 0.0),
+        # Phase 43a: a debounced press gets the 42a table; the torque arm keeps the 35a schedule (resting-hand pumping)
+        rate_dn_floor=(grip_rate_dn_floor if real_grip else
+                       (grip_rate_dn_floor_tq if driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM else 0.0)),
+        ceiling_scale=accel_yield,                   # Phase 43b
         curve_deg=self.curve_meas_lp,                # Phase 36
         # Phase 37a: speed-tapered rise cap, one step tighter in rain; 37c:
         # yield-curve start by speed, pinned back to the city value in rain
