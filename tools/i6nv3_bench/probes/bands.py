@@ -1,6 +1,6 @@
 """Whole speed range report (standstill -> highway) + acceleration split, on route npz files (route_extract or corner)."""
 import numpy as np, glob, sys
-sys.path.insert(0, sys.argv[0].rsplit('/', 1)[0]); from shake2 import load, windows
+sys.path.insert(0, sys.argv[0].rsplit('/', 1)[0]); from shake2 import load
 BANDS = [(0, 3), (3, 10), (10, 20), (20, 30), (30, 45), (45, 60), (60, 80), (80, 100), (100, 200)]
 def per_band(fs, accel_split=False):
   rows = {}
