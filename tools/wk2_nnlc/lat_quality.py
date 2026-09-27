@@ -69,6 +69,10 @@ for route, segs in sorted(by_route.items()):
                     for e in m.onroadEvents:
                         nme = str(e.name)
                         if nme in EV: ev[nme] += 1
+                elif w == "onroadEventsSP":
+                    for e in m.onroadEventsSP.events:
+                        nme = "SP:" + str(e.name)
+                        if "controlsMismatchBootGrace" in nme or "manualSteering" in nme: ev[nme] += 1
                 elif w == "liveTorqueParameters":
                     p = m.liveTorqueParameters
                     ltp_last = (round(p.latAccelFactorFiltered, 3), round(p.frictionCoefficientFiltered, 4), int(p.totalBucketPoints), bool(p.useParams))

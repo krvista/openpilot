@@ -48,7 +48,7 @@ def route_of(path):
     m = re.search(r"([0-9a-f]+--[0-9a-f]+)--\d+", name)
     return m.group(1) if m else name
 
-per_route = collections.defaultdict(lambda: {"act": [], "man": [], "width": [], "sign": [], "yaw": [], "aoff": [], "laoff": [], "commit": "-", "n": 0})
+per_route = collections.defaultdict(lambda: {"act": [], "man": [], "width": [], "sign": [], "yaw": [], "aoff": [], "laoff": [], "commit": "-", "camoff": "?", "n": 0})
 for fn in files:
     r = per_route[route_of(fn)]
     st = dict(v=0.0, active=False, curv=0.0)
@@ -57,6 +57,9 @@ for fn in files:
             w = m.which()
             if w == "initData":
                 r["commit"] = str(m.initData.gitCommit)[:9]
+                for ent in m.initData.params.entries:
+                    if str(ent.key) == "CameraOffset":
+                        r["camoff"] = ent.value.decode(errors="ignore") if isinstance(ent.value, bytes) else str(ent.value)
             elif w == "carState":
                 st["v"] = m.carState.vEgo
             elif w == "controlsState":
@@ -104,7 +107,7 @@ print("car offset from ego-lane centre at x=0 [m], positive = car sits RIGHT of 
 all_act, all_man = [], []
 for route, r in sorted(per_route.items()):
     conv = ("+y=RIGHT" if np.mean(r['sign']) > 0 else "+y=LEFT") if r['sign'] else "?"
-    print(f"\n### {route}  build={r['commit']}  frames={r['n']}  lane width mean={np.mean(r['width']) if r['width'] else float('nan'):.2f} m  model frame {conv}")
+    print(f"\n### {route}  build={r['commit']}  CameraOffset={r['camoff']}  frames={r['n']}  lane width mean={np.mean(r['width']) if r['width'] else float('nan'):.2f} m  model frame {conv}")
     print(f"  lateral ACTIVE : {stats(r['act'])}")
     print(f"  manual driving : {stats(r['man'])}")
     if r["yaw"]:  print(f"  calib yaw: mean={np.mean(r['yaw']):+.2f} deg (p10 {np.percentile(r['yaw'],10):+.2f}, p90 {np.percentile(r['yaw'],90):+.2f})")
