@@ -39,13 +39,16 @@ ccmod.compute_torque_reduction_gain = _wrapped
 
 sim = Sim()
 cs = None; wire = (None, None, None)   # (t, angle, gain) from the logged LKAS_ALT
-lc_active = False; rej_t = -1e9         # model lane-change state and the last rejected LKAS_ALT echo (src >= 192)
+lc_active = False; rej_t = -1e9; lead_d = None         # model lane-change state and the last rejected LKAS_ALT echo (src >= 192)
 rows = []
 for f in files:
   for m in LogReader(f):
     w = m.which(); t = m.logMonoTime / 1e9
     if w == "carState":
       cs = m.carState
+    elif w == "radarState":
+      lo = m.radarState.leadOne
+      lead_d = float(lo.dRel) if lo.present else None
     elif w == "modelV2":
       lc_active = str(m.modelV2.meta.laneChangeState) not in ("off", "0")
     elif w == "can":
@@ -66,7 +69,8 @@ for f in files:
                door=cs.doorOpen, belt=cs.seatbeltUnlatched, standstill=cs.standstill, gear=str(cs.gearShifter),
                cruise_available=cs.cruiseState.available, wheel_rate=cs.steeringRateDeg,
                cc_blinker_left=cc.leftBlinker, cc_blinker_right=cc.rightBlinker,
-               cc_lc_active=lc_active, tx_rejected=(t - rej_t) < 0.03)
+               cc_lc_active=lc_active, tx_rejected=(t - rej_t) < 0.03,
+               a_ego=cs.aEgo, gas=cs.gasPressed, lead_dist=lead_d)
       s = sim.s
       wt, wa, wg = wire if wire[0] is not None and t - wire[0] < 0.05 else (None, np.nan, np.nan)
       rows.append((t, cs.vEgo * 3.6, abs(cs.steeringTorque), int(cs.steeringPressed), int(cc.latActive),
@@ -74,9 +78,13 @@ for f in files:
                    int(rec.get("post_grip", False)), int(rec.get("city_release", False)), int(rec.get("anchored", False)),
                    int(rec.get("boost_off", False)), rec.get("grip_start", np.nan),
                    s.curve_trim, getattr(s, "stall_kick_deg", 0.0), s.apply_angle_last, cc.actuators.steeringAngleDeg,
-                   cs.steeringAngleDeg, wa, wg, int(cs.leftBlinker or cs.rightBlinker)))
+                   cs.steeringAngleDeg, wa, wg, int(cs.leftBlinker or cs.rightBlinker),
+                   int(getattr(s, "low_speed_cam_latched", False)),
+                   int(getattr(s, "in_low_speed_zone", False) and not getattr(s, "low_speed_scen_ok", True)),
+                   int(getattr(s, "angle_passive_active", False)), int(getattr(s, "parking_mode_active", False)),
+                   int(sim.effective_lat_active()), cs.aEgo, int(cs.gasPressed)))
 A = np.array(rows, dtype=float)
-cols = "t v_kph raw_tq pressed lat driver_tq hold_comp gain err post_grip city_release anchored boost_off grip_start curve_trim kick apply cmd wheel wire_angle wire_gain blinker".split()
+cols = "t v_kph raw_tq pressed lat driver_tq hold_comp gain err post_grip city_release anchored boost_off grip_start curve_trim kick apply cmd wheel wire_angle wire_gain blinker latched scen_block angle_passive parking eff_active a_ego gas".split()
 C = {k: i for i, k in enumerate(cols)}
 if a.npz:
   np.savez_compressed(a.npz, data=A, cols=np.array(cols))
