@@ -7,6 +7,7 @@ frame (parity), then summarises the 39a/39b questions from ROUTE8_REPORT §21.
 usage: PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/i6nv3_bench/attrib_replay.py <route> [--segs a-b] [--npz out.npz]"""
 import argparse
 import glob
+import math
 import os
 import sys
 import numpy as np
@@ -39,7 +40,7 @@ ccmod.compute_torque_reduction_gain = _wrapped
 
 sim = Sim()
 cs = None; wire = (None, None, None)   # (t, angle, gain) from the logged LKAS_ALT
-lc_active = False; rej_t = -1e9; lead_d = None         # model lane-change state and the last rejected LKAS_ALT echo (src >= 192)
+lc_active = False; rej_t = -1e9; lead_d = None; lane_p = 0.0         # model lane-change state and the last rejected LKAS_ALT echo (src >= 192)
 rows = []
 for f in files:
   for m in LogReader(f):
@@ -51,6 +52,8 @@ for f in files:
       lead_d = float(lo.dRel) if lo.present else None
     elif w == "modelV2":
       lc_active = str(m.modelV2.meta.laneChangeState) not in ("off", "0")
+      _pr = m.modelV2.laneLineProbs
+      lane_p = min(float(_pr[1]), float(_pr[2])) if len(_pr) >= 4 and math.isfinite(_pr[1]) and math.isfinite(_pr[2]) else 0.0
     elif w == "can":
       for c in m.can:
         if c.address == 272 and c.src >= 192: rej_t = t
@@ -70,7 +73,7 @@ for f in files:
                cruise_available=cs.cruiseState.available, wheel_rate=cs.steeringRateDeg,
                cc_blinker_left=cc.leftBlinker, cc_blinker_right=cc.rightBlinker,
                cc_lc_active=lc_active, tx_rejected=(t - rej_t) < 0.03,
-               a_ego=cs.aEgo, gas=cs.gasPressed, lead_dist=lead_d)
+               a_ego=cs.aEgo, gas=cs.gasPressed, lead_dist=lead_d, lane_prob_min=lane_p)
       s = sim.s
       wt, wa, wg = wire if wire[0] is not None and t - wire[0] < 0.05 else (None, np.nan, np.nan)
       rows.append((t, cs.vEgo * 3.6, abs(cs.steeringTorque), int(cs.steeringPressed), int(cc.latActive),

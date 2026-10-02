@@ -4,6 +4,7 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import math
 import time
 
 import openpilot.cereal.messaging as messaging
@@ -106,6 +107,13 @@ class ControlsExt(ModelStateBase):
 
     # Phase 37b-2: op is actively crossing (not merely queued in preLaneChange)
     CC_SP.lateralLaneChangeActive = bool(sm['modelV2'].meta.laneChangeState == log.LaneChangeState.laneChangeStarting)
+
+    # Phase 45: lane-line confidence for the car controller's parking-latch release (0.0 if unavailable/non-finite)
+    # (each prob is checked: min(0.9, nan) returns 0.9 in Python, so a NaN on one side must not slip through)
+    probs = sm['modelV2'].laneLineProbs
+    pl, pr = (float(probs[1]), float(probs[2])) if len(probs) >= 4 else (0.0, 0.0)
+    ok = sm.valid['modelV2'] and sm.alive['modelV2'] and math.isfinite(pl) and math.isfinite(pr)
+    CC_SP.laneLineProbMin = min(pl, pr) if ok else 0.0
 
     return CC_SP
 

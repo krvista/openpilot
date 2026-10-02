@@ -145,6 +145,7 @@ class CarControlSP:
   leadTwo: 'LeadData' = field(default_factory=lambda: LeadData())
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
   lateralLaneChangeActive: bool = auto_field()   # Phase 37b-2: model laneChangeStarting
+  laneLineProbMin: float = auto_field()          # Phase 45: min inner lane-line prob (0.0 = unknown)
 
   @auto_dataclass
   class Param:
