@@ -1858,7 +1858,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         grip_floor=(gr_floor if real_grip else ho_floor),
         # Phase 35a: fast descent only on grip evidence (see values.py GATE_NM)
         # Phase 43a: a debounced press gets the 42a table; the torque arm keeps the 35a schedule (resting-hand pumping)
-        rate_dn_floor=(grip_rate_dn_floor if real_grip else
+        # Phase 44a: the EPS pressed flag (raw >= 350 Nm, 5-frame debounce) also counts as a press — a 350-400 Nm
+        # lane-change push sits under the hold-compensated driver_pressed threshold and kept the slow descent
+        rate_dn_floor=(grip_rate_dn_floor if (real_grip or (CarControllerParams.GRIP_FLOOR_EPS_PRESSED and bool(CS.out.steeringPressed))) else
                        (grip_rate_dn_floor_tq if driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM else 0.0)),
         ceiling_scale=accel_yield,                   # Phase 43b
         curve_deg=self.curve_meas_lp,                # Phase 36
