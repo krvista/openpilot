@@ -114,6 +114,19 @@ PARKING_CREEP_MAX_MS   = 25.0 / 3.6
 PARKING_CREEP_DIP_MS   = 8.0 / 3.6
 PARKING_CREEP_MEAN_MS  = 12.0 / 3.6
 PARKING_CREEP_FRAMES   = 1000                    # 10 s @ 100 Hz
+# Phase 45 (i6nv3 0x2e-0x38, report §31): release the parking latch once the car is plainly on a marked road. The
+# latch otherwise holds op passive until > 33 km/h for 2 s, which near home/office took 157-433 s after boot. Lane-line
+# clarity separates "out of the lot" from lot/alley driving: on 10 drives, min(inner lane probs) >= 0.8 for 3 s at
+# >= 15 km/h with |wheel| < 30 deg released earlier on 5/11 with zero wrong releases (no >= 270 deg turn afterwards)
+# and handed back 2.6 min of op steering (GPS fix came 164-367 s after boot and only delayed the release). Source:
+# CarControlSP.laneLineProbMin (0.0 when unknown -> never releases). A new parking signature re-arms the latch as
+# before. Kill: PARKING_RELEASE_FRAMES = 0.
+PARKING_RELEASE_LANE_PROB = 0.8
+PARKING_RELEASE_MIN_MS    = 15.0 / 3.6
+PARKING_RELEASE_WHEEL_DEG = 30.0
+PARKING_RELEASE_FRAMES    = 300                    # 3 s @ 100 Hz
+PARKING_RELEASE_CMD_GAP_DEG = 10.0                 # review: op's request must be near the wheel at hand-back
+PARKING_RELEASE_CREEP_HOLDOFF_FRAMES = 2000        # review: 20 s after a road release the creep signature cannot re-arm
 
 
 
@@ -584,6 +597,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_low_speed_frames = 0
     self.parking_signature_seen = False
     self.parking_mode_active = False
+    self.parking_road_frames = 0     # Phase 45: consecutive marked-road frames while latched
+    self.parking_creep_holdoff = 0   # Phase 45 review: frames left in which the creep signature cannot arm
     self.parking_exit_frames = 0
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
@@ -1290,7 +1305,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # (c) shows the lot pattern — a dip below 8 km/h or window mean < 12 km/h.
     # False-fire cost is bounded: passive only until the 33 km/h exit.
     lead_near = self.lead_visible and self.lead_distance < TRAFFIC_FOLLOW_FAR_M
-    if v_ego_safe < PARKING_CREEP_MAX_MS and not lead_near:
+    # Phase 45 review: right after a marked-road release a stop at the lot-exit junction (no lead, dip < 8 km/h) must not
+    # re-arm the latch while the car is moving on the road — hold the creep window off for CREEP_HOLDOFF_FRAMES
+    if self.parking_creep_holdoff > 0:
+      self.parking_creep_holdoff -= 1
+    # Phase 45 stress test: on a clearly marked road a lead-less stop-and-go is not a lot crawl — with the road release
+    # it re-armed every 10 s and flapped the latch (11 toggles in 90 s). Clear lane lines keep the creep window empty;
+    # an unknown signal (0.0, old logs) leaves the pre-45 behaviour.
+    lane_p_creep = float(getattr(self._cc_sp, 'laneLineProbMin', 0.0) or 0.0)
+    road_lanes_clear = math.isfinite(lane_p_creep) and lane_p_creep >= PARKING_RELEASE_LANE_PROB
+    if v_ego_safe < PARKING_CREEP_MAX_MS and not lead_near and self.parking_creep_holdoff == 0 and not road_lanes_clear:
       self.creep_frames += 1
       self.creep_min = min(self.creep_min, v_ego_safe)
       self.creep_sum += v_ego_safe
@@ -1314,6 +1338,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.parking_mode_active = False
       self.parking_signature_seen = False
       self.parking_low_speed_frames = 0
+    # Phase 45: marked-road release (see PARKING_RELEASE_*)
+    lane_p = float(getattr(self._cc_sp, 'laneLineProbMin', 0.0) or 0.0)
+    if (self.parking_mode_active and PARKING_RELEASE_FRAMES > 0 and math.isfinite(lane_p)
+        and lane_p >= PARKING_RELEASE_LANE_PROB and v_ego_safe >= PARKING_RELEASE_MIN_MS
+        and math.isfinite(CS.out.steeringAngleDeg) and abs(steer_angle_safe) < PARKING_RELEASE_WHEEL_DEG
+        and math.isfinite(op_curv_raw) and abs(op_curv_raw - steer_angle_safe) < PARKING_RELEASE_CMD_GAP_DEG):
+      self.parking_road_frames += 1
+    else:
+      self.parking_road_frames = 0
+    if PARKING_RELEASE_FRAMES > 0 and self.parking_road_frames >= PARKING_RELEASE_FRAMES:
+      self.parking_mode_active = False
+      self.parking_signature_seen = False
+      # parking_low_speed_frames is kept: a tight turn / R / P / door right after the release re-arms at once
+      self.parking_road_frames = 0
+      # the creep window that may have armed this latch must not re-arm it on the next frame
+      self.creep_frames = 0
+      self.creep_min = float('inf')
+      self.creep_sum = 0.0
+      self.parking_creep_holdoff = PARKING_RELEASE_CREEP_HOLDOFF_FRAMES
 
     # CCNC angle-control: reference sp_smooth_angle EMA, then BASELINE_VM
     # double-limited apply_steer_angle_limits_vm. Mirrors the sunnypilot

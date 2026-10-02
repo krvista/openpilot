@@ -385,6 +385,9 @@ struct CarControlSP @0xa5cd762cd951a455 {
   # Phase 37b-2: model laneChangeState == laneChangeStarting (op is actively
   # crossing); lets the car controller tell op's own lane change from a queued one
   lateralLaneChangeActive @5 :Bool;
+  # Phase 45: min(inner-left, inner-right) model lane-line probability. Lets the car controller release the
+  # parking-mode latch once the car is plainly on a marked road. 0.0 when absent (old logs) = never releases.
+  laneLineProbMin @6 :Float32;
 
   struct Param {
     key @0 :Text;
