@@ -11,6 +11,12 @@ GearShifter = structs.CarState.GearShifter
 EventName = log.OnroadEvent.EventName
 NetworkLocation = structs.CarParams.NetworkLocation
 
+# Chrysler belowSteerSpeed is shown (with its prompt chime) for this long per low-speed episode.
+# Any other alert that preempts it (lane-turn desire, standstill) re-displays it and replays the
+# chime: WK2 drivelog 5df4f4a, 219 belowSteerSpeed chimes in 2.6 h onroad, 64 of them in 43 min
+# of city driving that never reached 63 km/h.
+BELOW_STEER_SPEED_ALERT_SECONDS = 5.
+
 
 class CarSpecificEvents:
   def __init__(self, CP: structs.CarParams):
@@ -18,6 +24,7 @@ class CarSpecificEvents:
 
     self.steering_unpressed = 0
     self.low_speed_alert = False
+    self.below_steer_speed_alert_frames = 0
     self.no_steer_warning = False
     self.silent_steer_warning = True
 
@@ -33,7 +40,17 @@ class CarSpecificEvents:
         self.low_speed_alert = True
       elif CS.vEgo > (self.CP.minSteerSpeed + 1.):
         self.low_speed_alert = False
-      if self.low_speed_alert:
+      # Steering is available while lateral is active: controlsd holds it below minSteerSpeed once
+      # engaged (WK2: 36,445 assisted frames in [52, 63) km/h alongside "Steer Assist Unavailable
+      # Below 63 km/h"). Re-arm while active so the alert fires when the hold actually ends, and
+      # when main cruise comes on (MADS engages with it) so a low-speed engage is still explained.
+      main_on = CS.cruiseState.available and not CS_prev.cruiseState.available
+      if not self.low_speed_alert or CC.latActive or main_on:
+        self.below_steer_speed_alert_frames = 0
+      elif self.below_steer_speed_alert_frames < BELOW_STEER_SPEED_ALERT_SECONDS / DT_CTRL:
+        # not displayed at standstill (drivelog), so that time does not use up the window
+        if not CS.standstill:
+          self.below_steer_speed_alert_frames += 1
         events.add(EventName.belowSteerSpeed)
 
     elif self.CP.brand == 'honda':
