@@ -420,6 +420,12 @@ class CarControllerParams:
   # 14 % (5-60 km/h all rose). Split the arms: a debounced press keeps the 42a table (the Euljiro case), the torque
   # arm goes back to the 35a schedule exactly (no floor below 40, ramp to 0.03 at 60). Kill: = RATE_DN_FLOOR_V.
   ACIGAIN_GRIP_RATE_DN_TQ_ARM_FLOOR_V = [0.0, 0.03]
+  # Phase 44a (i6nv3 0x2e-0x38, report §29): lane changes started by steering before the blinker (136, ~27 /h) met
+  # op at gain 0.77 and took p50 0.39 s (0.47 s for < 400 Nm pushes) to fall to 0.20 — a 350-400 Nm push trips the
+  # EPS pressed flag but not the hold-compensated driver_pressed (driver_tq > 250), so the 42a floor never applied.
+  # The EPS flag is not the resting-hand signal 43a removed: at >= 20 km/h its < 0.1 s flickers are 0.49 /min and all
+  # real pushes (peak 393-406 Nm). Kill: False.
+  GRIP_FLOOR_EPS_PRESSED = True
   ACIGAIN_SHOVE_NM                = 700.0    # driver-torque domain
   ACIGAIN_SHOVE_RATE_DN           = 0.10     # gain quanta per frame (0.65 -> 0.08 in 6 frames)
   # The fast-descent floor must NOT engage on a resting hand: hands-off
