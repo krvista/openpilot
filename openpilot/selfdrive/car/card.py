@@ -217,6 +217,8 @@ class Car:
     # from the previous control step (10 ms stale — fine for display); brands
     # without the attribute report False.
     CS_SP.lateralControlPaused = bool(getattr(self.CI.CC, 'lat_passive_indicated', False))
+    # i6n Phase 46: which CarController latches / yield paths shaped the last LKAS_ALT (telemetry, SF_* bits)
+    CS_SP.steerFlags = int(getattr(self.CI.CC, 'steer_debug_flags', 0)) & 0xFFFFFFFF
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)

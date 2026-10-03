@@ -12,6 +12,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # Phase 46: controlsd imports tinygrad (via selfdrive.modeld.modeld); without the submodule every controlsd-based
+      # module (test_phase41, test_noncontrol_controlsd*, ...) was silently skipped by conftest — 70 tests
+      - name: tinygrad submodule (controlsd import chain)
+        run: git submodule update --init --depth 1 tinygrad_repo
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

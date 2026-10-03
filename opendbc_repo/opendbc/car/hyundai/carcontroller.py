@@ -128,6 +128,37 @@ PARKING_RELEASE_FRAMES    = 300                    # 3 s @ 100 Hz
 PARKING_RELEASE_CMD_GAP_DEG = 10.0                 # review: op's request must be near the wheel at hand-back
 PARKING_RELEASE_CREEP_HOLDOFF_FRAMES = 2000        # review: 20 s after a road release the creep signature cannot re-arm
 
+# Phase 46: carStateSP.steerFlags (mirrored by card.py from self.steer_debug_flags, one control step stale) — which
+# latch / yield path shaped this frame's LKAS_ALT, so drive-log judgments stop re-deriving them from inputs (report §26
+# "observability" gap; attrib_replay parity was 87-91 %). Telemetry only: nothing reads these bits back.
+SF_EFF_ACTIVE         = 1 << 0    # op actively steering (effective_lat_active)
+SF_WIRE_ACTIVE        = 1 << 1    # LKAS_ALT carried an active frame (TX governor / wheel-outrun may make it passive)
+SF_PASSTHROUGH        = 1 << 2    # low-speed passthrough (13a / 26)
+SF_LOWSPEED_LATCH     = 1 << 3    # low-speed grip latch part of the passthrough
+SF_SCENARIO_BLOCK     = 1 << 4    # 13a scenario gate part of the passthrough
+SF_ANGLE_PASSIVE      = 1 << 5    # 6d angle-passive
+SF_PARKING            = 1 << 6    # parking-mode latch
+SF_PARKING_RELEASING  = 1 << 7    # Phase 45 lane-clear release window counting
+SF_DRIVER_PRESSED     = 1 << 8    # hold-compensated, debounced driver press (real_grip)
+SF_EPS_PRESSED        = 1 << 9    # carState.steeringPressed (EPS raw >= 350, debounced)
+SF_HEAVY_GRIP_ANCHOR  = 1 << 10   # apply pinned to the wheel by the grip anchor
+SF_ANCHOR_HOLD        = 1 << 11   # 42c anchor hold after a pressed-arm anchor
+SF_FAST_FLOOR         = 1 << 12   # 42a / 44a fast-descent floor (press or EPS flag)
+SF_TQ_ARM_FLOOR       = 1 << 13   # 35a torque-arm descent floor
+SF_SHOVE              = 1 << 14   # 42b shove descent
+SF_ACCEL_YIELD        = 1 << 15   # 43b ceiling scaled down under hard driver acceleration
+SF_BOOST_SUPPRESSED   = 1 << 16   # error boost held off (grip / BSM caution / anchor transient)
+SF_BLIND_CAUTION      = 1 << 17   # 33 BSM-gated large-correction softening
+SF_CITY_RELEASE       = 1 << 18   # 39a city release recovery
+SF_ANCHORED_RECOVERY  = 1 << 19   # 35b anchored recovery
+SF_BLINKER_CONCESSION = 1 << 20   # 5d / 37b blinker ceiling
+SF_POST_GRIP          = 1 << 21   # 29 post-grip tapers
+SF_VM_REJECT          = 1 << 22   # 5e persistent VM rejection
+SF_REVERSE            = 1 << 23   # post-reverse passive
+SF_CAM_FAULT          = 1 << 24   # camera stale / LFA fault passive
+SF_WHEEL_OUTRUN       = 1 << 25   # 38-3 wheel-outrun passive
+SF_TX_REJECTED        = 1 << 26   # panda rejected the previous LKAS_ALT echo
+SF_TX_SATURATED       = 1 << 27   # 38 TX governor held the wire behind the request
 
 
 def compute_hold_torque(v_ego, lat_acc):
@@ -560,6 +591,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # by card.py — True while op is intentionally passive (parking mode /
     # low-speed passthrough / angle-passive) with CC.latActive still set.
     self.lat_passive_indicated = False
+    self.steer_debug_flags = 0      # Phase 46: SF_* of the last control step (card.py -> carStateSP.steerFlags)
 
     # Owned by openpilot so ADAS DRV sees a clean +1 sequence regardless of
     # camera-TX rate vs our frame%5==0 downsample.
@@ -1793,6 +1825,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # ACIGain (reference 17-line compute_torque_reduction_gain).
     effective_aci_gain = None
+    sf = 0   # Phase 46 telemetry (SF_*)
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
       steering_error = self.apply_angle_last - steer_angle_safe
       # Phase 9: yield-by-authority reshapes the ACIGain torque curve to drop
@@ -1941,6 +1974,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                    or blind_caution),
       )
       self.aci_gain_last = effective_aci_gain
+      fast_floor = real_grip or (CarControllerParams.GRIP_FLOOR_EPS_PRESSED and bool(CS.out.steeringPressed))
+      for on, bit in ((real_grip, SF_DRIVER_PRESSED), (fast_floor, SF_FAST_FLOOR),
+                      (not fast_floor and driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM, SF_TQ_ARM_FLOOR),
+                      (CarControllerParams.ACIGAIN_SHOVE_RATE_DN > 0 and driver_tq >= CarControllerParams.ACIGAIN_SHOVE_NM, SF_SHOVE),
+                      (accel_yield < 1.0, SF_ACCEL_YIELD), (blind_caution, SF_BLIND_CAUTION), (city_release, SF_CITY_RELEASE),
+                      (anchored_recovery, SF_ANCHORED_RECOVERY),
+                      (real_grip or blind_caution or self.anchor_recent_frames > (CarControllerParams.REANCHOR_RECENT_FRAMES -
+                                                                                CarControllerParams.BOOST_HOLDOFF_FRAMES), SF_BOOST_SUPPRESSED),
+                      (self.anchor_recent_frames > 0 or self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES or blind_caution,
+                       SF_POST_GRIP)):
+        if on:
+          sf |= bit
 
     # passive-frame angle: the exact sensor panda samples (MDPS.STEERING_ANGLE_2),
     # clipped to the safety window; steeringAngleDeg only if that is unavailable
@@ -2021,6 +2066,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.wheel_outrun_frames = 0
     self.meas_can_prev = int(round(meas_angle_for_panda * 10.0))
     self.tx_angle_last = tx_angle
+    for on, bit in ((effective_lat_active, SF_EFF_ACTIVE), (wire_active, SF_WIRE_ACTIVE), (in_passthrough, SF_PASSTHROUGH),
+                    (self.low_speed_cam_latched, SF_LOWSPEED_LATCH),
+                    (self.in_low_speed_zone and not self.low_speed_scen_ok, SF_SCENARIO_BLOCK),
+                    (self.angle_passive_active, SF_ANGLE_PASSIVE), (self.parking_mode_active, SF_PARKING),
+                    (self.parking_road_frames > 0, SF_PARKING_RELEASING), (bool(CS.out.steeringPressed), SF_EPS_PRESSED),
+                    (heavy_grip_anchor, SF_HEAVY_GRIP_ANCHOR), (self.anchor_hold_left > 0, SF_ANCHOR_HOLD),
+                    (self.blinker_concession, SF_BLINKER_CONCESSION), (vm_reject_persistent, SF_VM_REJECT),
+                    (self.was_in_reverse, SF_REVERSE), (cam_stale_tripped or fault_lfa_bool, SF_CAM_FAULT),
+                    (self.wheel_outrun_passive, SF_WHEEL_OUTRUN), (bool(getattr(CS, "tx_rejected", False)), SF_TX_REJECTED),
+                    (self.tx_sat_frames > 0, SF_TX_SATURATED)):
+      if on:
+        sf |= bit
+    self.steer_debug_flags = sf
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=tx_angle, lkas_alt_cam_msg=lkas_alt_cam_msg, wire_active=wire_active,
                                                          mads_lka_icon=mads_lka_icon,
