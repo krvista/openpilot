@@ -6,12 +6,18 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+# i6n Phase 46 (report §32): on every boot 11-13 s pass between the manager starting this process and main() (the
+# model load itself is 1.8 s; dmonitoringmodeld, also tinygrad, is up in 3-4 s), which puts the first modelV2 10-11.6 s
+# after the first carState. Stamp the import stages so the next drive shows where the time goes; main() logs them once.
+import time
+_IMPORT_MARKS = [("start", time.monotonic())]
 import os
 os.environ['GMMU'] = '0'
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.selfdrive.modeld.helpers import usbgpu_present, load_oob
-import time
+_IMPORT_MARKS.append(("hardware", time.monotonic()))
 import numpy as np
+_IMPORT_MARKS.append(("numpy", time.monotonic()))
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
 from opendbc.car.structs import car
@@ -20,9 +26,12 @@ from setproctitle import setproctitle
 from openpilot.cereal.messaging import PubMaster, SubMaster
 from openpilot.cereal.visionipc import VisionStreamType
 from msgq.visionipc import VisionIpcClient, VisionBuf
+_IMPORT_MARKS.append(("cereal", time.monotonic()))
 from opendbc.car.car_helpers import get_demo_car_params
+_IMPORT_MARKS.append(("car_helpers", time.monotonic()))
 
 from tinygrad.tensor import Tensor
+_IMPORT_MARKS.append(("tinygrad", time.monotonic()))
 
 from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.swaglog import cloudlog
@@ -37,6 +46,7 @@ from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value
 from openpilot.selfdrive.modeld.modeld import ChestnutState
 
+_IMPORT_MARKS.append(("openpilot_common", time.monotonic()))
 from openpilot.sunnypilot.modeld_v2.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState, get_curvature_from_output
 from openpilot.sunnypilot.modeld_v2.constants import Plan
 from openpilot.sunnypilot.modeld_v2.meta_helper import load_meta_constants
@@ -47,6 +57,25 @@ from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
+_IMPORT_MARKS.append(("sunnypilot", time.monotonic()))
+
+
+def _import_timing() -> dict:
+  """Phase 46: seconds per import stage, plus process exec -> first line (interpreter start) from /proc."""
+  out = {name: round(t - prev_t, 3) for (name, t), (_, prev_t) in zip(_IMPORT_MARKS[1:], _IMPORT_MARKS[:-1], strict=True)}
+  out["total"] = round(_IMPORT_MARKS[-1][1] - _IMPORT_MARKS[0][1], 3)
+  out["to_main"] = round(time.monotonic() - _IMPORT_MARKS[0][1], 3)
+  try:
+    with open("/proc/self/stat") as f:
+      start_ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+    with open("/proc/uptime") as f:
+      uptime = float(f.read().split()[0])
+    # both clocks count from boot; the process-start -> first-line gap is the interpreter + wrapper start
+    out["exec_to_first_line"] = round(_IMPORT_MARKS[0][1] - start_ticks / os.sysconf("SC_CLK_TCK")
+                                      - (time.monotonic() - uptime), 3)
+  except Exception:  # telemetry must never stop modeld
+    pass
+  return out
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
 
@@ -321,6 +350,10 @@ class ModelState(ModelStateBase):
 
 def main(demo=False):
   cloudlog.warning("modeld init")
+  try:
+    cloudlog.event("modeld.import_timing", **_import_timing())   # Phase 46
+  except Exception:  # telemetry must never stop modeld
+    pass
 
   sentry.set_tag("daemon", PROCESS_NAME)
   cloudlog.bind(daemon=PROCESS_NAME)

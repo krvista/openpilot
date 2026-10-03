@@ -5,7 +5,9 @@ Saved (carState-rate grid, T relative to the first log message):
   v (km/h), a_ego, ang, rate, pressed, tq_s, tq_eps, lb, rb, gas, brake, bsl, bsr, lat, apply, accel_cmd, wire (LKAS_ALT
   angle), gain (ACI), tx_active (LKAS_ALT LKAS_ANGLE_ACTIVE), k_model, k_ctrl, k_meas, gap (steerCmdGapDeg), lane_min, lcs,
   yaw (deg/s), mdps_active (0xEA LKA_ANGLE_ACTIVE), mdps_fault, mdps_tq (STEERING_OUT_TORQUE), tx_reject (0x110 echoes
-  with src >= 192 per frame), sd_active (selfdriveState.active), gps_lat/lon
+  with src >= 192 per frame), sd_active (selfdriveState.active), gps_lat/lon,
+  sf_cc (carStateSP.steerFlags, CarController SF_* bits) / sf_ctl (controlsState.steerFlags, STEER_FLAG_* bits) — Phase 46,
+  0 on older builds
   events: list of (t, name) for onroadEvents transitions; commit
 Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz>
 """
@@ -18,7 +20,7 @@ from openpilot.tools.lib.logreader import LogReader
 
 r, out = sys.argv[1], sys.argv[2]
 files = sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--rlog.zst"), key=lambda f: int(f.split("--")[-2]))
-cs, cc, wr, ct, md, lp, gp, mp, rj, sd = [], [], [], [], [], [], [], [], [], []
+cs, cc, wr, ct, md, lp, gp, mp, rj, sd, sp = [], [], [], [], [], [], [], [], [], [], []
 events = []; prev_ev = set()
 t0 = None; commit = ""
 for f in files:
@@ -37,7 +39,9 @@ for f in files:
         cc.append((t, c.latActive, c.actuators.steeringAngleDeg, c.actuators.accel))
       elif w == "controlsState":
         x = m.controlsState
-        ct.append((t, x.desiredCurvature, x.curvature, getattr(x, "steerCmdGapDeg", 0.0)))
+        ct.append((t, x.desiredCurvature, x.curvature, getattr(x, "steerCmdGapDeg", 0.0), getattr(x, "steerFlags", 0)))
+      elif w == "carStateSP":
+        sp.append((t, getattr(m.carStateSP, "steerFlags", 0)))
       elif w == "modelV2":
         d = m.modelV2
         lm = min(d.laneLineProbs[1], d.laneLineProbs[2]) if len(d.laneLineProbs) >= 4 else 1.0
@@ -101,6 +105,7 @@ np.savez_compressed(out, T=T - t0, v=CS[:, 1], a_ego=CS[:, 2], ang=CS[:, 3], rat
                     mdps_active=res(mp, 1, kind="hold"), mdps_fault=res(mp, 2, kind="hold"), mdps_tq=res(mp, 3),
                     tx_reject=rej, sd_active=res(sd, 1, kind="hold") > 0.5,
                     gps_lat=res(gp, 1), gps_lon=res(gp, 2), commit=np.array(commit),
+                    sf_cc=res(sp, 1, kind="hold").astype(np.int64), sf_ctl=res(ct, 4, kind="hold").astype(np.int64),
                     events=np.array(events, dtype=object))
 print(f"== {r}: {len(T) / 6000:.1f} min, commit {commit}, lat active {np.mean(res(cc, 1, kind='hold') > 0.5) * 100:.0f}%, "
       f"events {len(events)}")

@@ -457,6 +457,9 @@ struct CarStateSP @0xb86e6369214c01c8 {
   # latActive still set — mirrored from the CarController by card.py so the
   # UI can show the paused presentation instead of "engaged".
   lateralControlPaused @1 :Bool;
+  # i6n Phase 46: which CarController steering latches / yield paths acted on the
+  # previous control step (bits: opendbc hyundai carcontroller.py SF_*), mirrored by card.py.
+  steerFlags @2 :UInt32;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

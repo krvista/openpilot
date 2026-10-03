@@ -879,6 +879,7 @@ struct ControlsState @0x97ff69c53601abf1 {
   laneDropout @67 :Bool;  # i6n Phase 39: lane-line dropout latch active (plan ignored, command decaying to straight)
   angleFbInteg @68 :Float32;  # i6n Phase 7a: closed-loop curvature trim state (1/m) — logged to size EPS deadband/windup from drives
   steerCmdGapDeg @69 :Float32;  # i6n: commanded angle - measured angle (deg), hands-off tracking gap
+  steerFlags @70 :UInt16;  # i6n Phase 46: which controlsd steering guards acted this frame (bits: controlsd.py STEER_FLAG_*)
   forceDecel @51 :Bool;
 
   lateralControlState :union {

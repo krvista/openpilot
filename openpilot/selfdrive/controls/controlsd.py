@@ -230,6 +230,19 @@ LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
 # the acceptance test on-road (swing p95 must not rise > 0.3 deg). Kill: 0.27 (7c-2).
 LOOKAHEAD_T_AHEAD_CAP = 0.32  # s
 
+# Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
+# Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
+# only: nothing reads these bits back. Cost: a few int ORs per 100 Hz frame and one UInt16 in controlsState.
+STEER_FLAG_LOWCONF_GATE = 1 << 0      # Phase 41 low-confidence gate on (lane_min < LOWCONF_LANE_MIN, hands off)
+STEER_FLAG_LOWCONF_CAPPED = 1 << 1    # Phase 41 rate cap actually held the command back
+STEER_FLAG_LOWCONF_RELEASE = 1 << 2   # Phase 41 release ramp running (gate just dropped)
+STEER_FLAG_LOOKAHEAD_CAP = 1 << 3     # Phase 41-2 lookahead t_ahead clipped by LOOKAHEAD_T_AHEAD_CAP
+STEER_FLAG_CONF_BLEND = 1 << 4        # Phase 6g confidence blend toward the previous command (confidence < 1)
+STEER_FLAG_LANE_DROPOUT = 1 << 5      # Phase 39 dropout hold
+STEER_FLAG_DEPARTURE_HOLD = 1 << 6    # lane-departure guard held the command
+STEER_FLAG_BSM_HOLD = 1 << 7          # Phase 37b BSM lane guard held the command
+STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added curvature
+
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
 # under<0.6 32-41%) — invisible to the 7a feedback (desired-vs-achieved). When a
@@ -356,6 +369,8 @@ class Controls(ControlsExt):
     self._absdc_slow = 0.0   # Phase 7c rising-entry detector state
     self._model_nonfinite_frames = 0  # consecutive non-finite model actions
     self.lowconf_cap = LowConfRateCap(DT_CTRL)   # Phase 41: low-lane-confidence steering-rate cap
+    self.steer_flags = 0                         # Phase 46: STEER_FLAG_* of the last frame
+    self._lookahead_capped = False
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -396,6 +411,7 @@ class Controls(ControlsExt):
     phase lead always matches the smoothing lag (was a fixed 0.10 s constant)."""
     mf = self._model_frame(model_v2)
     fallback = mf.fallback
+    self._lookahead_capped = False
 
     # Non-finite model action: hold the last command briefly, then ramp to
     # straight (see MODEL_NONFINITE_* above). Nothing non-finite may reach the
@@ -430,6 +446,7 @@ class Controls(ControlsExt):
     base_s = float(_interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
     boost_s = float(_interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
     t_ahead = min(base_s + boost_s + lookahead_extra_s, LOOKAHEAD_T_AHEAD_CAP + lookahead_extra_s)
+    self._lookahead_capped = (base_s + boost_s) > LOOKAHEAD_T_AHEAD_CAP   # Phase 46 telemetry
     dist_ahead = min(v_ego * t_ahead, 10.0)
 
     if dist_ahead < 0.3:
@@ -566,7 +583,9 @@ class Controls(ControlsExt):
     # Reset desired curvature to current to avoid violating the limits on engage
     # Phase 6h-1 order: tau(v) first, so the lookahead lead matches the LP lag below.
     lat_smooth_tau = float(_interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
+    self._lookahead_capped = False
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
+    steer_flags = STEER_FLAG_LOOKAHEAD_CAP if self._lookahead_capped else 0   # Phase 46
 
     # Phase 7c geometry entry assist (constants above).
     if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None:   # (lane-line read failed -> skip, as before)
@@ -588,6 +607,8 @@ class Controls(ControlsExt):
         shortfall = abs(self._klane_lp) - abs(new_desired_curvature)
         assist = min(shortfall, ENTRY_ASSIST_CAP, ENTRY_ASSIST_REL * abs(new_desired_curvature))
         new_desired_curvature = new_desired_curvature + float(np.sign(new_desired_curvature)) * assist
+        if assist > 0.0:
+          steer_flags |= STEER_FLAG_ENTRY_ASSIST
 
     # Model uncertainty damping: when the model is unsure about lane position
     # (e.g. lead car occluding lane lines, ambiguous lane split), blend toward
@@ -652,6 +673,9 @@ class Controls(ControlsExt):
         self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
       elif confidence < 1.0:
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
+        steer_flags |= STEER_FLAG_CONF_BLEND
+      if self.lane_dropout:
+        steer_flags |= STEER_FLAG_LANE_DROPOUT
       # Phase 41: while the weaker inner lane line is below LOWCONF_LANE_MIN (merge / split / vanishing line) and the
       # driver is not holding the wheel, the command may change no faster than LOWCONF_CAP_DPS of steer angle per
       # second — a plan re-centring on an uncertain lane becomes a slow drift the driver can veto, not a snatch
@@ -661,8 +685,15 @@ class Controls(ControlsExt):
       if LOWCONF_CAP_DPS > 0.0:
         blinker_or_lc = (mf.lane_change_state != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
         k_per_deg = abs(float(self.VM.calc_curvature(math.radians(1.0), max(float(CS.vEgo), 1.0), 0.0)))
+        release_left_before = self.lowconf_cap.release_left   # the ramp decrements inside update(): read it first
         new_desired_curvature = self.lowconf_cap.update(new_desired_curvature, self.desired_curvature, lane_min,
                                                         bool(CS.steeringPressed), blinker_or_lc, float(CS.vEgo), k_per_deg)
+        if self.lowconf_cap.active:
+          steer_flags |= STEER_FLAG_LOWCONF_GATE
+        elif release_left_before > 0 and not (CS.steeringPressed or blinker_or_lc):   # a press / blinker cancels the ramp
+          steer_flags |= STEER_FLAG_LOWCONF_RELEASE
+        if self.lowconf_cap.capped:
+          steer_flags |= STEER_FLAG_LOWCONF_CAPPED
 
       # Lane-departure protection: when blinker is OFF, do not let op steer
       # FURTHER into a lane line flagged as departing. The input is
@@ -678,6 +709,7 @@ class Controls(ControlsExt):
         if (da.leftLaneDeparture and new_desired_curvature < self.desired_curvature) or \
            (da.rightLaneDeparture and new_desired_curvature > self.desired_curvature):
           new_desired_curvature = self.desired_curvature
+          steer_flags |= STEER_FLAG_DEPARTURE_HOLD
       # Phase 37b: BSM lane guard — radar-occupied side + lane line close on
       # that side + no blinker toward it -> hold curvature (see bsm_guard.py).
       # Called EVERY active frame (no BSM short-circuit) so the hold-timeout
@@ -687,14 +719,17 @@ class Controls(ControlsExt):
       if BSM_LANE_GUARD_M > 0.0:
         if mf.bsm_lane is not None:      # (lane-line inputs read once per model frame; unreadable -> reset, as before)
           _yl, _yr, _pl, _pr = mf.bsm_lane
-          new_desired_curvature, _ = self.bsm_guard.update(
+          new_desired_curvature, _bsm_held = self.bsm_guard.update(
             new_desired_curvature, self.desired_curvature,
             bool(CS.leftBlindspot), bool(CS.rightBlindspot),
             bool(CS.leftBlinker), bool(CS.rightBlinker),
             _yl, _yr, _pl, _pr,
             BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB)
+          if _bsm_held:
+            steer_flags |= STEER_FLAG_BSM_HOLD
         else:
           self.bsm_guard.reset()
+    self.steer_flags = steer_flags   # Phase 46: published in controlsState.steerFlags
 
     # Temporal command smoothing w/ lead compensation (see constants). Applied AFTER
     # confidence damping / lane-departure and BEFORE clip_curvature, so ISO lateral
@@ -783,6 +818,7 @@ class Controls(ControlsExt):
     cs.laneDropout = bool(self.lane_dropout)   # Phase 39
     cs.angleFbInteg = float(getattr(self.LaC, "_fb_integ", 0.0))   # i6n: 7a integrator state (see log.capnp)
     cs.steerCmdGapDeg = float(CC.actuators.steeringAngleDeg - CS.steeringAngleDeg) if self.CP.steerControlType == car.CarParams.SteerControlType.angle else 0.0
+    cs.steerFlags = int(self.steer_flags)   # Phase 46
     cs.longControlState = self.LoC.long_control_state
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)

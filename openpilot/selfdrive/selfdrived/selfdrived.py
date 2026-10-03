@@ -35,6 +35,30 @@ from openpilot.sunnypilot.selfdrive.selfdrived.button_state_tracker import Butto
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
 DEVICE_STATE_DEAD_S = 15.0   # i6n: hardwared silent this long -> commIssue (a 7 s hiccup is not)
+# i6n Phase 46 (report §32): on this device the driving model's first output comes 10-11.6 s after the first carState
+# (modeld_tinygrad spends 11-13 s before main() on every boot, 12/12 drives), so the upstream 6 s initialization
+# timeout fired every drive and showed "Communication Issue Between Processes" (11 s) and "openpilot Unavailable"
+# (16 s) to a driver who was already moving. While the model has not published yet, keep "initializing" (both are
+# no-entry, so engagement timing is unchanged; MADS still engages by itself the moment everything is valid); once it
+# has, give the rest of the pipeline INIT_AFTER_MODEL_S, then fall back to the upstream path so a real failure still
+# surfaces as commIssue. REPLAY keeps the upstream 6 s. Kill: INIT_MODEL_WAIT_MAX_S = 6.0.
+INIT_TIMEOUT_S = 6.0
+INIT_MODEL_WAIT_MAX_S = 30.0
+INIT_AFTER_MODEL_S = 3.0
+# Phase 46 review: card only writes ControlsReady (-> pandad switches the panda out of ELM327) after selfdrived is
+# initialized, so the upstream "safety mode mismatch allowed for 10 s after start" grace silently assumed
+# initialization by 6 s. With initialization at 11-14 s it raised controlsMismatch on every boot (already once
+# today: route 37, 11.7 s, initialized 11.1 s). The grace now also runs from initialization.
+SAFETY_MODE_GRACE_AFTER_INIT_S = 4.0
+
+
+def unused_lateral_services(CP) -> list[str]:
+  """i6n Phase 46: angle-control cars never read torqued's output (controlsd applies lateralTorqueParameters only under
+  torque tuning), yet its first valid message trails the model by ~1 s at boot (17.0-19.0 s), which held the boot
+  engage back and left a "lateralTorqueParameters / Communication Issue" alert up 2.6-3 s after op had started
+  steering. Dropped from selfdrived's alive / frequency / valid checks only; a dead torqued is still caught by
+  managerState (processNotRunning)."""
+  return ['lateralTorqueParameters'] if CP.steerControlType == car.CarParams.SteerControlType.angle else []
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
@@ -111,6 +135,7 @@ class SelfdriveD(CruiseHelper):
     # in the control loop, so a hiccup is not a takeover; a hardwared that is truly gone is
     # still caught: process death via managerState (processNotRunning) and a hung thread via
     # the DEVICE_STATE_DEAD_S escalation below (the thermal values it carries would be frozen).
+    ignore += unused_lateral_services(self.CP)   # i6n Phase 46
     ignore_liveness = ignore + ['deviceState']
     self.device_state_dead_frames = 0
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'extrinsicsCalibration',
@@ -141,6 +166,8 @@ class SelfdriveD(CruiseHelper):
     self.curve_advisory_active = False
 
     self.initialized = False
+    self.init_model_seen_frame: int | None = None   # Phase 46: first frame modelV2 was seen while initializing
+    self.init_frame: int | None = None              # Phase 46: frame selfdrived became initialized
     self.enabled = False
     self.active = False
     self.mismatch_counter = 0
@@ -422,7 +449,7 @@ class SelfdriveD(CruiseHelper):
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
       # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
-      if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
+      if (safety_mismatch and self.safety_mode_grace_over()) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
         self.events.add(EventName.controlsMismatch)
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:
@@ -574,7 +601,7 @@ class SelfdriveD(CruiseHelper):
 
     if not self.initialized:
       all_valid = CS.canValid and self.sm.all_checks()
-      timed_out = self.sm.frame * DT_CTRL > 6.
+      timed_out = self.init_timed_out()
       if all_valid or timed_out or (SIMULATION and not REPLAY):
         available_streams = VisionIpcClient.available_streams("camerad", block=False)
         if VisionStreamType.VISION_STREAM_NARROW_ROAD not in available_streams:
@@ -588,6 +615,7 @@ class SelfdriveD(CruiseHelper):
           self.state_machine.state = State.enabled
 
         self.initialized = True
+        self.init_frame = self.sm.frame   # Phase 46
         cloudlog.event(
           "selfdrived.initialized",
           dt=self.sm.frame*DT_CTRL,
@@ -686,6 +714,25 @@ class SelfdriveD(CruiseHelper):
       ce_send_sp.onroadEventsSP.events = self.events_sp.to_msg()
       self.pm.send('onroadEventsSP', ce_send_sp)
     self.events_sp_prev = self.events_sp.names.copy()
+
+  def init_timed_out(self) -> bool:
+    """Phase 46: give up waiting for all_checks() — upstream 6 s, extended while the driving model is still starting."""
+    t = self.sm.frame * DT_CTRL
+    if self.init_model_seen_frame is None and self.sm.seen['modelV2']:
+      self.init_model_seen_frame = self.sm.frame
+    if t <= INIT_TIMEOUT_S:
+      return False
+    if REPLAY:
+      return True
+    if self.init_model_seen_frame is None:
+      return t > INIT_MODEL_WAIT_MAX_S
+    return (self.sm.frame - self.init_model_seen_frame) * DT_CTRL > INIT_AFTER_MODEL_S or t > INIT_MODEL_WAIT_MAX_S
+
+  def safety_mode_grace_over(self) -> bool:
+    """Phase 46: pandad may still be switching the safety mode — 10 s after start (upstream) AND 4 s after init."""
+    if self.sm.frame * DT_CTRL <= 10.:
+      return False
+    return self.init_frame is None or (self.sm.frame - self.init_frame) * DT_CTRL > SAFETY_MODE_GRACE_AFTER_INIT_S
 
   def step(self):
     CS = self.data_sample()

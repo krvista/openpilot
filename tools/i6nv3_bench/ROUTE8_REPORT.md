@@ -764,3 +764,42 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
 **최종 검증.** phase_tests 295 통과(test_phase45 22 건, 각 보호 장치를 끄면 해당 테스트 실패 확인), ruff F 통과. 선행차·차선 반영 재생 4 라우트(Phase 44a 대비): 일찍 해제 3/4, 잘못된 해제 0, 래치 추가 시간 0 s, 예전 래치 구간에서 손 뗀 op 조향 중 |핸들| ≥ 90° 0 s, op 조향 +0.77 / 0 / +0.40 / +0.80 분.
 
 **채택 기준(다음 5 라우트).** 시동 후 op 첫 조향 시각 단축, 주차장·골목에서 op 개입으로 인한 파지(래치 해제 후 30 s 내 반대 토크 파지) 0 건 유지.
+
+## 32. 부팅 인게이지·주행 재점검과 Phase 46 (10-03, 라우트 2d–38, 새 로그 없음)
+
+**부팅 인게이지.** 측면 제어 시작 시각 = 크루즈 메인을 누른 시각(8/10 주행, 42–828 s). 메인을 일찍 누른 30·33 번은 17.2 / 18.1 s 까지 막혔고, 준비되는 순간 MADS 가 재입력 없이 켜졌다.
+- 병목: 주행 모델. manager 가 modeld_tinygrad 를 1.0–1.6 s 에 띄우고 "modeld init"(main 진입)이 12.5–14.7 s, 모델 로드 1.8 s, 첫 modelV2 15.4–17.6 s(12/12 주행). 같은 tinygrad 의 dmonitoringmodeld 는 3.2–4.3 s.
+- 원인 후보: 부팅 CPU 포화. 로그 시작~15–48 s 동안 코어 0–5 가 99–100 %(시스템 시간 330–368 % vs 이후 115–144 %). 그 동안 `find -L /sys/class/gpio/ -maxdepth 2 -exec chown root:gpio {} \; -exec chmod 770 {} \;` 가 52–126 개 udev 작업자에서 동시에 파일마다 프로세스를 띄운다(10/10 주행). openpilot 은 GPIO 를 반복 export 하지 않으며, AGNOS 19.6 의 udev 규칙으로 보인다 — 이 저장소 밖(OS)이라 미수정.
+- 경고: 6 s 초기화 타임아웃 → 11 s "Communication Issue Between Processes", 16 s "openpilot Unavailable", 조향 시작 직후 "lateralTorqueParameters / Communication Issue" 2.6–3 s(메인을 일찍 켠 주행에서만 보임).
+- panda 의 0x110 거부: 매 부팅 11.1–12.0 s 에 3–9 회(측면 비활성·MDPS 미활성, 부팅 경합으로 card 지연 추정), 주행 중 60–95 km/h 단발 0–11 회/라우트(MDPS 계속 활성). 영향 없음.
+
+**주행.** ≥20 km/h 측면 해제 0 회. 주행 중 인게이지 6 건 중 37 번 828 s(50 km/h, 차선 0.5–0.6)에서 요청이 0.3 s 에 1.7 → 10°, 권한 0.53 → 0.93(오차 부스트), 운전자 −246 Nm 후 같은 방향 340–410 Nm — 계획이 맞았던 것으로 보여 1 건은 관찰 항목. 32 번 운전자 무응답 경고 3 s 1 회(DM). 44b·고속 파지는 새 데이터 없음.
+
+**AP 코어 사용량 (10 주행 331 분, 시동 후 60 s 이후, deviceState 2 Hz).**
+
+| 코어 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| 평균 % | 58.5 | 57.4 | 59.9 | 65.9 | 63.3 | 63.1 | 7.2 | 32.4 |
+| p99 중앙값 | 71 | 69 | 84 | 75 | 75 | 72 | 26 | 53 |
+| 10 s 평균 최대 | 67 | 65 | 67 | 71 | 70 | 68 | 25 | 54 |
+| 순간 최대 | 96 | 90 | 100 | 84 | 96 | 98 | 33 | 57 |
+| 부팅 5–30 s 평균 | 97 | 97 | 97 | 98 | 98 | 98 | 7 | 42 |
+
+§1 목표(코어 0–5 평균 ≤ 75 %) 유지, 라우트 간 편차 ±2 %p. 프로세스: pandad 53 %, card 44, locationd 37, ui 35, selfdrived 24, loggerd 23, modeld 22, controlsd 20, dmonitoringmodeld 14 (한 코어 기준).
+
+**Phase 46 적용 (사용자: "로그로 인한 부하가 없다면 1~4 모두").**
+- 46-1 modeld_v2 import 단계 시간(hardware·numpy·cereal·car_helpers·tinygrad·openpilot_common·sunnypilot, exec→첫 줄)을 main() 진입 시 cloudlog.event 1 줄로 — 다음 주행에서 11–13 s 의 내역 확인(단계가 고르게 느리면 CPU 경합, 한 단계에 몰리면 그 import).
+- 46-2 각도 제어 차량은 selfdrived 의 alive/freq/valid 검사에서 lateralTorqueParameters 제외(controlsd 는 토크 튜닝에서만 읽음; torqued 사망은 processNotRunning 이 계속 잡음).
+- 46-3 초기화: modelV2 를 본 뒤 3 s 또는 최대 30 s 까지 "초기화 중"(NO_ENTRY) 유지, 그 전에 all_checks 가 통과하면 즉시 초기화; REPLAY 는 6 s. 진입 가능 시점은 그대로(둘 다 진입 불가), 부팅 경고만 바뀜. Kill: INIT_MODEL_WAIT_MAX_S = 6.0.
+- 46-4 판정 플래그: controlsState.steerFlags @70 :UInt16(9 비트: 저확신 게이트·캡·해제 램프, 룩어헤드 캡, 6g 블렌드, 드롭아웃, 이탈 홀드, BSM 홀드, 진입 보조), CarStateSP.steerFlags @2 :UInt32(28 비트: 활성·송신 활성, 패스스루·저속 래치·시나리오, angle-passive, 주차·해제 계수, driver/EPS 파지, 앵커·앵커 홀드, 빠른 하강·토크 팔·밀기, 가속 양보, 부스트 억제, BSM 주의, 도시 해제, 앵커 회복, 깜빡이 천장, post-grip, VM 거부, 후진, 카메라 고장, 휠 추월, 송신 거부·포화). route_extract 가 sf_cc / sf_ctl 열로 저장.
+- 부하: 두 메시지 모두 크기 변화 0 B(기존 정렬 공간에 들어감: controlsState 288 B, carStateSP 56 B). 플래그 계산 x86 1.3 µs/프레임(card 스텝 130 µs 의 1 %), controlsd 는 정수 OR 몇 개. modeld 로그는 부팅당 1 줄.
+- 테스트: test_phase46 23 건. **정정:** tinygrad_repo 서브모듈이 비어 있어 controlsd 를 import 하는 모듈(test_phase41, test_noncontrol_controlsd* 등 70 건)이 이 컨테이너와 CI 에서 conftest 에 의해 조용히 건너뛰어지고 있었다 — §29·§31 의 "273 / 295 통과" 에는 이들이 빠져 있다. 서브모듈을 받아 전체 365 건 통과 확인, CI 워크플로에 서브모듈 초기화 추가.
+
+**독립 리뷰(서브에이전트)와 반영.**
+- (확인·수정) 46-3 이 패널 안전 모드 유예를 깨뜨림: card 는 selfdrived 초기화 뒤에야 ControlsReady 를 쓰고(→ pandad 가 ELM327 에서 차량 안전 모드로 전환), selfdrived 의 불일치 유예는 "시작 후 10 s" 고정이었다. 초기화가 11–14 s 로 늦어지면 매 부팅 직후 controlsMismatch(진입 불가 + MADS 부팅 재시도의 거부 경고)가 뜬다. 지금도 초기화가 11 s 인 주행에서 한 번 나왔다(37 번 11.7 s). → 유예를 "시작 후 10 s 그리고 초기화 후 4 s" 로(`safety_mode_grace_over`, SAFETY_MODE_GRACE_AFTER_INIT_S = 4.0), 테스트 3 건.
+- (수정) STEER_FLAG_LOWCONF_RELEASE 가 램프 마지막 프레임을 놓침(update 안에서 감소) → 호출 전 값으로 판정, 파지·깜빡이 취소는 제외.
+- (수용) 초기화 대기 동안 car_events 가 돌지 않아 순정 SCC pcmEnable 상승 에지가 0–14 s 동안 묻힘(업스트림은 0–6 s). 이 차는 MADS 측면만 쓰고(selfdriveState.active 전 주행 0), 측면은 MADS 부팅 재시도가 덮는다. modeld 가 아예 안 뜨면 고장 표시가 6 s → 30 s 늦어짐(진입 불가는 동일). ACI 블록 비트는 수동 프레임에도 "게인 함수 입력"으로 기록됨 — 판독 시 SF_EFF_ACTIVE 와 함께 볼 것.
+- (이상 없음) 새 코드의 NameError 경로 없음, 제어 출력 불변, 오버플로 없음, 스키마 서수, modeld 텔레메트리 예외 처리, torqued 사망 감지 유지.
+- 최종: phase_tests 368 통과(건너뜀 0), ruff F 통과.
+
+**채택 기준(다음 주행).** modeld.import_timing 로그로 11–13 s 의 내역 확인; 메인을 일찍 켠 주행에서 통신 오류·Unavailable 경고 0 회, 조향 시작이 첫 modelV2 후 ≤ 1 s; steerFlags 로 §26 판정(41 캡 작동 프레임, 42/44a 빠른 하강, 45 해제)을 직접 집계.
