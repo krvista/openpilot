@@ -835,3 +835,31 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
   - 탈출 −2.0 cm. 다만 탈출에서는 안쪽 차선에 20 cm 이상 가까워진 비율이 16.6 % 로 직진 10.3 % 보다 높다. 늦게 푸는 경향의 가능성이 있으나 0.8 분 표본이라 관찰 항목이다.
 - 한계: op 주도 표본은 2 m/s² 미만 커브 7 분뿐이다(그보다 급한 커브는 대부분 운전자가 잡는다). 램프·급커브의 결론은 아니다.
 - 도구: probes/corner_lanes_extract.py, probes/corner_inside.py.
+
+## 34. Phase 47 — AGNOS gpio udev 규칙 일괄화 스크립트 (10-05, 연결 보류)
+
+**구현.** `scripts/i6n_gpio_rule_fix.sh`(§33 대안 A). 아래 단계를 하나라도 통과하지 못하면 아무것도 바꾸지 않거나 스스로 되돌린다.
+1. 킬스위치(`/data/i6n_gpio_rule_fix_disable` 또는 I6N_GPIO_RULE_FIX=0), 규칙 파일 존재, 이미 마운트 지점인지 확인.
+2. 원본이 agnos-builder 99-gpio.rules(2022 이후 불변, 19.8 브랜치 포함)와 sha256 d0b5ac66… 로 바이트 일치할 때만 진행.
+3. 교체본은 고정 문자열(원본과 `{} \;` → `{} +` 두 곳만 다름 — 테스트가 확인)이며, /run 에 쓴 뒤 sha256 을 재확인한다. `udevadm verify` 가 있으면 통과를 요구한다.
+4. bind-mount 후 udev 가 읽을 내용을 다시 해시로 확인 → `udevadm control --reload`. 마운트 실패면 무변경, 내용 불일치·reload 실패면 unmount + reload.
+5. 즉시 일괄 권한 부여(같은 find 를 `+` 로) — panda 핀 권한이 udev 큐에 의존하지 않게.
+6. 백그라운드 사후 점검(`udevadm settle` ≤ 90 s 후): 내보낸 핀의 value/direction 이 그룹 gpio·770 인지, panda 핀 49·124·134 가 있는지 확인. 하나라도 어긋나면 일괄 find 를 다시 돌리고, 그래도 어긋나면 규칙을 되돌린 뒤 원본의 파일별 find 를 한 번 실행.
+7. 모든 명령에 timeout. 상태 로그 `/data/i6n_gpio_rule_fix.log`(최근 300 줄). 같은 부팅에서 다시 실행해도 중복 마운트하지 않는다.
+
+**검증.** phase_tests/test_phase47.py 21 건 — 가짜 sysfs·mountinfo·mount/umount/udevadm 샌드박스에서 실제 스크립트를 실행한다.
+- 정상 적용, 교체본 동등성
+- 모르는 내용 4 종(빈 파일·값 변경·로컬 수정·이미 일괄화)은 무변경·권한 무변경
+- 파일 없음, 킬스위치 2 종
+- 마운트 실패 무변경, 마운트 무효·reload 실패 되돌림
+- verify 거부 시 마운트 전 중단, verify 통과 시 적용
+- settle 중 권한 손상 복구, panda 핀(124) 누락 시 원본 규칙 복귀 + 원본 find
+- 재실행 멱등, 로그 길이 제한, 백그라운드 점검이 실행을 붙잡지 않음(< 2.5 s)
+- 가짜 udevadm 문법 오류 상황에서도 스스로 되돌림을 확인했다.
+- shellcheck 경고 0, 전체 phase_tests 389 통과.
+
+**연결 보류.** launch_chffrplus.sh 의 agnos_init 에 `timeout 60 "$DIR/scripts/i6n_gpio_rule_fix.sh" || true` 한 줄을 넣는 편집이 이 세션의 자동 권한 검사에서 "부팅 시 자동 실행 추가"로 거부됐다. 우회하지 않고 사용자 결정으로 남긴다. 연결 전까지 기기 동작은 변하지 않는다.
+
+**첫 부팅 판정(연결 후).**
+- 효과: procLog 의 gpio find 명령줄이 `{} +` 형태이고 개수·부팅 0–45 s 시스템 시간이 줄었는지, modeld.import_timing.
+- 안전: panda 연결·GPIO 오류 로그 0, `/data/i6n_gpio_rule_fix.log` 에 "applied"·"postcheck ok".
