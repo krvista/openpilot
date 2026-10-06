@@ -78,8 +78,9 @@ class Box:
                STATUS_FILE=str(self.status), DISABLE_FILE=str(self.tmp / "disable"), MOUNTINFO=str(self.mountinfo),
                GPIO_OWNER=me, GPIO_GROUP=grp.getgrgid(os.getgid()).gr_name, SUDO="", MOUNT=self.mount,
                UMOUNT=self.umount, UDEVADM=self.udevadm, SETTLE_TIMEOUT="1", POSTCHECK_SYNC="1")
+    cmd = extra.pop("_cmd", ["bash", SCRIPT])
     env.update(extra)
-    r = subprocess.run(["bash", SCRIPT], env=env, capture_output=True, text=True, timeout=60)
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr        # never fails the launch script
     return r
 
@@ -226,3 +227,46 @@ def test_background_postcheck_does_not_hold_the_launch(tmp_path):
   t = time.monotonic()
   b.run(UDEVADM=slow, POSTCHECK_SYNC="0", SETTLE_TIMEOUT="5")
   assert time.monotonic() - t < 2.5 and b.rule.read_text() == BATCHED
+
+
+LAUNCH = os.path.join(os.path.dirname(HERE), "launch_chffrplus.sh")
+
+
+def _launch_line():
+  src = open(LAUNCH).read()
+  body = src[src.index("function agnos_init {"):src.index("function launch {")]
+  lines = [ln.strip() for ln in body.splitlines() if "i6n_gpio_rule_fix.sh" in ln and not ln.strip().startswith("#")]
+  assert len(lines) == 1, lines
+  # after the AGNOS update check (runs only when /VERSION matches), bounded, and can never stop the launch
+  assert body.index(lines[0]) > body.index('$AGNOS_VERSION')
+  assert lines[0] == 'timeout 60 "$DIR/scripts/i6n_gpio_rule_fix.sh" || true'
+  return lines[0]
+
+
+def test_launch_line_is_wired_in_agnos_init():
+  _launch_line()
+
+
+def test_launch_line_returns_fast_and_postcheck_survives_timeout(tmp_path):
+  """The exact launch line: returns at once with status 0, and the background post-check is not killed by `timeout`."""
+  import time
+  b = Box(tmp_path)
+  slow = _stub(tmp_path / "bin" / "udevadm_slow", f"""
+    echo "udevadm $*" >> {b.calls}
+    case "$1" in verify) exit 1 ;; control) exit 0 ;; settle) sleep 2; exit 0 ;; esac
+    """)
+  root = tmp_path / "root"; (root / "scripts").mkdir(parents=True)
+  os.symlink(SCRIPT, root / "scripts" / "i6n_gpio_rule_fix.sh")
+  t = time.monotonic()
+  b.run(UDEVADM=slow, POSTCHECK_SYNC="0", SETTLE_TIMEOUT="5", _cmd=["bash", "-c", f'DIR={root}; {_launch_line()}; echo "rc=$?"'])
+  assert time.monotonic() - t < 2.5 and b.rule.read_text() == BATCHED
+  for _ in range(60):
+    if "postcheck ok" in b.status_text():
+      break
+    time.sleep(0.1)
+  assert "postcheck ok" in b.status_text()
+
+
+def test_launch_line_tolerates_missing_script(tmp_path):
+  r = subprocess.run(["bash", "-c", f'DIR={tmp_path}; {_launch_line()}; echo "rc=$?"'], capture_output=True, text=True, timeout=10)
+  assert r.stdout.strip().endswith("rc=0")

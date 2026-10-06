@@ -28,6 +28,11 @@ function agnos_init {
       $DIR/openpilot/common/hardware/comma/updater $AGNOS_PY $MANIFEST
     done
   fi
+
+  # i6n: batch AGNOS's per-file gpio udev find ({} \; -> {} +) to stop the cold-boot fork storm that
+  # saturates cores 0-5 for ~30 s. Only acts on the exact known rule text, reverts itself on any
+  # problem, never fails the launch. Kill switch: touch /data/i6n_gpio_rule_fix_disable
+  timeout 60 "$DIR/scripts/i6n_gpio_rule_fix.sh" || true
 }
 
 function launch {
