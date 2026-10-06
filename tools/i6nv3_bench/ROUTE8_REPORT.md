@@ -915,3 +915,20 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
 3. ~~proclogd 를 코어 6 으로~~ **철회**: 코어 6 은 isolcpus 로 비워 둔 camerad 전용 코어다(camerad/main.cc 는 실시간 우선순위 대신 격리에 기대는 비실시간 폴 루프, hardware.py 가 카메라 IRQ 도 코어 6 에 고정, selfdrived 이동 때도 같은 이유로 제외). 코어 2 p99 는 2 s 평균으로 80 % 를 넘지 않고, 코어 2 에는 제어 프로세스가 없어 옮길 이득도 작다.
 4. CD210 60–80 km/h 커브 보탬·직선 우측 당김 — 고속 표본을 더 모은 뒤 판단.
 5. 44a 지표를 지속 파지 기준으로 수정.
+
+## 36. Phase 47 연결 + Phase 48 modeld_v2 import 지연 제거 (10-06, §35 개선 후보 1·2)
+
+**47 연결(사용자 승인).** `launch_chffrplus.sh` 의 agnos_init 끝(AGNOS 버전 확인 블록 뒤 — 버전이 맞을 때만 도달)에
+`timeout 60 "$DIR/scripts/i6n_gpio_rule_fix.sh" || true` 한 줄. 스크립트 자체의 안전장치(원본 sha256 일치 시에만 적용, 실패 시 자동 되돌림, 킬스위치 `/data/i6n_gpio_rule_fix_disable`)는 §34 그대로.
+- 테스트 +3(test_phase47 24 건): 한 줄이 agnos_init 안·AGNOS 확인 뒤에 정확히 한 번 있음, 그 한 줄을 그대로 실행하면 즉시 rc 0 으로 돌아오고 백그라운드 사후 점검이 `timeout` 에 죽지 않고 "postcheck ok" 까지 감, 스크립트가 없어도 rc 0.
+
+**48.** `sunnypilot/modeld_v2/compile_modeld.py` 의 `device=Device.DEFAULT` 기본값 4 곳 → `None`, `generate_queues_and_npy` 안에서 `device or Device.DEFAULT` 로 사용 시점에 결정.
+- 실제 호출(modeld_v2 ModelState)은 모두 장치를 명시하고, 컴파일 경로는 원래 `Device.DEFAULT` 를 직접 넘기므로 동작 동일.
+- x86: modeld_v2 import 1.18 → 0.13–0.15 s, import 후 장치 미선택(이전: CPU 선택 + DEV 환경변수 설정).
+- sunnypilot modeld_v2 테스트 95 건 수정 전후 모두 통과. test_phase48 3 건(시그니처에 Device 기본값 없음, 새 프로세스 import 후 장치 미선택, None → 기본 장치) — 수정 전 코드에서는 3 건 모두 실패.
+- 전체 phase_tests 395 통과.
+- CD210(stock modeld) 사용 중에는 영향 없음. sunnypilot 모델로 돌아가면 효과가 난다.
+
+**다음 주행 판정.**
+- 47(콜드 부팅): procLog 의 gpio find 가 `{} +` 형태이고 sh 개수가 49 → 소수로 줄었는지, 부팅 5–30 s 코어 0–5 가 100 % 에서 내려왔는지. 안전: panda 연결·GPIO 오류 0, `/data/i6n_gpio_rule_fix.log` 에 "applied"·"postcheck ok".
+- 48(sunnypilot 모델 사용 시): modeld.import_timing 의 "sunnypilot" 6–11 s → 1 s 안팎, 첫 modelV2 시점.
