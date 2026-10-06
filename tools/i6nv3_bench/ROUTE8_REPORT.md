@@ -904,7 +904,7 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
 
 **부하·안정성.**
 - 평상시 코어 0–5 평균 57–66 %, 10 s 평균 최대 ≤ 71 %, 모델과 무관.
-- 상주: 코어 3 pandad 53 %, 코어 4 card 44 + controlsd 19, 코어 5 ui 35 + selfdrived 24, 코어 0–2 locationd·loggerd·sensord·proclogd, 코어 6 camerad 6 %(사실상 빈 코어), 코어 7 modeld 18–22 + dmonitoringmodeld 13.
+- 상주: 코어 3 pandad 53 %, 코어 4 card 44 + controlsd 19, 코어 5 ui 35 + selfdrived 24, 코어 0–2 locationd·loggerd·sensord·proclogd, 코어 6 camerad 6 %(격리 코어 — camerad 전용, 카메라 IRQ 도 여기), 코어 7 modeld 18–22 + dmonitoringmodeld 13.
 - 코어 2 의 p99 84–86 % 는 proclogd 2 s 스윕 버스트(2 s 평균으로는 80 % 초과 0 회).
 - 제어 루프: sendcan 간격 p50 10.0 / p99 16.4 / 최대 21–23 ms, carState→carControl p50 3.7 / p99 10.8 ms — 38 번(이전 빌드)과 동일.
 - 프로세스 재시작 0, panda 폴트 0, MDPS 고장 0, MDPS 미응답 0.24–1.05 %(최장 0.08 s), 주행 중 송신 거부 1–6 회, CPU 온도 최대 71 °C, 메모리 ≤ 65 %.
@@ -912,6 +912,6 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
 **개선 후보(우선순위).**
 1. Phase 47 연결(사용자 승인 필요) — 콜드 부팅 포화 제거, 이번에 원인 직접 확인.
 2. sunnypilot 모델을 다시 쓸 경우 compile_modeld 기본값을 지연 평가로 — 부팅 6–11 s 단축 예상(CD210 사용 중에는 무관).
-3. proclogd 를 코어 6 으로 — 코어 2 스윕 버스트 제거(제어 경로 영향 없음, 낮은 우선순위).
+3. ~~proclogd 를 코어 6 으로~~ **철회**: 코어 6 은 isolcpus 로 비워 둔 camerad 전용 코어다(camerad/main.cc 는 실시간 우선순위 대신 격리에 기대는 비실시간 폴 루프, hardware.py 가 카메라 IRQ 도 코어 6 에 고정, selfdrived 이동 때도 같은 이유로 제외). 코어 2 p99 는 2 s 평균으로 80 % 를 넘지 않고, 코어 2 에는 제어 프로세스가 없어 옮길 이득도 작다.
 4. CD210 60–80 km/h 커브 보탬·직선 우측 당김 — 고속 표본을 더 모은 뒤 판단.
 5. 44a 지표를 지속 파지 기준으로 수정.
