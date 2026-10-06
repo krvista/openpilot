@@ -931,4 +931,19 @@ fight −69 %/h(기준 ≥ 50 % 감소 충족), assist 증가 없음(기준 충�
 
 **다음 주행 판정.**
 - 47(콜드 부팅): procLog 의 gpio find 가 `{} +` 형태이고 sh 개수가 49 → 소수로 줄었는지, 부팅 5–30 s 코어 0–5 가 100 % 에서 내려왔는지. 안전: panda 연결·GPIO 오류 0, `/data/i6n_gpio_rule_fix.log` 에 "applied"·"postcheck ok".
-- 48(sunnypilot 모델 사용 시): modeld.import_timing 의 "sunnypilot" 6–11 s → 1 s 안팎, 첫 modelV2 시점.
+- 48(sunnypilot 모델 사용 시): manager 의 "starting process" → modeld 의 "modeld init" 간격(기존 로그) 11–17 s → 수 s, 첫 modelV2 시점. (import_timing 계측은 §37 에서 제거)
+
+## 37. 목적을 다 한 진단 로그 제거 (10-06)
+
+| 로그 | 추가 | 제거 이유 |
+|---|---|---|
+| modeld_v2 `modeld.import_timing`(import 단계별 시각 8 개 + /proc 2 개 읽기, 부팅마다 1 줄) | Phase 46-1 | 원인 특정(§35) → Phase 48 로 수정 완료. 파일을 Phase 46 이전과 바이트 동일하게 복원 |
+| hardwared `cpu_topology`(부팅 시 + 온로드 120 s 후: /proc/interrupts 전체, IRQ 마다 smp_affinity 읽기, /proc/stat) | 09-07 (208c286) | isolcpus = 6,7·IRQ 배치를 라우트 7 에서 확정, 이후 분석은 procLog 로 충분. 부팅 직후 바쁜 구간의 파일 읽기 수십~수백 회 제거 |
+
+남긴 것:
+- `/data/i6n_gpio_rule_fix.log` — Phase 47 첫 콜드 부팅 안전 판정("applied"·"postcheck ok")에 필요. 판정 뒤 제거 후보.
+- hardwared 루프 정지 감지 — 정지(> 1 s)가 있을 때만 1 줄, 평소 기록 없음.
+- steerFlags(controlsState·carStateSP) — 기존 메시지 필드의 비트, 로그 크기 +0 B, 매 주행 판정에 사용.
+- selfdrived.initialized — upstream 로그.
+
+phase_tests 392(46-1 테스트 3 건 제거), modeld_v2 테스트 99 통과.
