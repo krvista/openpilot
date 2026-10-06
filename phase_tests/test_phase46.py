@@ -1,12 +1,11 @@
 """Phase 46 (report §32): boot observability + boot alerts, and steering telemetry flags.
 
-  46-1  modeld_v2 stamps its import stages and logs them once from main() (11-13 s before main() on every boot).
+  46-1  (removed, report §37) modeld_v2 import-stage timing — found the cause (compile_modeld Device.DEFAULT, Phase 48).
   46-2  angle-control cars drop lateralTorqueParameters from selfdrived's checks (unused; held the boot engage ~1 s).
   46-3  selfdrived stays "initializing" while the driving model has not published yet (max 30 s), then gives the rest of
         the pipeline 3 s; REPLAY keeps the upstream 6 s.
   46-4  controlsState.steerFlags (controlsd guards) and carStateSP.steerFlags (CarController latches / yield paths).
 """
-import ast
 import os
 import types
 
@@ -116,42 +115,6 @@ class TestUnusedLateralServices:
     assert len(uses) == 1
     before = src[:uses[0]].rsplit("\n", 4)
     assert "if self.CP.lateralTuning.which() == 'torque':" in "\n".join(before)
-
-
-# ---------------------------------------------------------------- 46-1 modeld import timing
-def _import_timing_fn(marks, proc_ok=True):
-  src = open(os.path.join(ROOT, "openpilot/sunnypilot/modeld_v2/modeld.py")).read()
-  fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "_import_timing")
-  clock = types.SimpleNamespace(monotonic=lambda: marks[-1][1] + 0.5)
-  real_open = open
-
-  def fake_open(path, *a, **k):
-    if not proc_ok:
-      raise OSError("no /proc")
-    return real_open(path, *a, **k)
-  g = {"_IMPORT_MARKS": marks, "time": clock, "os": os, "open": fake_open}
-  exec(compile(ast.Module(body=[fn], type_ignores=[]), "modeld_timing", "exec"), g)
-  return g["_import_timing"]
-
-
-class TestImportTiming:
-  MARKS = [("start", 100.0), ("hardware", 101.0), ("numpy", 101.5), ("tinygrad", 109.0), ("sunnypilot", 112.0)]
-
-  def test_stage_durations(self):
-    out = _import_timing_fn(list(self.MARKS))()
-    assert out["hardware"] == 1.0 and out["numpy"] == 0.5 and out["tinygrad"] == 7.5 and out["sunnypilot"] == 3.0
-    assert out["total"] == 12.0 and out["to_main"] == 12.5
-
-  def test_proc_failure_never_raises(self):
-    out = _import_timing_fn(list(self.MARKS), proc_ok=False)()
-    assert "exec_to_first_line" not in out and out["total"] == 12.0
-
-  def test_marks_cover_every_import_block(self):
-    src = open(os.path.join(ROOT, "openpilot/sunnypilot/modeld_v2/modeld.py")).read()
-    head = src[:src.index("def _import_timing")]
-    for stage in ("hardware", "numpy", "cereal", "car_helpers", "tinygrad", "openpilot_common", "sunnypilot"):
-      assert f'_IMPORT_MARKS.append(("{stage}"' in head
-    assert 'cloudlog.event("modeld.import_timing"' in src
 
 
 # ---------------------------------------------------------------- 46-4 steering flags
