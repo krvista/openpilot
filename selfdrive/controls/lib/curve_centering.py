@@ -2,6 +2,7 @@ import numpy as np
 
 from cereal import log
 from openpilot.common.realtime import DT_CTRL
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 LaneChangeState = log.LaneChangeState
@@ -24,6 +25,19 @@ MAX_FRACTION = 0.5          # of the model's own lateral accel
 MIN_LANE_PROB = 0.7
 LANE_WIDTH = (2.7, 4.3)     # m
 TAU = 0.5                   # s, smoothing of the correction
+PARAM = "CurveLaneCentering"
+
+
+def read_enabled(params) -> bool:
+  # Release branches run the prebuilt params library, which does not know keys added to params_keys.h
+  # after it was built: Params.get_bool(PARAM) raised UnknownKeyName at controlsd start, so nothing
+  # sent LKAS commands and the car showed its lane-sense fault. Read the file directly (the path lookup
+  # does not check the key); missing or unreadable means on.
+  try:
+    with open(params.get_param_path(PARAM)) as f:
+      return f.read().strip() not in ("0", "false", "False")
+  except Exception:
+    return True
 
 
 class CurveCentering:
@@ -47,6 +61,8 @@ class CurveCentering:
     if len(probs) < 4 or len(model.laneLines) < 4 or min(probs[1], probs[2]) < MIN_LANE_PROB:
       return 0.0
     left, right = model.laneLines[1], model.laneLines[2]
+    if min(len(left.x), len(left.y), len(right.x), len(right.y), len(model.position.x), len(model.position.y)) < 2:
+      return 0.0
     width = right.y[0] - left.y[0]
     if not LANE_WIDTH[0] < width < LANE_WIDTH[1]:
       return 0.0
@@ -76,6 +92,11 @@ class CurveCentering:
       self.reset()
       return 0.0
     if model_updated:
-      self.target = self._target(model, CS)
+      try:
+        self.target = self._target(model, CS)
+      except Exception:
+        # an aid on top of the model's curvature must never take controlsd down
+        cloudlog.exception("curve centering failed")
+        self.target = 0.0
     self.lat_accel += self.alpha * (self.target - self.lat_accel)
     return self.lat_accel / max(CS.vEgo, MIN_SPEED) ** 2

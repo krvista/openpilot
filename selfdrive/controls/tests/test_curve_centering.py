@@ -1,7 +1,7 @@
 import numpy as np
 
 from cereal import car, log
-from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, MAX_LAT_ACCEL
+from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, MAX_LAT_ACCEL, PARAM, read_enabled
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
@@ -80,3 +80,21 @@ class TestCurveCentering:
       out = cc.update(True, md, i % 5 == 0, cs) * 25. ** 2
       assert abs(out - prev) < 0.01  # per 10 ms
       prev = out
+
+  def test_malformed_model_returns_zero(self):
+    md = make_model(25., 1.2, 0.3)
+    md.position.x = []
+    assert settle(CurveCentering(), md, make_cs(25.)) == 0.
+
+  def test_toggle_read_without_params_key(self, tmp_path):
+    class PrebuiltParams:  # prebuilt params library: the key is unknown, only the path lookup works
+      def get_param_path(self, key=""):
+        return str(tmp_path / key)
+      def get_bool(self, key, block=False):
+        raise Exception(f"UnknownKeyName {key}")
+    p = PrebuiltParams()
+    assert read_enabled(p)
+    (tmp_path / PARAM).write_text("0")
+    assert not read_enabled(p)
+    (tmp_path / PARAM).write_text("1")
+    assert read_enabled(p)

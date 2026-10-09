@@ -11,7 +11,7 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering
+from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_enabled as curve_centering_enabled
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -56,7 +56,7 @@ class Controls(ControlsExt):
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
 
-    self.curve_centering = CurveCentering(self.params.get_bool("CurveLaneCentering"))
+    self.curve_centering = CurveCentering(curve_centering_enabled(self.params))
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
