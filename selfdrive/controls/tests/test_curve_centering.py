@@ -58,6 +58,14 @@ class TestCurveCentering:
     assert settle(CurveCentering(), md, make_cs(25.)) == 0.
     assert settle(CurveCentering(), md, make_cs(25., right_bsm=True)) < -0.05
     assert settle(CurveCentering(), md, make_cs(25., left_bsm=True)) == 0.
+    assert settle(CurveCentering(), md, make_cs(25., left_bsm=True, right_bsm=True)) == 0.
+
+  def test_bsm_on_outside_no_push(self):
+    # right curve, car inside, but a car alongside on the outside (left): keep the model's line
+    md = make_model(25., 1.2, 0.3)
+    assert settle(CurveCentering(), md, make_cs(25.)) < -0.2
+    assert settle(CurveCentering(), md, make_cs(25., left_bsm=True)) == 0.
+    assert settle(CurveCentering(), md, make_cs(25., left_bsm=True, right_bsm=True)) == 0.
 
   def test_gates(self):
     for md, cs in [(make_model(25., 1.2, 0.3, prob=0.4), make_cs(25.)),

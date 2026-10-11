@@ -87,6 +87,12 @@ class CurveCentering:
     self.inside = float(min(plan_inside, now_inside))
 
     bsm_inside = CS.rightBlindspot if direction > 0 else CS.leftBlindspot
+    bsm_outside = CS.leftBlindspot if direction > 0 else CS.rightBlindspot
+    if bsm_outside:
+      # never push toward a car alongside on the outside (cars on both sides: leave the model's line):
+      # routes 51-5b pushed outward 52% of that time (mean 0.07 m/s^2), against the model keeping its
+      # distance from that car
+      return 0.0
     err = self.inside + BSM_MARGIN if bsm_inside else self.inside - DEADBAND
     if err <= 0.:
       return 0.0
