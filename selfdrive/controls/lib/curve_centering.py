@@ -14,6 +14,8 @@ LaneChangeState = log.LaneChangeState
 # the car was centred (mean -0.03 m), and a car on the inside (BSM) did not move the line (0.19 m with
 # and without). This nudges the desired curvature outward while the planned path is inside of the lane
 # centre in a curve; it never steers inward and is gated off on straights, lane changes and blinkers.
+# Routes 51-5b (1df7448, on): inside offset 0.20 -> 0.12 m at 0.6-1.0 m/s^2 and 0.29 -> 0.12 m at 1.0-1.5,
+# time > 0.3 m inside 26-48% -> 2-4%, > 0.3 m outside 0.3% of curve time; tracking error unchanged (0.074).
 LOOKAHEAD_T = 1.0           # s, point on the model plan whose lane-centre offset is corrected
 MIN_SPEED = 12.             # m/s
 CURVE_BP = [0.25, 0.6]      # m/s^2 |model lateral accel| -> fade in
@@ -77,7 +79,12 @@ class CurveCentering:
     px = np.interp(LOOKAHEAD_T, ModelConstants.T_IDXS, model.position.x)
     py = np.interp(LOOKAHEAD_T, ModelConstants.T_IDXS, model.position.y)
     centre = (np.interp(px, left.x, left.y) + np.interp(px, right.x, right.y)) / 2.
-    self.inside = float((py - centre) * direction)
+    plan_inside = (py - centre) * direction
+    # Only correct once the car is inside too. On curve entry the plan point is already inside while the
+    # car is still centred, and correcting it delayed turn-in: routes 51-5b (1df7448) fell short of the
+    # model's lateral accel by 0.23 m/s^2 on entry vs 0.15 without centering (43-4d).
+    now_inside = -(left.y[0] + right.y[0]) / 2. * direction
+    self.inside = float(min(plan_inside, now_inside))
 
     bsm_inside = CS.rightBlindspot if direction > 0 else CS.leftBlindspot
     err = self.inside + BSM_MARGIN if bsm_inside else self.inside - DEADBAND

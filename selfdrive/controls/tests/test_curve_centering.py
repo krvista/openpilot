@@ -5,8 +5,10 @@ from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, MAX
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
-def make_model(v, lat_accel, offset, width=3.2, prob=0.9, lane_change=log.LaneChangeState.off):
-  """Constant-curvature road; the planned path runs `offset` m right of the lane centre."""
+def make_model(v, lat_accel, offset, width=3.2, prob=0.9, lane_change=log.LaneChangeState.off, car_offset=None):
+  """Constant-curvature road; the car sits `car_offset` (default `offset`) m right of the lane centre and
+  the planned path runs `offset` m right of it."""
+  car_offset = offset if car_offset is None else car_offset
   curv = lat_accel / v ** 2
   md = log.ModelDataV2.new_message()
   md.action.desiredCurvature = curv
@@ -15,11 +17,11 @@ def make_model(v, lat_accel, offset, width=3.2, prob=0.9, lane_change=log.LaneCh
   lines = md.init('laneLines', 4)
   for i, y0 in enumerate([-1.5 * width, -width / 2, width / 2, 1.5 * width]):
     lines[i].x = x.tolist()
-    lines[i].y = (y0 + curv * x ** 2 / 2).tolist()
+    lines[i].y = (y0 - car_offset + curv * x ** 2 / 2).tolist()
   md.laneLineProbs = [prob] * 4
   px = v * np.array(ModelConstants.T_IDXS)
   md.position.x = px.tolist()
-  md.position.y = (offset + curv * px ** 2 / 2).tolist()
+  md.position.y = (offset - car_offset + curv * px ** 2 / 2).tolist()
   return md
 
 
@@ -98,3 +100,11 @@ class TestCurveCentering:
     assert not read_enabled(p)
     (tmp_path / PARAM).write_text("1")
     assert read_enabled(p)
+
+  def test_curve_entry_plan_inside_car_centred(self):
+    # turn-in: the plan is already inside but the car is still centred -> leave the turn-in alone
+    assert settle(CurveCentering(), make_model(25., 1.2, 0.3, car_offset=0.0), make_cs(25.)) == 0.
+    # once the car is inside as well, correct by the smaller of the two
+    cc = CurveCentering()
+    assert settle(cc, make_model(25., 1.2, 0.3, car_offset=0.2), make_cs(25.)) < 0.
+    assert abs(cc.inside - 0.2) < 0.02
