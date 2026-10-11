@@ -30,13 +30,13 @@ TAU = 0.5                   # s, smoothing of the correction
 PARAM = "CurveLaneCentering"
 
 
-def read_enabled(params) -> bool:
+def read_enabled(params, key: str = PARAM) -> bool:
   # Release branches run the prebuilt params library, which does not know keys added to params_keys.h
   # after it was built: Params.get_bool(PARAM) raised UnknownKeyName at controlsd start, so nothing
   # sent LKAS commands and the car showed its lane-sense fault. Read the file directly (the path lookup
   # does not check the key); missing or unreadable means on.
   try:
-    with open(params.get_param_path(PARAM)) as f:
+    with open(params.get_param_path(key)) as f:
       return f.read().strip() not in ("0", "false", "False")
   except Exception:
     return True

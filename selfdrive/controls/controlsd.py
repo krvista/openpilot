@@ -13,6 +13,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_enabled as curve_centering_enabled
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from openpilot.selfdrive.controls.lib.roll_bias import RollBias, RollCorrectedParams
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -57,6 +58,7 @@ class Controls(ControlsExt):
     self.calibrated_pose: Pose | None = None
 
     self.curve_centering = CurveCentering(curve_centering_enabled(self.params))
+    self.roll_bias = RollBias(curve_centering_enabled(self.params, "RollBiasCorrection"))
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
@@ -82,6 +84,7 @@ class Controls(ControlsExt):
 
     # Update VehicleModel
     lp = self.sm['liveParameters']
+    lp = RollCorrectedParams(lp, lp.roll - self.roll_bias.update(self.sm['liveTorqueParameters'], self.sm.all_checks(['liveTorqueParameters'])))
     x = max(lp.stiffnessFactor, 0.1)
     sr = max(lp.steerRatio, 0.1)
     self.VM.update_params(x, sr)
