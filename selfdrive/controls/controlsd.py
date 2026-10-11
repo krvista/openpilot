@@ -12,6 +12,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_enabled as curve_centering_enabled
+from openpilot.selfdrive.controls.lib.curve_exit_lead import CurveExitLead
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.roll_bias import RollBias, RollCorrectedParams
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
@@ -59,6 +60,7 @@ class Controls(ControlsExt):
 
     self.curve_centering = CurveCentering(curve_centering_enabled(self.params))
     self.roll_bias = RollBias(curve_centering_enabled(self.params, "RollBiasCorrection"))
+    self.curve_exit_lead = CurveExitLead(curve_centering_enabled(self.params, "CurveExitLead"))
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
@@ -162,7 +164,8 @@ class Controls(ControlsExt):
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       curve_centering = self.curve_centering.update(CC.latActive, model_v2, self.sm.updated['modelV2'], CS)
-      new_desired_curvature = model_v2.action.desiredCurvature + curve_centering if CC.latActive else self.curvature
+      model_curvature = self.curve_exit_lead.update(model_v2, CS.vEgo, model_v2.action.desiredCurvature, self.lat_delay)
+      new_desired_curvature = model_curvature + curve_centering if CC.latActive else self.curvature
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
