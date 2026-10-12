@@ -63,7 +63,7 @@ class _ModelFrame:
   (plan-point fits, lane-centre curvature, BSM lane inputs) are computed on first use, so a
   disengaged frame — which never reads them — pays nothing (review: eager computation made
   disengaged frames slower than before)."""
-  __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "y_std", "lane_min_p",
+  __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
                "_klane", "_bsm", "lane_change_state", "lane_change_dir")
   _UNSET = object()
 
@@ -75,6 +75,7 @@ class _ModelFrame:
     self._fit12 = self._fit24 = self._klane = self._bsm = _ModelFrame._UNSET
     probs = getattr(model_v2, "laneLineProbs", [])
     self.lane_min = min(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0
+    self.lane_max = max(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0   # Phase 49
     self.lane_min_p = min(float(probs[1]), float(probs[2])) if len(probs) >= 3 else 0.0
     y_std_list = getattr(model_v2.position, "yStd", [])
     self.y_std = float(y_std_list[5]) if len(y_std_list) > 5 else 0.0
@@ -312,6 +313,27 @@ LANE_DROPOUT_EXIT_S = 0.5         # continuous frames above LANE_HI to release
 LANE_DROPOUT_MAX_S = 3.0          # hand back to the 6g blend after this long
 LANE_DROPOUT_REARM_S = 1.0        # lines back above LANE_HI this long before a new latch may start
 LANE_DROPOUT_LC_HOLDOFF_S = 1.0   # no latch this long after a lane change ends
+# Phase 49 (i6nv3 routes 3d-42, 10-07..10-12, CD210, report §39/§40): the latch fired 39 times / 64 s in 1.9 h of
+# lateral control ("Lane Lines Lost" repeating). 12 had the OTHER inner line clear at 0.71-0.98 — every one the
+# curb/wall-side right line weak in the rightmost lane (Namsan tunnel 1: right 0.14-0.19, left 0.97, four alerts in one
+# minute) — with hold = plan = road, i.e. an alert and nothing else; 17 were < 60 km/h intersection turns where the
+# lines leave the camera, the driver was already turning (16 grabs) and the hold kept the pre-turn command against a
+# plan that was right (10 of 17). Replayed on the six routes (39/39 logged latches reproduced) -> 10 latches / 7.8 s
+# (probes/dropout_sim.py "P49"):
+#   * both inner lines must be weak: the stronger one also below LANE_DROPOUT_MAX_LM (one clear line anchors the plan;
+#     the Phase 41 rate cap still covers the weak-line side at lane_min < 0.3, hands off), and a running hold ends
+#     once the stronger line is back above CONF_FLOOR_LANE_HI for EXIT_S (LANE_DROPOUT_EXIT_ON_ONE_LINE);
+#   * no latch while the driver holds the wheel (carState.steeringPressed): a press restarts the 0.3 s entry debounce
+#     (a hold needs 0.3 s hands-off with both lines gone — letting go mid-turn must not snap to a stale command), and
+#     a press ends a running hold (one hold per blackout, as for a lane change). While the driver holds, the car
+#     controller's grip yield already drops op's authority to <= 0.2 in ~0.17 s (Phase 42/44a), so the hold mostly
+#     fought a driver who was turning.
+# Trade-off: the original Phase 39 case (route 04 seg 8, both lines 0.14/0.09, hands resting on the wheel) is no longer
+# held; it is left to the grip yield and the Phase 41 6 deg/s cap. Kill (pre-49 behaviour): LANE_DROPOUT_MAX_LM = 1.01,
+# LANE_DROPOUT_HANDS_OFF = False, LANE_DROPOUT_EXIT_ON_ONE_LINE = False.
+LANE_DROPOUT_MAX_LM = CONF_FLOOR_LANE_HI   # the stronger inner line must be below this too
+LANE_DROPOUT_HANDS_OFF = True
+LANE_DROPOUT_EXIT_ON_ONE_LINE = True
 
 # Non-finite model action handling. A NaN/inf model_v2.action.desiredCurvature
 # bypasses every isfinite check in _lookahead_curvature (they only cover the
@@ -638,18 +660,20 @@ class Controls(ControlsExt):
           self.lane_dropout_lc_holdoff = int(LANE_DROPOUT_LC_HOLDOFF_S / DT_CTRL)
         else:
           self.lane_dropout_lc_holdoff = max(self.lane_dropout_lc_holdoff - 1, 0)
-        self.lane_dropout_low_frames = self.lane_dropout_low_frames + 1 if lane_min < LANE_DROPOUT_ENTRY_LM else 0
+        hands_on = LANE_DROPOUT_HANDS_OFF and bool(CS.steeringPressed)                     # Phase 49
+        both_weak = lane_min < LANE_DROPOUT_ENTRY_LM and mf.lane_max < LANE_DROPOUT_MAX_LM   # Phase 49
+        self.lane_dropout_low_frames = self.lane_dropout_low_frames + 1 if (both_weak and not hands_on) else 0
         if not self.lane_dropout:
           self.lane_dropout_k_hist.append(float(self.desired_curvature))
         if not self.lane_dropout_armed:
           self.lane_dropout_rearm_frames = self.lane_dropout_rearm_frames + 1 if lane_min > CONF_FLOOR_LANE_HI else 0
           if self.lane_dropout_rearm_frames >= int(LANE_DROPOUT_REARM_S / DT_CTRL):
             self.lane_dropout_armed = True
-        if self.lane_dropout and (self.lane_dropout_lc_holdoff > 0 or CS.vEgo < LANE_DROPOUT_MIN_SPEED):
-          self.lane_dropout = False                   # a lane change / slowing down ends the hold at once
+        if self.lane_dropout and (self.lane_dropout_lc_holdoff > 0 or CS.vEgo < LANE_DROPOUT_MIN_SPEED or hands_on):
+          self.lane_dropout = False                   # a lane change / slowing down / a driver press ends the hold at once
           self.lane_dropout_armed = False; self.lane_dropout_rearm_frames = 0
           self.lane_dropout_k_hist.clear()
-        if (not self.lane_dropout and self.lane_dropout_armed and self.lane_dropout_lc_holdoff == 0
+        if (not self.lane_dropout and self.lane_dropout_armed and self.lane_dropout_lc_holdoff == 0 and not hands_on
             and CS.vEgo >= LANE_DROPOUT_MIN_SPEED
             and self.lane_dropout_low_frames >= int(LANE_DROPOUT_ENTRY_S / DT_CTRL)):
           self.lane_dropout = True
@@ -658,7 +682,8 @@ class Controls(ControlsExt):
           # hold what op was doing BEFORE the blackout (ENTRY_S ago), not what the blend let through meanwhile
           self.lane_dropout_hold_k = float(self.lane_dropout_k_hist[0]) if len(self.lane_dropout_k_hist) else float(self.desired_curvature)
         elif self.lane_dropout:
-          self.lane_dropout_clear_frames = self.lane_dropout_clear_frames + 1 if lane_min > CONF_FLOOR_LANE_HI else 0
+          lines_back = (mf.lane_max if LANE_DROPOUT_EXIT_ON_ONE_LINE else lane_min) > CONF_FLOOR_LANE_HI   # Phase 49
+          self.lane_dropout_clear_frames = self.lane_dropout_clear_frames + 1 if lines_back else 0
           if self.lane_dropout_clear_frames >= int(LANE_DROPOUT_EXIT_S / DT_CTRL):
             self.lane_dropout = False                 # lines are back: the blend takes over (armed stays True)
             self.lane_dropout_k_hist.clear()          # the next hold value must be from AFTER this release

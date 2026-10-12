@@ -17,11 +17,11 @@ for f in sorted(glob.glob(f"{S}/0000*.npz")):
     t0, t1 = T[a], T[b - 1]; dur = t1 - t0
     pre = slice(max(a - 300, 0), a)            # 3 s before
     post = slice(b, min(b + 300, len(T)))      # 3 s after
-    pl, pr = lane(t0 - 0.5, t1, 1), lane(t0 - 0.5, t1, 2)
+    pl, pr = lane(t0 - 0.5, t1, 2), lane(t0 - 0.5, t1, 3)   # inner left / right (cols p1, p2)
     w = lane(t0 - 1, t0, 11) - lane(t0 - 1, t0, 10)   # lane width at x=0 (y2 - y1)
     w_pre = lane(t0 - 6, t0 - 3, 11) - lane(t0 - 6, t0 - 3, 10)
-    el, er = lane(t0, t1, 14), lane(t0, t1, 15)
-    exp_, gain = lane(t0, t1, 21), lane(t0, t1, 22)
+    el, er = lane(t0, t1, 15), lane(t0, t1, 16)
+    exp_, gain = lane(t0, t1, 22), lane(t0, t1, 23)
     k_hold = d['k_ctrl'][a:b].mean(); k_plan = d['k_model'][a:b]; k_meas = d['k_meas'][a:b]
     # why it ended
     if b < len(T) and d['v'][b] < 40: why = "slow"
