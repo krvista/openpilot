@@ -27,7 +27,6 @@ for f in sorted(glob.glob(f"{S}/0000*.npz")):
     yaw = np.zeros(len(T)); yvalid = np.zeros(len(T), bool)
   kw = -np.radians(d['ang']); kc = d['k_ctrl']; km = d['k_model']; ky = -np.radians(yaw) / np.maximum(v, 1.0)
   base = d['lat'] & ~(d['lb'] | d['rb']) & (d['lcs'] == 0)
-  hands_off = base & ~d['pressed'] & (np.abs(d['tq_s']) < 50) & (d['gain'] >= 0.9)
   i = 0
   while i + WIN <= len(T):
     s = slice(i, i + WIN); vv = v[s].mean() * 3.6
@@ -36,7 +35,8 @@ for f in sorted(glob.glob(f"{S}/0000*.npz")):
       if base[s].mean() > 0.98 and yvalid[s].mean() > 0.98 and (kw[s].max() - kw[s].min()) >= 2e-3:
         L, c = ncc_lag(kw[s], ky[s], 60)
         if L is not None and c > 0.9: R[b]['chas'].append(L * 0.01)
-      if hands_off[s].mean() > 0.98 and (kc[s].max() - kc[s].min()) >= 2e-3:
+      if (base[s].mean() > 0.98 and d['pressed'][s].mean() == 0 and np.abs(d['tq_s'][s]).mean() < 50 and d['gain'][s].mean() >= 0.9
+          and (kc[s].max() - kc[s].min()) >= 2e-3):   # window-mean hands-off (a one-frame gain dip must not drop a 10 s window)
         R[b]['n'] += 1
         La, ca = ncc_lag(kc[s], kw[s]); Lr, cr = ncc_lag(km[s], kw[s])
         if La is not None and ca > 0.9 and 0 < La < 120: R[b]['act'].append(La * 0.01)
