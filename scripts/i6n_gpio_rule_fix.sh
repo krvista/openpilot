@@ -16,7 +16,10 @@
 #   5. post-check in the background after `udevadm settle`: every exported pin's value/direction must be group gpio,
 #      mode 770, and the critical panda pins must be exported; a miss -> re-run the batched find; still a miss ->
 #      revert the mount and run the ORIGINAL per-file find once
-# Kill switch: touch /data/i6n_gpio_rule_fix_disable (or I6N_GPIO_RULE_FIX=0). Log: /data/i6n_gpio_rule_fix.log
+# Kill switch: touch /data/i6n_gpio_rule_fix_disable (or I6N_GPIO_RULE_FIX=0).
+# Log: /data/i6n_gpio_rule_fix.log keeps only what needs a look (skips, retries, reverts, the kill switch). The normal
+# "applied" / "postcheck ok" / "already applied" lines go to stdout only — the first on-road boots logged 9/9 clean
+# pairs (report §41), so a file line per boot is noise. I6N_GPIO_LOG_OK=1 writes them to the file again.
 #
 # All paths / commands are overridable for phase_tests/test_phase47.py (sandbox, no root).
 
@@ -36,6 +39,7 @@ UMOUNT="${UMOUNT:-umount}"
 UDEVADM="${UDEVADM:-udevadm}"
 SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-90}"
 POSTCHECK_SYNC="${POSTCHECK_SYNC:-0}"
+LOG_OK="${I6N_GPIO_LOG_OK:-0}"
 # panda reset / boot pins openpilot drives (common/hardware/comma/hardware.py): SOM_ST_IO, ST_RST_N, ST_BOOT0
 CRITICAL_PINS="${CRITICAL_PINS:-49 124 134}"
 
@@ -51,6 +55,11 @@ log() {
   echo "i6n_gpio_rule_fix: $*"
   { [ -f "$STATUS_FILE" ] && tail -n 300 "$STATUS_FILE"; echo "$line"; } > "$STATUS_FILE.tmp" 2>/dev/null \
     && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE" 2>/dev/null
+  return 0
+}
+
+note() {   # the normal path: stdout only, unless I6N_GPIO_LOG_OK=1
+  if [ "$LOG_OK" = "1" ]; then log "$*"; else echo "i6n_gpio_rule_fix: $*"; fi
   return 0
 }
 
@@ -105,7 +114,7 @@ postcheck() {
     || log "postcheck: udevadm settle did not finish in ${SETTLE_TIMEOUT}s"
   bad="$(perms_problems)"
   if [ -z "$bad" ]; then
-    log "postcheck ok"
+    note "postcheck ok"
     return 0
   fi
   log "postcheck: permission problems after settle:$bad -> batched find again"
@@ -144,7 +153,7 @@ main() {
   cur="$(sha_of "$RULE_FILE")"
   if is_mountpoint "$RULE_FILE"; then
     if [ "$cur" = "$NEW_SHA" ]; then
-      log "already applied this boot (re-launch)"
+      note "already applied this boot (re-launch)"
       batched_perms
       run_postcheck
     else
@@ -188,7 +197,7 @@ main() {
     revert "udevadm control --reload failed"
     return 0
   fi
-  log "applied: batched gpio rule bind-mounted over $RULE_FILE"
+  note "applied: batched gpio rule bind-mounted over $RULE_FILE"
 
   # 4. permissions now, independent of the udev queue
   batched_perms
