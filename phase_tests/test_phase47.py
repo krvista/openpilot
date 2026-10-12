@@ -102,12 +102,19 @@ def test_known_rule_text_and_hash():
 
 def test_applies_batched_rule_and_sets_perms(tmp_path):
   b = Box(tmp_path)
-  b.run()
+  r = b.run()
   assert b.rule.read_text() == BATCHED                          # what udev now reads
   assert "mount --bind" in b.log() and "udevadm control --reload" in b.log()
   assert all(m == "0o770" for m in b.modes().values())          # step 4: perms set at once
-  assert "applied" in b.status_text() and "postcheck ok" in b.status_text()
+  assert "applied" in r.stdout and "postcheck ok" in r.stdout
+  assert b.status_text() == ""                                  # §41: a clean boot leaves the status file alone
   assert "umount" not in b.log()
+
+
+def test_log_ok_switch_writes_the_normal_lines(tmp_path):
+  b = Box(tmp_path)
+  b.run(I6N_GPIO_LOG_OK="1")
+  assert "applied" in b.status_text() and "postcheck ok" in b.status_text()
 
 
 def test_batched_rule_differs_only_in_batching(tmp_path):
@@ -200,8 +207,8 @@ def test_relaunch_same_boot_is_idempotent(tmp_path):
   b = Box(tmp_path)
   b.run()
   n_mounts = b.log().count("mount --bind")
-  b.run()
-  assert b.log().count("mount --bind") == n_mounts and "already applied" in b.status_text()
+  r = b.run()
+  assert b.log().count("mount --bind") == n_mounts and "already applied" in r.stdout and b.status_text() == ""
 
 
 def test_status_log_is_bounded(tmp_path):
@@ -258,7 +265,7 @@ def test_launch_line_returns_fast_and_postcheck_survives_timeout(tmp_path):
   root = tmp_path / "root"; (root / "scripts").mkdir(parents=True)
   os.symlink(SCRIPT, root / "scripts" / "i6n_gpio_rule_fix.sh")
   t = time.monotonic()
-  b.run(UDEVADM=slow, POSTCHECK_SYNC="0", SETTLE_TIMEOUT="5", _cmd=["bash", "-c", f'DIR={root}; {_launch_line()}; echo "rc=$?"'])
+  b.run(UDEVADM=slow, POSTCHECK_SYNC="0", SETTLE_TIMEOUT="5", I6N_GPIO_LOG_OK="1", _cmd=["bash", "-c", f'DIR={root}; {_launch_line()}; echo "rc=$?"'])
   assert time.monotonic() - t < 2.5 and b.rule.read_text() == BATCHED
   for _ in range(60):
     if "postcheck ok" in b.status_text():
