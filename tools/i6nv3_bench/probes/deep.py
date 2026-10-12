@@ -69,14 +69,20 @@ for (lab, vb), r in rows.items():
   G = np.concatenate(r[2]) if r[2] else np.array([np.nan]); E = np.concatenate(r[3]) * 1e3 if r[3] else np.array([np.nan])
   print(f"  {lab:17s} | {vb[0]:>3}-{vb[1]:<3} | {r[0]/6000:5.1f} | {r[1]/(r[0]/6000):5.1f} | {r[4]/max(r[1],1):4.0%} | {np.nanmedian(G):.2f} | {np.nanmedian(E):.2f}/{np.nanpercentile(E,90):.2f}")
 
-print("\n=== 5. city grip yield (42): press onsets 20-45 km/h, >=400 Nm, gain>=0.4 at onset -> time to gain<=0.20")
-x = []
+print("\n=== 5. city grip yield (42/44a): SUSTAINED grips (pressed >= 0.3 s) 20-45 km/h, >=400 Nm, gain>=0.4 at onset -> time to gain<=0.20")
+# §35/§41: a 0.1-0.27 s tap dips the gain to 0.22-0.32 and lets it recover — that is the intended yield, not a slow one,
+# so the 44a criterion (p90 <= 1.0 s) is judged on grips held >= 0.3 s; taps are counted separately.
+x = []; taps = 0
 for d in D:
   v, pr, tq, g, lat = d['v'], d['pressed'], np.abs(d['tq_s']), d['gain'], d['lat']
   for i in np.where(pr[1:] & ~pr[:-1])[0] + 1:
     if 20 <= v[i] < 45 and lat[i] and g[i] >= 0.4 and (tq[i:i+30] >= 400).any() and i + 200 < len(v):
+      if not pr[i:i+30].all():
+        taps += 1; continue
       j = np.where(g[i:i+200] <= 0.20)[0]; x.append(j[0]/100 if len(j) else 2.0)
-x = np.array(x); print(f"  n={len(x)}, p50 {np.median(x):.2f} s, never within 2 s {np.mean(x>=2):.0%}" if len(x) else "  none")
+x = np.array(x)
+print(f"  sustained n={len(x)}, p50 {np.median(x):.2f} s, p90 {np.percentile(x, 90):.2f} s (criterion <= 1.0), > 1 s {np.mean(x > 1):.0%}, "
+      f"never within 2 s {np.mean(x>=2):.0%} | short taps (< 0.3 s) {taps}" if len(x) else f"  no sustained grips | short taps {taps}")
 
 print("\n=== 6. low-confidence yank (41): swings >= 4 deg / 0.5 s, then driver grab against the swing within 2 s")
 hrs = low_min = fight = low_fight = assist_low = 0

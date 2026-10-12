@@ -1058,3 +1058,21 @@ phase_tests 392(46-1 테스트 3 건 제거), modeld_v2 테스트 99 통과.
 
 **§33 커브 탈출 재확인(CD210, `probes/corner_exit.py`).** op 주도·≥ 0.7 m/s²·차선 > 0.5: 안쪽 차선이 직진 p10(1.22 m)보다 가까운 비율 진입 14.4 % · 정상 8.4 % · **탈출 23.8 %**(직진 10 %), 탈출 안쪽 거리 p50 −3 cm.
 §33(OPM 16.6 % vs 10.3 %)과 같은 방향이나 표본 0.3 분(합계 1.1 분) — 관찰 유지.
+
+## 41. Phase 47 판정 · 상태 로그 축소 · 경고 문구 · 44a 지표 (10-12, 사용자 결정)
+
+**Phase 47 판정 — 통과.** 기기 `/data/i6n_gpio_rule_fix.log`(사용자 확인): "applied" 9 · "postcheck ok" 9, 문제 기록(REVERT·reverted·still bad·permission problems·did not finish·skip) 0.
+- 적용 시각 가동 11.0–12.2 s, 권한 확인 완료 20.4–24.5 s. 날짜가 모두 07-28 15:04 인 것은 시간 동기화 전 부팅 초반 기록이라서다.
+- §39 의 procLog(GPIO 처리 프로세스 0, 부팅 코어 41–45 %)와 일치.
+
+**상태 로그 축소(`scripts/i6n_gpio_rule_fix.sh`).** 정상 경로 3 줄("applied", "postcheck ok", "already applied this boot")은 표준 출력으로만, 파일에는 건너뜀·재시도·되돌림·킬 스위치만 남긴다. `I6N_GPIO_LOG_OK=1` 이면 예전처럼 모두 기록.
+- 동작(마운트·권한·사후 점검·되돌림)은 그대로.
+- test_phase47 25 건(+1: 스위치로 정상 줄 기록; 정상 부팅은 파일을 만들지 않음; 재실행은 표준 출력만). 이전 스크립트에서 2 건 실패 확인.
+
+**경고 문구(§40 리뷰 지적).** laneDropout 둘째 줄 "Holding straight, keep hands on wheel" → "Holding steering, keep hands on wheel".
+- 39-2 이후 직진이 아니라 직전 명령을 유지하므로 문구가 틀렸다. 같은 길이(37 자)·같은 경고 크기.
+- log.capnp 의 laneDropout 주석도 같이 정정(스키마 변화 없음).
+- upstream test_alerts 는 이 컨테이너에 빌드된 libparams 가 없어 실행 불가.
+
+**44a 지표(`probes/deep.py` §5, §35 후보 5).** 파지 → 권한 ≤ 0.2 도달 시간을 0.3 s 이상 이어진 파지로만 판정하고, 0.3 s 미만 탭은 따로 센다.
+- 라우트 3d–42: 지속 파지 65 건 p50 0.16 s · p90 0.23 s(기준 ≤ 1.0 s) · 1 s 초과 2 %, 탭 29 건.

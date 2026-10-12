@@ -876,7 +876,7 @@ struct ControlsState @0x97ff69c53601abf1 {
   ufAccelCmd @33 :Float32;
   curvature @37 :Float32;  # path curvature from vehicle model
   desiredCurvature @61 :Float32;  # lag adjusted curvatures used by lateral controllers
-  laneDropout @67 :Bool;  # i6n Phase 39: lane-line dropout latch active (plan ignored, command decaying to straight)
+  laneDropout @67 :Bool;  # i6n Phase 39/39-2/49: lane-line dropout latch active (plan ignored, last command held)
   angleFbInteg @68 :Float32;  # i6n Phase 7a: closed-loop curvature trim state (1/m) — logged to size EPS deadband/windup from drives
   steerCmdGapDeg @69 :Float32;  # i6n: commanded angle - measured angle (deg), hands-off tracking gap
   steerFlags @70 :UInt16;  # i6n Phase 46: which controlsd steering guards acted this frame (bits: controlsd.py STEER_FLAG_*)
