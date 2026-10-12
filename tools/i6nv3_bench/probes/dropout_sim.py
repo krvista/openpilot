@@ -1,18 +1,19 @@
 """Offline replay of the Phase 39-2 dropout latch state machine on route npz (100 Hz) + lane npz (20 Hz, held).
 Variants: base (current), +both (enter only if the stronger inner line is also < LANE_HI), +press (no entry / release while
-the driver holds the wheel; REJECTED — see §39), +v50 (MIN_SPEED 40 -> 50 km/h). Proposal = both+v50. Validates base against the logged STEER_FLAG_LANE_DROPOUT runs."""
+the driver holds the wheel), +v50 (MIN_SPEED 40 -> 50 km/h); P49 = both + press + the entry debounce restarts on a press
+(0.3 s hands-off before a hold) = Phase 49 as shipped (§40); P49+exit also releases once the stronger line is back. Validates base against the logged STEER_FLAG_LANE_DROPOUT runs."""
 import glob, sys
 import numpy as np
 S = sys.argv[1]
 ENTRY_LM, ENTRY_N, MIN_V, EXIT_N, MAX_N, REARM_N, LC_N, HI = 0.15, 30, 40 / 3.6, 50, 300, 100, 100, 0.30
-def sim(lmin, lmax, v, busy, press, lat, both=False, use_press=False, min_v=MIN_V):
+def sim(lmin, lmax, v, busy, press, lat, both=False, use_press=False, min_v=MIN_V, press_resets=False, exit_max=False):
   out = np.zeros(len(v), bool); ld = False; armed = True; low = clr = n = rearm = hold = 0
   for i in range(len(v)):
     if not lat[i]:
       ld = False; low = clr = n = 0; hold = 0; continue
     hold = LC_N if busy[i] else max(hold - 1, 0)
     lowc = lmin[i] < ENTRY_LM and (not both or lmax[i] < HI)
-    low = low + 1 if lowc else 0
+    low = low + 1 if lowc and not (press_resets and press[i]) else 0
     if not armed:
       rearm = rearm + 1 if lmin[i] > HI else 0
       if rearm >= REARM_N: armed = True
@@ -22,7 +23,7 @@ def sim(lmin, lmax, v, busy, press, lat, both=False, use_press=False, min_v=MIN_
     if not ld and armed and not stop and low >= ENTRY_N:
       ld = True; clr = 0; n = 0
     elif ld:
-      clr = clr + 1 if lmin[i] > HI else 0
+      clr = clr + 1 if (lmax[i] if exit_max else lmin[i]) > HI else 0
       if clr >= EXIT_N: ld = False
     if ld:
       n += 1
@@ -42,7 +43,9 @@ for f in sorted(glob.glob(f"{S}/0000*.npz")):
   hours += lat.sum() / 360000
   res = {"logged": logged, "base": sim(lmin, lmax, v, busy, press, lat), "both": sim(lmin, lmax, v, busy, press, lat, both=True),
          "press": sim(lmin, lmax, v, busy, press, lat, use_press=True), "both+press": sim(lmin, lmax, v, busy, press, lat, True, True),
-         "both+v50": sim(lmin, lmax, v, busy, press, lat, both=True, min_v=50 / 3.6)}
+         "both+v50": sim(lmin, lmax, v, busy, press, lat, both=True, min_v=50 / 3.6),
+         "P49": sim(lmin, lmax, v, busy, press, lat, both=True, use_press=True, press_resets=True),
+         "P49+exit": sim(lmin, lmax, v, busy, press, lat, both=True, use_press=True, press_resets=True, exit_max=True)}
   line = [r]
   for k, x in res.items():
     s, e = runs(x); tot.setdefault(k, [0, 0.0]); tot[k][0] += len(s); tot[k][1] += x.sum() / 100
