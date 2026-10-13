@@ -5,7 +5,7 @@ i6nv3 (Ioniq 6 N, CCNC 각도 제어) — 2026-09-11, sunnypilot hkg-angle-steer
 * latcontrol 7a 곡률 트림: 7a-6 데드밴드·누설(Params LatFbTrim7a6), 7a-7 30 km/h 미만 통과(저속 EPS 데드밴드에 감기지 않게), 7c 진입 보조 하한 정렬
 * Phase 39a/39b: 45 km/h 이하 놓은 뒤 권한 회복 0.004→0.012/프레임, 40 km/h 이하 얹은 손 양보 시작 30→60 Nm (실차: 놓은 뒤 갭>3° 68→36 %, 잡기 절반)
 * Phase 40: MDPS 가 요청 속도만 따르는 특성에 맞춘 정지 킥 — 1.5° 를 0.1 s 스텝 뒤 1 °/s 복귀, 에피소드당 4회 (Kill: STALL_KICK_AMPLITUDE_DEG=0)
-* Phase 54 (10-13): 알림 볼륨 하한 20 % — 조용한 실내에서 9.5 %(−20 dB)까지 내려가던 신호 변경·경고음을 20 % 부터 시작, 시끄러울 때는 기존 자동 곡선 (Kill: OUTPUT_VOLUME_FLOOR=0.0)
+* Phase 54 (10-13): 알림 볼륨 곡선 — 실내 소음 30 dB 20 % · 42 dB 35 % · 48 dB 60 % · 56 dB 100 %(로그 보간); 정차 중 대부분의 알림이 upstream 대비 +4–8 dB (Kill: VOLUME_CURVE_I6N=False)
 * Phase 53 (10-13): comma 4 UI 30 → 20 fps, 건너뛴 vblank 에서 소비 루프(ui_state.update) 실행 제거 — 프레임 단위 타이머(주행 중 밝기 타이머 등)가 2–3 배 빨리 흐르던 버그 수정, UI 부하 35 % → 약 15–25 %
 * Phase 52 (10-13): UI 를 실시간 스케줄링에서 제외(SCHED_OTHER nice +5)하고 풀 코어 0–2 로 이동 — selfdrived 와 같은 코어·같은 FIFO 53 에서 차로 변경 알림 재그리기 프레임이 selfdrived 를 120 ms 막아 "System Lagging" 이 뜬 원인 제거; 제어 코어(3–7)에 다른 프로세스가 핀을 걸지 않는지 테스트로 보장
 * Phase 51 (10-13): HOD 경고 해소용 가벼운 터치(0.09 s·100–250 Nm·EPS 미감지)를 파지로 보지 않도록 토크만의 양보 경로 0.3 s 디바운스 — 권한 하락 없음, steerFlags 비트 28 (Kill: HOD_TOUCH_DEBOUNCE_FRAMES=0)

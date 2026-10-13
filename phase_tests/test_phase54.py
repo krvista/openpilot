@@ -1,45 +1,50 @@
-"""Phase 54 (report §51): soundd output-gain floor 20 % — quiet-cabin alerts (green-light chime, prompts) were at 9.5 %
-(-20 dB, route 45 ambient p10 30 dB). Louder cabins keep the ambient curve."""
+"""Phase 54 (report §51): soundd ambient -> output-gain curve 30 dB 20 % / 42 dB 35 % / 48 dB 60 % / 56 dB 100 %, log-domain
+interpolation, flat outside. Upstream gave 9.5 % / 27 % / 49 % / 100 % at the same points."""
 import math
 
+import numpy as np
 import pytest
 
 import phase_tests.harness_noncontrol  # noqa: F401 (stubs msgq)
 import openpilot.selfdrive.ui.soundd as sd
 
 
-def curve(db):   # the unmodified ambient curve
-  v = ((db - sd.AMBIENT_DB) / sd.DB_SCALE) * (sd.MAX_VOLUME - sd.MIN_VOLUME) + sd.MIN_VOLUME
-  return math.pow(sd.VOLUME_BASE, min(max(v, sd.MIN_VOLUME), sd.MAX_VOLUME) - 1)
-
-
 def calc(db):
   return sd.Soundd.calculate_volume(None, db)
 
 
-def test_quiet_cabin_starts_at_20_percent():
-  for db in (0.0, 20.0, 29.8, 33.0):
-    assert calc(db) == pytest.approx(0.20)
-  assert curve(29.8) < 0.10                      # route 45 p10 was 9.5 % before
+def upstream(db):
+  v = ((db - sd.AMBIENT_DB) / sd.DB_SCALE) * (sd.MAX_VOLUME - sd.MIN_VOLUME) + sd.MIN_VOLUME
+  return math.pow(sd.VOLUME_BASE, min(max(v, sd.MIN_VOLUME), sd.MAX_VOLUME) - 1)
 
 
-def test_louder_cabin_follows_the_curve():
-  for db in (41.6, 48.1, 56.0, 70.0):
-    assert curve(db) > 0.20 and calc(db) == pytest.approx(curve(db))
-  assert calc(70.0) == pytest.approx(sd.MAX_VOLUME)
+def test_user_points():
+  for db, g in ((30.0, 0.20), (42.0, 0.35), (48.0, 0.60), (56.0, 1.00)):
+    assert calc(db) == pytest.approx(g)
 
 
-def test_monotonic_and_bounded():
-  vals = [calc(db) for db in range(0, 90)]
-  assert all(b >= a for a, b in zip(vals, vals[1:]))
-  assert min(vals) == pytest.approx(0.20) and max(vals) <= sd.MAX_VOLUME
+def test_flat_outside_and_bounded():
+  assert calc(0.0) == pytest.approx(0.20) and calc(21.5) == pytest.approx(0.20)
+  assert calc(70.0) == pytest.approx(1.0)
+  vals = [calc(x) for x in np.arange(0, 90, 0.5)]
+  assert all(b >= a - 1e-12 for a, b in zip(vals, vals[1:])) and max(vals) <= 1.0
 
 
-def test_floor_constant_and_kill():
-  assert sd.OUTPUT_VOLUME_FLOOR == pytest.approx(0.20)
-  old = sd.OUTPUT_VOLUME_FLOOR
+def test_log_interpolation_between_points():
+  # midway in dB between 30 and 42 -> geometric mean of 0.20 and 0.35
+  assert calc(36.0) == pytest.approx(math.sqrt(0.20 * 0.35))
+
+
+def test_louder_than_upstream_where_alerts_sound():
+  for db in (28.0, 35.0, 40.0):           # ambient at alert onsets p10/p50/p90 (routes 43/45)
+    assert calc(db) > upstream(db)
+
+
+def test_kill_restores_upstream():
+  old = sd.VOLUME_CURVE_I6N
   try:
-    sd.OUTPUT_VOLUME_FLOOR = 0.0
-    assert calc(29.8) == pytest.approx(curve(29.8))
+    sd.VOLUME_CURVE_I6N = False
+    for db in (29.8, 41.6, 48.1):
+      assert calc(db) == pytest.approx(upstream(db))
   finally:
-    sd.OUTPUT_VOLUME_FLOOR = old
+    sd.VOLUME_CURVE_I6N = old
