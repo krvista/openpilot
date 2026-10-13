@@ -1,5 +1,5 @@
-"""Phase 54 (report §51): soundd ambient -> output-gain curve 30 dB 20 % / 42 dB 35 % / 48 dB 60 % / 56 dB 100 %, log-domain
-interpolation, flat outside. Upstream gave 9.5 % / 27 % / 49 % / 100 % at the same points."""
+"""Phase 54 (report §51): soundd ambient -> output-gain curve 22 dB 15 % / 30 dB 20 % / 42 dB 35 % / 48 dB 60 % / 56 dB 100 %,
+log-domain interpolation, flat outside. Upstream gave 6.7 % / 9.5 % / 27 % / 49 % / 100 % at the same points."""
 import math
 
 import numpy as np
@@ -19,12 +19,13 @@ def upstream(db):
 
 
 def test_user_points():
-  for db, g in ((30.0, 0.20), (42.0, 0.35), (48.0, 0.60), (56.0, 1.00)):
+  for db, g in ((22.0, 0.15), (30.0, 0.20), (42.0, 0.35), (48.0, 0.60), (56.0, 1.00)):
     assert calc(db) == pytest.approx(g)
 
 
 def test_flat_outside_and_bounded():
-  assert calc(0.0) == pytest.approx(0.20) and calc(21.5) == pytest.approx(0.20)
+  assert calc(0.0) == pytest.approx(0.15) and calc(21.5) == pytest.approx(0.15)   # very quiet stop / night
+  assert 0.15 < calc(26.0) < 0.20
   assert calc(70.0) == pytest.approx(1.0)
   vals = [calc(x) for x in np.arange(0, 90, 0.5)]
   assert all(b >= a - 1e-12 for a, b in zip(vals, vals[1:])) and max(vals) <= 1.0
@@ -38,6 +39,10 @@ def test_log_interpolation_between_points():
 def test_louder_than_upstream_where_alerts_sound():
   for db in (28.0, 35.0, 40.0):           # ambient at alert onsets p10/p50/p90 (routes 43/45)
     assert calc(db) > upstream(db)
+
+
+def test_initial_volume():
+  assert sd.VOLUME_INITIAL == pytest.approx(0.20)
 
 
 def test_kill_restores_upstream():
