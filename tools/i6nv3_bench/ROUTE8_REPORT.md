@@ -1278,3 +1278,18 @@ phase_tests 392(46-1 테스트 3 건 제거), modeld_v2 테스트 99 통과.
 **Phase 52(사용자 지시: UI 는 중요하지 않다 — 우선순위를 더 내리거나 코어를 옮겨 조향 모듈을 확실히 보호).** 1차안(FIFO 52 로 한 단계)은 철회하고, **UI 를 실시간 스케줄링에서 완전히 빼고(SCHED_OTHER, nice +5) 풀 코어 0–2 에만 둔다**(`UI_CORES = [0, 1, 2]`, 절전 뒤 재고정도 같은 코어). 코어 5 에는 selfdrived(FIFO 53)·plannerd·radard(51)만 남아 부하 ~70 % → ~35 %. 풀 코어의 locationd·paramsd·lagd·torqued·calibrationd·dmonitoringd 는 FIFO 5 라 UI 를 항상 선점하고, 디스플레이·터치 IRQ 는 7e281ca 이후 코어 1 에 있다(UI 와 같은 풀). 코어 0–2 p50 57–62 % 에 UI 35 % 가 세 코어로 분산 → ~70 %, 7e281ca 목표(≤ 75 %) 안. gc 비활성은 유지(프레임 안 GC 정지 없음, 메모리 프로파일 불변). `Priority.UI` 제거.
 - 테스트 test_phase52 3 건: ui.py 가 실시간 호출 없이 UI_CORES {0,1,2}·nice ≥ 5 를 쓰는지(소스 파싱 — pyray 는 헤드리스에서 import 불가), **트리 전체 스캔으로 제어 코어(3–7)에 핀을 거는 프로세스가 허용 목록(selfdrived·plannerd·radard 5, card·controlsd 4, modeld·dmonitoringmodeld 7)뿐인지**(mici_setup/updater 는 오프로드 전용으로 제외), selfdrived 가 코어 5·CTRL_HIGH 를 유지하는지.
 - 판정(다음 주행): selfdriveState 간격 최대 < 50 ms, selfdrivedLagging 0, ui "FPS dropped" 로그 수 변화 ≤ +20 %.
+
+## 50. Phase 53 — comma 4 UI 20 fps · 건너뛴 vblank 에서 소비 루프 실행 제거 (10-13, 사용자 결정)
+
+**배경.** upstream 은 comma 4(mici) 60 fps(vblank 페이싱), comma 3X 20. 이 빌드는 9월 30 fps(vblank 1 개 건너뛰기)로 낮췄으나 실측은 CPU 바운드 24 fps·UI 35 %(43·45, "FPS dropped below 30: 24" 주행당 400 회+). Phase 52 로 UI 는 이미 제어와 분리됐고, 화면은 제어 경로가 아니므로 20 fps(사용자 결정).
+
+**변경(`system/ui/lib/application.py`).**
+- mici 기본 30 → **20 fps**(vblank 3 개 중 1 개 렌더, `_vblank_skip = 2`). `FPS=60` 으로 되돌림 가능.
+- **버그 수정**: 건너뛴 vblank 에서도 `yield` 해 소비 루프(ui.py `ui_state.update()`)가 초당 60 회 돌았다. 그런데 UI 의 타이머는 target_fps 프레임 단위(주행 중 밝기 타이머 `15 × target_fps`, 밝기 필터 dt `1/target_fps`)라 30 fps 에서 2 배, 20 fps 에서는 3 배 빨리 흘렀다(15 s → 7.5 s / 5 s). 건너뛰는 분기에서 yield 하지 않고(입력은 마우스 스레드 큐에 남아 다음 렌더 프레임에서 처리), 소비 루프는 렌더 프레임과 화면 꺼짐 프레임에서만 돈다 → 타이머가 실제 초로 맞고 ui_state.update 도 60 → 20 회/s.
+- FPS 하락 로그 기준은 target 의 90 %(18 fps)로 자동 조정.
+
+**기대.** UI 부하 35 % → 약 15–25 %(렌더 1/3 + 상태 갱신 1/3), 공용 코어 0–2 부하 약 69 % → 약 62–65 %. 화면 경고 표시 지연 최대 50 ms(경고음은 soundd 별도 프로세스라 무관).
+
+**테스트.** test_phase53 3 건(mici·tizi 20 fps, vblank_skip 2, 건너뛰는 분기에 yield·이벤트 비우기 없음). 수정 전 코드에서 2 건 실패. phase_tests 423 통과.
+
+**판정(다음 주행).** procLog UI CPU < 25 %, "FPS dropped" 로그 거의 0(20 fps 유지), 코어 0–2 p50 < 65 %, 주행 중 밝기 타이머가 설정한 초대로 동작.
