@@ -8,7 +8,7 @@ r, slo, shi, tlo, thi = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), float(s
 f0 = sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--0--rlog.zst"))[0]
 t0 = next(iter(LogReader(f0))).logMonoTime * 1e-9
 files = [f for f in sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--rlog.zst"), key=lambda f: int(f.split("--")[-2])) if slo <= int(f.split("--")[-2]) <= shi]
-last = {}; gaps = defaultdict(list); prev_proc = {}; ev_prev = set()
+last = {}; gaps = defaultdict(list); prev_proc = {}; prev_t = 0.0; ev_prev = set()
 for f in files:
   for m in LogReader(f):
     t = m.logMonoTime * 1e-9 - t0; w = m.which()
