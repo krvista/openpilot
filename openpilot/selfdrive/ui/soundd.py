@@ -32,10 +32,13 @@ if HARDWARE.get_device_type() == "tizi":
   AMBIENT_DB = 30
   VOLUME_BASE = 10
 
-# i6n Phase 54 (report §51): output-gain floor. The ambient curve gives 0.095 (-20 dB) in the quiet EV cabin (route 45:
-# 30 dB p10, 42 dB p50 -> 0.275); the green-light / lead-departure chime and prompts were too quiet. Quiet cabins now
-# start at 20 %; louder cabins follow the curve unchanged (it passes 0.20 at ~37 dB). Kill: OUTPUT_VOLUME_FLOOR = 0.0.
-OUTPUT_VOLUME_FLOOR = 0.20
+# i6n Phase 54 (report §51): ambient -> output-gain curve for this quiet EV cabin. Upstream gave 0.095 at 30 dB and 0.275
+# at 42 dB (routes 43/45: alerts mostly sound while stopped, ambient at onset p10/p50/p90 28/35/40 dB) — the green-light
+# chime and prompts were too quiet. User-set points, interpolated in the log (dB) domain so each step is a constant
+# loudness ratio; flat below 30 dB, max from 56 dB (the upstream max point). Kill: VOLUME_CURVE_I6N = False (upstream).
+VOLUME_CURVE_I6N = True
+VOLUME_CURVE_DB = [30.0, 42.0, 48.0, 56.0]
+VOLUME_CURVE_GAIN = [0.20, 0.35, 0.60, 1.00]
 
 AudibleAlert = log.SelfdriveState.AudibleAlert
 AudibleAlertSP = custom.SelfdriveStateSP.AudibleAlert
@@ -82,7 +85,7 @@ class Soundd(QuietMode):
     self.load_sounds()
 
     self.current_alert = AudibleAlert.none
-    self.current_volume = max(MIN_VOLUME, OUTPUT_VOLUME_FLOOR)   # Phase 54: first alert before any mic reading
+    self.current_volume = VOLUME_CURVE_GAIN[0] if VOLUME_CURVE_I6N else MIN_VOLUME   # Phase 54: first alert before any mic reading
     self.current_sound_frame = 0
 
     self.ramp_start_volume = MIN_VOLUME
@@ -170,8 +173,10 @@ class Soundd(QuietMode):
       self.selfdrive_timeout_alert = False
 
   def calculate_volume(self, weighted_db):
+    if VOLUME_CURVE_I6N:
+      return float(10.0 ** np.interp(weighted_db, VOLUME_CURVE_DB, np.log10(VOLUME_CURVE_GAIN)))
     volume = ((weighted_db - AMBIENT_DB) / DB_SCALE) * (MAX_VOLUME - MIN_VOLUME) + MIN_VOLUME
-    return max(math.pow(VOLUME_BASE, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1)), OUTPUT_VOLUME_FLOOR)
+    return math.pow(VOLUME_BASE, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1))
 
   @retry(attempts=10, delay=3)
   def get_stream(self, sd):
