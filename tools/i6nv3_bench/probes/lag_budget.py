@@ -5,6 +5,19 @@ action curvature (logged ~50 ms after frame EOF) -> wheel. The model assumes act
 Usage: lag_budget.py <dir with 0000*.npz>"""
 import glob, sys
 import numpy as np
+
+
+def hod_touch_mask(tq, pressed, max_s=0.15, max_nm=300.0, pad=30):
+  """§48: samples to EXCLUDE from a correlation — HOD-silencing touches (|tq| > 50 for < max_s, peak < max_nm raw, no EPS
+  press) +-pad frames. Such a touch is treated as hands-off for window selection (it does not break a window); a longer or
+  harder touch, or an EPS press, is a grab and the window is rejected by the caller. Returns (mask_ok, has_grab)."""
+  tq = np.abs(tq); on = tq > 50
+  e = np.diff(np.concatenate([[0], on.astype(int), [0]])); st = np.where(e == 1)[0]; en = np.where(e == -1)[0]
+  ok = np.ones(len(tq), bool); grab = bool(pressed.any())
+  for a, b in zip(st, en):
+    if (b - a) / 100 < max_s and tq[a:b].max() < max_nm: ok[max(a - pad, 0):min(b + pad, len(tq))] = False
+    else: grab = True
+  return ok, grab
 S = sys.argv[1]
 def xlag(a, b, maxlag=120):
   a = a - a.mean(); b = b - b.mean()

@@ -15,8 +15,8 @@ BIG_UI = gui_app.big_ui()
 
 def main():
   cores = {5, }
-  # above plannerd and radard
-  config_realtime_process(0, Priority.CTRL_HIGH)
+  # above plannerd and radard, below selfdrived / controlsd / card (Phase 52: same FIFO level stalled selfdrived)
+  config_realtime_process(0, Priority.UI)
 
   gui_app.init_window("UI")
   if BIG_UI:

@@ -5,6 +5,8 @@ i6nv3 (Ioniq 6 N, CCNC 각도 제어) — 2026-09-11, sunnypilot hkg-angle-steer
 * latcontrol 7a 곡률 트림: 7a-6 데드밴드·누설(Params LatFbTrim7a6), 7a-7 30 km/h 미만 통과(저속 EPS 데드밴드에 감기지 않게), 7c 진입 보조 하한 정렬
 * Phase 39a/39b: 45 km/h 이하 놓은 뒤 권한 회복 0.004→0.012/프레임, 40 km/h 이하 얹은 손 양보 시작 30→60 Nm (실차: 놓은 뒤 갭>3° 68→36 %, 잡기 절반)
 * Phase 40: MDPS 가 요청 속도만 따르는 특성에 맞춘 정지 킥 — 1.5° 를 0.1 s 스텝 뒤 1 °/s 복귀, 에피소드당 4회 (Kill: STALL_KICK_AMPLITUDE_DEG=0)
+* Phase 52 (10-13): ui 실시간 우선순위를 selfdrived 아래로(SCHED_FIFO 53 → 52, 같은 코어 5) — 차로 변경 알림 재그리기 프레임이 selfdrived 를 120 ms 막아 "System Lagging" 이 뜬 원인 제거
+* Phase 51 (10-13): HOD 경고 해소용 가벼운 터치(0.09 s·100–250 Nm·EPS 미감지)를 파지로 보지 않도록 토크만의 양보 경로 0.3 s 디바운스 — 권한 하락 없음, steerFlags 비트 28 (Kill: HOD_TOUCH_DEBOUNCE_FRAMES=0)
 * Phase 49 (10-12): 차선 소실 유지(Lane Lines Lost)를 양쪽 차선 < 0.30 + 손 뗀 0.3 s 로 한정, 잡으면 즉시 해제, 한쪽 복귀로 해제 — 라우트 3d–42 재생 39 → 10 래치 (Kill: LANE_DROPOUT_MAX_LM=1.01 / LANE_DROPOUT_HANDS_OFF=False / LANE_DROPOUT_EXIT_ON_ONE_LINE=False)
 * Phase 47/48 (10-06): 부팅 GPIO udev 규칙 일괄화(콜드 부팅 코어 100 % → 41–45 %), modeld_v2 import 시 tinygrad 장치 탐색 제거
 * Phase 46 (10-03): 부팅·관측성 — 46-1 모델 프로세스(modeld_v2) import 단계별 시간 기록(매 부팅 시작→main() 11–13 s, 원인 확인용 로그 1줄); 46-2 각도 제어 차량은 쓰지 않는 lateralTorqueParameters 를 selfdrived 준비 조건에서 제외(부팅 인게이지 ~1 s 지연·조향 시작 직후 통신 오류 경고 2.6–3 s 제거); 46-3 모델 첫 출력 전까지 "초기화 중" 유지(최대 30 s, 첫 출력 뒤 3 s) — 매 부팅 11 s "Communication Issue"·16 s "openpilot Unavailable" 경고 대신, 진입 가능 시점은 동일; 46-4 판정 플래그 controlsState.steerFlags(저확신 캡·룩어헤드 캡·신뢰도 블렌드·드롭아웃·이탈/BSM 홀드·진입 보조) · carStateSP.steerFlags(패스스루·주차·파지·빠른 하강·가속 양보 등 28비트), 로그 크기 변화 0 B; 패널 안전 모드 불일치 유예를 초기화 후 4 s 로도 보장(늦은 초기화로 부팅마다 Controls Mismatch 가 뜨는 것 방지); CI 에 tinygrad 서브모듈 추가(controlsd 계열 테스트 70건이 건너뛰어지던 문제) (Kill: INIT_MODEL_WAIT_MAX_S=6.0)

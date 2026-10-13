@@ -446,6 +446,21 @@ class CarControllerParams:
   # the fast descent (p90 back at 1.50 s). The +1.3pp diverged-low-gain
   # exposure is the "driver wins at speed" trade the field request asked for.
   ACIGAIN_GRIP_RATE_DN_GATE_NM    = 160.0
+  # Phase 51 (i6nv3 45 Namsan tunnel, report §48): the CCNC hands-on-detection warning is silenced with a 0.05-0.09 s
+  # touch of 98-142 raw Nm (up to 251), EPS pressed never set. The yield curve starts at 50-60 driver-Nm, so each touch
+  # still dipped the authority (1.00 -> 0.92-0.95, once 0.84 with a 2 s recovery). A touch that short is not a grip:
+  # the torque-only yield path (everything below the EPS press / debounced driver_pressed and below HOD_TOUCH_MAX_NM)
+  # is DEBOUNCED — the gain function sees 0 driver torque until the torque has lasted HOD_TOUCH_DEBOUNCE_FRAMES.
+  # Review (§48): the exemption stops at the 35a torque arm (HOD_TOUCH_MAX_NM = ACIGAIN_GRIP_RATE_DN_GATE_NM, 160
+  # driver-Nm; the measured touches are 25-80 driver-Nm) so a push that arms the highway fast descent still yields at
+  # once, and a new exemption needs HOD_TOUCH_REFRACTORY_FRAMES of torque below the yield start first — periodic
+  # sawing (2 Hz, 30-on/5-off) cannot ride the exemption; HOD touches are seconds apart. A press (EPS raw >= 350 /
+  # driver_pressed) is untouched (42/44a fast yield); a resting hand (continuous torque) is unchanged after 0.3 s.
+  # Side effect, documented: the blinker ceiling taper and torque_suppress also see 0 during an exempt touch.
+  # Kill: HOD_TOUCH_DEBOUNCE_FRAMES = 0.
+  HOD_TOUCH_DEBOUNCE_FRAMES       = 30       # 0.3 s of continuous torque above the yield start before yielding
+  HOD_TOUCH_MAX_NM                = 160.0    # = ACIGAIN_GRIP_RATE_DN_GATE_NM; a brief touch above this yields at once
+  HOD_TOUCH_REFRACTORY_FRAMES     = 100      # 1 s below the yield start before a new touch may be exempt
   # Phase 36: low-speed CURVE-conditional ceiling with a continuous ramp.
   # The 24a hands-off ceiling (0.18 @0 -> 0.30 @20 -> 0.75 @40 km/h) is the
   # measured shake/authority balance on STRAIGHTS, where model churn lives;
