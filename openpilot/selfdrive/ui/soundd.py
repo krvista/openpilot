@@ -32,6 +32,11 @@ if HARDWARE.get_device_type() == "tizi":
   AMBIENT_DB = 30
   VOLUME_BASE = 10
 
+# i6n Phase 54 (report §51): output-gain floor. The ambient curve gives 0.095 (-20 dB) in the quiet EV cabin (route 45:
+# 30 dB p10, 42 dB p50 -> 0.275); the green-light / lead-departure chime and prompts were too quiet. Quiet cabins now
+# start at 20 %; louder cabins follow the curve unchanged (it passes 0.20 at ~37 dB). Kill: OUTPUT_VOLUME_FLOOR = 0.0.
+OUTPUT_VOLUME_FLOOR = 0.20
+
 AudibleAlert = log.SelfdriveState.AudibleAlert
 AudibleAlertSP = custom.SelfdriveStateSP.AudibleAlert
 
@@ -77,7 +82,7 @@ class Soundd(QuietMode):
     self.load_sounds()
 
     self.current_alert = AudibleAlert.none
-    self.current_volume = MIN_VOLUME
+    self.current_volume = max(MIN_VOLUME, OUTPUT_VOLUME_FLOOR)   # Phase 54: first alert before any mic reading
     self.current_sound_frame = 0
 
     self.ramp_start_volume = MIN_VOLUME
@@ -166,7 +171,7 @@ class Soundd(QuietMode):
 
   def calculate_volume(self, weighted_db):
     volume = ((weighted_db - AMBIENT_DB) / DB_SCALE) * (MAX_VOLUME - MIN_VOLUME) + MIN_VOLUME
-    return math.pow(VOLUME_BASE, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1))
+    return max(math.pow(VOLUME_BASE, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1)), OUTPUT_VOLUME_FLOOR)
 
   @retry(attempts=10, delay=3)
   def get_stream(self, sd):

@@ -1293,3 +1293,11 @@ phase_tests 392(46-1 테스트 3 건 제거), modeld_v2 테스트 99 통과.
 **테스트.** test_phase53 3 건(mici·tizi 20 fps, vblank_skip 2, 건너뛰는 분기에 yield·이벤트 비우기 없음). 수정 전 코드에서 2 건 실패. phase_tests 423 통과.
 
 **판정(다음 주행).** procLog UI CPU < 25 %, "FPS dropped" 로그 거의 0(20 fps 유지), 코어 0–2 p50 < 65 %, 주행 중 밝기 타이머가 설정한 초대로 동작.
+
+## 51. Phase 54 — 알림 볼륨 하한 20 % (10-13, 사용자 결정)
+
+**사실.** soundd 의 볼륨은 마이크로 잰 실내 소음(A 가중 dB)으로 자동 결정된다: 26 dB 이하 최소, 56 dB 이상 최대, 지수 곡선(밑 20). 사용자 설정은 QuietMode 켜기/끄기뿐. 라우트 45 실내 소음 p10/p50/p90 29.8/41.6/48.1 dB → 출력 0.095/0.275/0.492(최대 대비 −20/−11/−6 dB). "신호 변경"(초록불·앞차 출발, sunnypilot e2eChime)은 일반 prompt(warning.wav)와 같은 소리·같은 볼륨.
+
+**변경(`selfdrive/ui/soundd.py`).** `OUTPUT_VOLUME_FLOOR = 0.20`: 곡선 결과에 하한. 곡선이 0.20 을 넘는 약 38 dB 이상에서는 그대로(42 dB → 0.275, 48 dB → 0.49). 첫 마이크 측정 전 초기 볼륨도 0.20. warningImmediate 4 s 상승은 0.20 에서 시작. 킬: `OUTPUT_VOLUME_FLOOR = 0.0`.
+- 테스트 test_phase54 4 건(조용함 0–33 dB → 0.20, 41.6–70 dB 곡선 동일·최대 1.0, 단조 증가, 킬). 수정 전 코드에서 실패 확인. phase_tests 427 통과.
+- 판정: 사용자 체감. 더 키우려면 하한 값만 조정.
