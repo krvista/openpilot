@@ -37,12 +37,12 @@ def test_no_other_process_pins_a_control_core():
   pat = re.compile(r"(?:config_realtime_process|set_core_affinity)\(\s*(\[[^\]]*\]|\d+)")
   for dirpath, _, files in os.walk(os.path.join(ROOT, "openpilot")):
     for fn in files:
-      if not fn.endswith(".py") or "/tests" in dirpath:
-        continue
+      if not fn.endswith(".py") or "/tests" in dirpath or "/openpilot/tools/" in dirpath + "/":
+        continue   # dev tools (replay, cabana helpers) never run onroad
       rel = os.path.relpath(os.path.join(dirpath, fn), ROOT)
       if rel in OFFROAD_ONLY or fn in ("realtime.py",):
         continue
-      for m in pat.finditer(open(os.path.join(dirpath, fn)).read()):
+      for m in pat.finditer(open(os.path.join(dirpath, fn), errors="ignore").read()):
         cores = _cores(m.group(1))
         if rel in ONROAD_CONTROL:
           assert cores <= ONROAD_CONTROL[rel], (rel, cores)
