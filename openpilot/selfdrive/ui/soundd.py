@@ -35,10 +35,12 @@ if HARDWARE.get_device_type() == "tizi":
 # i6n Phase 54 (report §51): ambient -> output-gain curve for this quiet EV cabin. Upstream gave 0.095 at 30 dB and 0.275
 # at 42 dB (routes 43/45: alerts mostly sound while stopped, ambient at onset p10/p50/p90 28/35/40 dB) — the green-light
 # chime and prompts were too quiet. User-set points, interpolated in the log (dB) domain so each step is a constant
-# loudness ratio; flat below 30 dB, max from 56 dB (the upstream max point). Kill: VOLUME_CURVE_I6N = False (upstream).
+# loudness ratio; max from 56 dB (the upstream max point). Very quiet stops (late night, parking garage, <= 22 dB)
+# step down to 15 %, flat below. Kill: VOLUME_CURVE_I6N = False (upstream).
 VOLUME_CURVE_I6N = True
-VOLUME_CURVE_DB = [30.0, 42.0, 48.0, 56.0]
-VOLUME_CURVE_GAIN = [0.20, 0.35, 0.60, 1.00]
+VOLUME_CURVE_DB = [22.0, 30.0, 42.0, 48.0, 56.0]
+VOLUME_CURVE_GAIN = [0.15, 0.20, 0.35, 0.60, 1.00]
+VOLUME_INITIAL = 0.20   # before the first microphone reading
 
 AudibleAlert = log.SelfdriveState.AudibleAlert
 AudibleAlertSP = custom.SelfdriveStateSP.AudibleAlert
@@ -85,7 +87,7 @@ class Soundd(QuietMode):
     self.load_sounds()
 
     self.current_alert = AudibleAlert.none
-    self.current_volume = VOLUME_CURVE_GAIN[0] if VOLUME_CURVE_I6N else MIN_VOLUME   # Phase 54: first alert before any mic reading
+    self.current_volume = VOLUME_INITIAL if VOLUME_CURVE_I6N else MIN_VOLUME   # Phase 54: first alert before any mic reading
     self.current_sound_frame = 0
 
     self.ramp_start_volume = MIN_VOLUME
