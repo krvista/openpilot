@@ -159,6 +159,7 @@ SF_CAM_FAULT          = 1 << 24   # camera stale / LFA fault passive
 SF_WHEEL_OUTRUN       = 1 << 25   # 38-3 wheel-outrun passive
 SF_TX_REJECTED        = 1 << 26   # panda rejected the previous LKAS_ALT echo
 SF_TX_SATURATED       = 1 << 27   # 38 TX governor held the wire behind the request
+SF_HOD_TOUCH          = 1 << 28   # Phase 51: brief light touch exempted from the yield (HOD-silencing touch)
 
 
 def compute_hold_torque(v_ego, lat_acc):
@@ -560,6 +561,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 37a rain mode: wiper debounce counters and the ramped weight 0..1
     self.wiper_on_frames = 0
     self.wiper_off_frames = 0
+    # Phase 51: HOD-touch debounce (frames of continuous driver torque above the yield start), refractory and arm
+    self.hod_touch_frames = 0
+    self.hod_touch_clear_frames = 10**6
+    self.hod_touch_armed = False
+    self.hod_touch_exempt = False
     self.rain_active = False
     self.rain_w = 0.0
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
@@ -1826,6 +1832,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # ACIGain (reference 17-line compute_torque_reduction_gain).
     effective_aci_gain = None
     sf = 0   # Phase 46 telemetry (SF_*)
+    self.hod_touch_exempt = False   # Phase 51: only the block below may set it (no stale flag without a cam msg)
     if ccnc_lka_alt and lkas_alt_cam_msg is not None:
       steering_error = self.apply_angle_last - steer_angle_safe
       # Phase 9: yield-by-authority reshapes the ACIGain torque curve to drop
@@ -1926,8 +1933,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       city_release = (v_kph_aci <= CarControllerParams.CITY_RELEASE_SPEED_KPH
                       and driver_tq < CarControllerParams.CITY_RELEASE_HANDS_OFF_NM
                       and not real_grip)
+      # Phase 51: a brief light touch (HOD-silencing) is not a grip — debounce the torque-only yield path (values.py)
+      grip_start_eff = grip_start_dry + self.rain_w * (CarControllerParams.ACIGAIN_GRIP_START_RAIN_NM - grip_start_dry)
+      if driver_tq >= grip_start_eff:
+        if self.hod_touch_frames == 0:   # touch onset: exempt only after a quiet refractory (review: no 2 Hz sawing ride)
+          self.hod_touch_armed = self.hod_touch_clear_frames >= CarControllerParams.HOD_TOUCH_REFRACTORY_FRAMES
+        self.hod_touch_frames += 1; self.hod_touch_clear_frames = 0
+      else:
+        self.hod_touch_frames = 0; self.hod_touch_clear_frames = min(self.hod_touch_clear_frames + 1, 10**6)
+      self.hod_touch_exempt = (CarControllerParams.HOD_TOUCH_DEBOUNCE_FRAMES > 0 and self.hod_touch_armed
+                               and 0 < self.hod_touch_frames <= CarControllerParams.HOD_TOUCH_DEBOUNCE_FRAMES
+                               and not real_grip and not bool(CS.out.steeringPressed)
+                               and driver_tq < CarControllerParams.HOD_TOUCH_MAX_NM)
+      driver_tq_yield = 0.0 if self.hod_touch_exempt else driver_tq
       effective_aci_gain = compute_torque_reduction_gain(
-        driver_tq, v_kph_aci,
+        driver_tq_yield, v_kph_aci,
         effective_lat_active, self.aci_gain_last, steering_error,
         blinker_on=blinker_concession,               # Phase 37b: no ceiling drop toward BSM
         grip_full=(gr_full if real_grip else ho_full),
@@ -1937,13 +1957,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # Phase 44a: the EPS pressed flag (raw >= 350 Nm, 5-frame debounce) also counts as a press — a 350-400 Nm
         # lane-change push sits under the hold-compensated driver_pressed threshold and kept the slow descent
         rate_dn_floor=(grip_rate_dn_floor if (real_grip or (CarControllerParams.GRIP_FLOOR_EPS_PRESSED and bool(CS.out.steeringPressed))) else
-                       (grip_rate_dn_floor_tq if driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM else 0.0)),
+                       (grip_rate_dn_floor_tq if driver_tq_yield >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM else 0.0)),
         ceiling_scale=accel_yield,                   # Phase 43b
         curve_deg=self.curve_meas_lp,                # Phase 36
         # Phase 37a: speed-tapered rise cap, one step tighter in rain; 37c:
         # yield-curve start by speed, pinned back to the city value in rain
         rate_up_cap=(rate_up_cap_dry + self.rain_w * (rate_up_cap_rain - rate_up_cap_dry)),
-        grip_start=(grip_start_dry + self.rain_w * (CarControllerParams.ACIGAIN_GRIP_START_RAIN_NM - grip_start_dry)),
+        grip_start=grip_start_eff,
         anchored_recovery=anchored_recovery,         # Phase 35b
         city_release=city_release,                   # Phase 39a
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
@@ -1976,7 +1996,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.aci_gain_last = effective_aci_gain
       fast_floor = real_grip or (CarControllerParams.GRIP_FLOOR_EPS_PRESSED and bool(CS.out.steeringPressed))
       for on, bit in ((real_grip, SF_DRIVER_PRESSED), (fast_floor, SF_FAST_FLOOR),
-                      (not fast_floor and driver_tq >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM, SF_TQ_ARM_FLOOR),
+                      (not fast_floor and driver_tq_yield >= CarControllerParams.ACIGAIN_GRIP_RATE_DN_GATE_NM, SF_TQ_ARM_FLOOR),
                       (CarControllerParams.ACIGAIN_SHOVE_RATE_DN > 0 and driver_tq >= CarControllerParams.ACIGAIN_SHOVE_NM, SF_SHOVE),
                       (accel_yield < 1.0, SF_ACCEL_YIELD), (blind_caution, SF_BLIND_CAUTION), (city_release, SF_CITY_RELEASE),
                       (anchored_recovery, SF_ANCHORED_RECOVERY),
@@ -2075,7 +2095,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                     (self.blinker_concession, SF_BLINKER_CONCESSION), (vm_reject_persistent, SF_VM_REJECT),
                     (self.was_in_reverse, SF_REVERSE), (cam_stale_tripped or fault_lfa_bool, SF_CAM_FAULT),
                     (self.wheel_outrun_passive, SF_WHEEL_OUTRUN), (bool(getattr(CS, "tx_rejected", False)), SF_TX_REJECTED),
-                    (self.tx_sat_frames > 0, SF_TX_SATURATED)):
+                    (self.tx_sat_frames > 0, SF_TX_SATURATED), (self.hod_touch_exempt, SF_HOD_TOUCH)):
       if on:
         sf |= bit
     self.steer_debug_flags = sf

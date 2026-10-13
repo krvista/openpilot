@@ -9,6 +9,19 @@ Also prints the window yield per band and the per-window std, so the precision o
 Usage: night_calib.py <dir>   (dir has 0000XXXX.npz and yaw_0000XXXX.npy)"""
 import glob, sys
 import numpy as np
+
+
+def hod_touch_mask(tq, pressed, max_s=0.15, max_nm=300.0, pad=30):
+  """§48: samples to EXCLUDE from a correlation — HOD-silencing touches (|tq| > 50 for < max_s, peak < max_nm raw, no EPS
+  press) +-pad frames. Such a touch is treated as hands-off for window selection (it does not break a window); a longer or
+  harder touch, or an EPS press, is a grab and the window is rejected by the caller. Returns (mask_ok, has_grab)."""
+  tq = np.abs(tq); on = tq > 50
+  e = np.diff(np.concatenate([[0], on.astype(int), [0]])); st = np.where(e == 1)[0]; en = np.where(e == -1)[0]
+  ok = np.ones(len(tq), bool); grab = bool(pressed.any())
+  for a, b in zip(st, en):
+    if (b - a) / 100 < max_s and tq[a:b].max() < max_nm: ok[max(a - pad, 0):min(b + pad, len(tq))] = False
+    else: grab = True
+  return ok, grab
 S = sys.argv[1]; B = [(20, 40), (40, 60), (60, 80), (80, 100), (100, 200)]
 AGE = 0.08; WIN = 1000
 def ncc_lag(a, b, maxlag=120):
@@ -35,10 +48,11 @@ for f in sorted(glob.glob(f"{S}/0000*.npz")):
       if base[s].mean() > 0.98 and yvalid[s].mean() > 0.98 and (kw[s].max() - kw[s].min()) >= 2e-3:
         L, c = ncc_lag(kw[s], ky[s], 60)
         if L is not None and c > 0.9: R[b]['chas'].append(L * 0.01)
-      if (base[s].mean() > 0.98 and d['pressed'][s].mean() == 0 and np.abs(d['tq_s'][s]).mean() < 50 and d['gain'][s].mean() >= 0.9
-          and (kc[s].max() - kc[s].min()) >= 2e-3):   # window-mean hands-off (a one-frame gain dip must not drop a 10 s window)
+      mok, grab = hod_touch_mask(d['tq_s'][s], d['pressed'][s])
+      if (base[s].mean() > 0.98 and not grab and np.abs(d['tq_s'][s][mok]).mean() < 50 and d['gain'][s][mok].mean() >= 0.9
+          and mok.mean() >= 0.8 and (kc[s].max() - kc[s].min()) >= 2e-3):   # §48: HOD touches masked, a grab rejects the window
         R[b]['n'] += 1
-        La, ca = ncc_lag(kc[s], kw[s]); Lr, cr = ncc_lag(km[s], kw[s])
+        La, ca = ncc_lag(kc[s][mok], kw[s][mok]); Lr, cr = ncc_lag(km[s][mok], kw[s][mok])
         if La is not None and ca > 0.9 and 0 < La < 120: R[b]['act'].append(La * 0.01)
         if Lr is not None and cr > 0.9 and 0 < Lr < 120: R[b]['resid'].append(Lr * 0.01)
         ab = np.abs(kc[s]).mean()

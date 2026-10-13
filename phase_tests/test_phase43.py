@@ -23,6 +23,8 @@ class TestPhase43aNoRestingHandPumping:
     old = P.ACIGAIN_GRIP_RATE_DN_TQ_ARM_FLOOR_V
     if table is not None:
       P.ACIGAIN_GRIP_RATE_DN_TQ_ARM_FLOOR_V = table
+    old_hod = P.HOD_TOUCH_DEBOUNCE_FRAMES
+    P.HOD_TOUCH_DEBOUNCE_FRAMES = 0   # Phase 51 exempts exactly these 30 ms bumps (first one; refractory blocks the rest) — this reproduces the pre-43a mechanism with 51 off, so it no longer exercises the production config
     try:
       sim = Sim(); v = v_kph / 3.6
       settle(sim, v, tq=0.0)
@@ -37,6 +39,7 @@ class TestPhase43aNoRestingHandPumping:
       return int(np.sum(np.diff(g) <= -0.02)), float(g.mean())
     finally:
       P.ACIGAIN_GRIP_RATE_DN_TQ_ARM_FLOOR_V = old
+      P.HOD_TOUCH_DEBOUNCE_FRAMES = old_hod
 
   def test_city_resting_hand_bumps_do_not_pump(self):
     fast, _ = self._pulses(45.0)
