@@ -26,10 +26,6 @@ class Priority:
   # CORE 3
   # - pandad = 55
   CTRL_HIGH = 53
-  # i6n Phase 52 (report §49): ui shares core 5 with selfdrived; at the same SCHED_FIFO level a long UI frame (lane-change
-  # alert redraw, "FPS dropped below 30") runs to completion and selfdrived stalled 120 ms -> selfdrivedLagging /
-  # "System Lagging". One level below CTRL_HIGH lets selfdrived (and controlsd, card) preempt the UI immediately.
-  UI = 52
 
 
 def drop_realtime() -> None:
