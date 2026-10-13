@@ -24,10 +24,10 @@ from openpilot.common.realtime import Ratekeeper
 
 from openpilot.system.ui.sunnypilot.lib.application import GuiApplicationExt
 
-# i6n: comma 4 (mici) renders at 30 fps. At 60 the UI process took 55 % of LITTLE core 0 and its display
-# IRQ work (msm_drm is pinned to core 5) made core 5 — where selfdrived / plannerd / radard live — the busiest
-# core of the drive (86 % mean, route 00000006). Override with FPS=60 if wanted.
-_DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20, 'mici': 30}.get(HARDWARE.get_device_type(), 60)))
+# i6n: comma 4 (mici) renders at 20 fps (upstream 60, tizi 20). At 60 the UI process took 55 % of LITTLE core 0 and
+# its display IRQ work made core 5 the busiest core of the drive (86 % mean, route 00000006); at 30 it was CPU-bound at
+# 24 fps / 35 % (routes 43/45). Phase 53 (report §50): 20, the screen is not part of the control path. Override FPS=60.
+_DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20, 'mici': 20}.get(HARDWARE.get_device_type(), 60)))
 FPS_LOG_INTERVAL = 5  # Seconds between logging FPS drops
 FPS_DROP_THRESHOLD = 0.9  # FPS drop threshold for triggering a warning
 FPS_CRITICAL_THRESHOLD = 0.5  # Critical threshold for triggering strict actions
@@ -613,12 +613,14 @@ class GuiApplication(GuiApplicationExt):
         frame_start = time.monotonic()
 
         # i6n: vblank-paced device rendering below the display rate — sit out this vblank period
-        # (no swap, so the panel keeps the last frame; input stays queued for the rendered frame)
+        # (no swap, so the panel keeps the last frame; input stays queued in the mouse thread for the rendered frame).
+        # Phase 53: do NOT yield here. The consumer loop (ui.py: ui_state.update) used to run on every vblank, 60/s,
+        # while its timers count in target_fps frames (onroad brightness timer = 15 s * target_fps, brightness filter
+        # dt = 1/target_fps) — they ran 2x fast at 30 fps and would run 3x at 20. Consumers now run once per rendered
+        # frame (and on screen-off frames below), so frame-counted timers are in real seconds again.
         if self._vblank_skip and (self._frame % (self._vblank_skip + 1)) != 0 and self._should_render:
-          self._mouse_events = []          # consumers run on every yield; do not hand them last frame's events twice
           time.sleep(1.0 / 60.0)
           self._frame += 1
-          yield False, 0.0, 0.0
           continue
 
         if PC:
