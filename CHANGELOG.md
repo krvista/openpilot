@@ -5,6 +5,7 @@ i6nv3 (Ioniq 6 N, CCNC 각도 제어) — 2026-09-11, sunnypilot hkg-angle-steer
 * latcontrol 7a 곡률 트림: 7a-6 데드밴드·누설(Params LatFbTrim7a6), 7a-7 30 km/h 미만 통과(저속 EPS 데드밴드에 감기지 않게), 7c 진입 보조 하한 정렬
 * Phase 39a/39b: 45 km/h 이하 놓은 뒤 권한 회복 0.004→0.012/프레임, 40 km/h 이하 얹은 손 양보 시작 30→60 Nm (실차: 놓은 뒤 갭>3° 68→36 %, 잡기 절반)
 * Phase 40: MDPS 가 요청 속도만 따르는 특성에 맞춘 정지 킥 — 1.5° 를 0.1 s 스텝 뒤 1 °/s 복귀, 에피소드당 4회 (Kill: STALL_KICK_AMPLITUDE_DEG=0)
+* Phase 55 (10-14): 룩어헤드 선행을 계획 3 차 피팅 곡률(0.24–0.37 s 앞) 대신 계획 요레이트 / 속도의 0.9 s + tau(v) 지점에서 읽고, 횡저크 예산도 같은 구간으로 확대 — 9 주행 39 만 프레임 재생 기준 0.45 s 뒤 도로 곡률 대비 명령 오차 직선 −23 %·진입 −30 %·커브 −27 %·탈출 −43 %, 직선 명령 떨림 0.091 → 0.083, 계획보다 먼저 부호가 바뀌는 프레임 0.2 % 중 97 % 는 도로도 같은 방향; 25–30 km/h 아래·차로 변경 중·계획 배열 이상 시 기존 경로(0.5 s 교차 전환); steerFlags 비트 9(요레이트 선행)·10(예산 제한) (Kill: LOOKAHEAD_ORIENT_T_S=0.0 / 예산만 되돌리기 LOOKAHEAD_ORIENT_WIDE_BUDGET=False)
 * Phase 54 (10-13): 알림 볼륨 곡선 — 실내 소음 22 dB 이하 15 % · 30 dB 20 % · 42 dB 35 % · 48 dB 60 % · 56 dB 100 %(로그 보간); 정차 중 대부분의 알림이 upstream 대비 +4–8 dB (Kill: VOLUME_CURVE_I6N=False)
 * Phase 53 (10-13): comma 4 UI 30 → 20 fps, 건너뛴 vblank 에서 소비 루프(ui_state.update) 실행 제거 — 프레임 단위 타이머(주행 중 밝기 타이머 등)가 2–3 배 빨리 흐르던 버그 수정, UI 부하 35 % → 약 15–25 %
 * Phase 52 (10-13): UI 를 실시간 스케줄링에서 제외(SCHED_OTHER nice +5)하고 풀 코어 0–2 로 이동 — selfdrived 와 같은 코어·같은 FIFO 53 에서 차로 변경 알림 재그리기 프레임이 selfdrived 를 120 ms 막아 "System Lagging" 이 뜬 원인 제거; 제어 코어(3–7)에 다른 프로세스가 핀을 걸지 않는지 테스트로 보장
