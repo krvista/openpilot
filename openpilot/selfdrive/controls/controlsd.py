@@ -25,6 +25,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurv
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
@@ -64,7 +65,7 @@ class _ModelFrame:
   disengaged frame — which never reads them — pays nothing (review: eager computation made
   disengaged frames slower than before)."""
   __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
-               "_klane", "_bsm", "lane_change_state", "lane_change_dir")
+               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient")
   _UNSET = object()
 
   def __init__(self, model_v2, key):
@@ -72,7 +73,7 @@ class _ModelFrame:
     self.fallback = model_v2.action.desiredCurvature
     self.n = len(model_v2.position.x)
     self._pos = None
-    self._fit12 = self._fit24 = self._klane = self._bsm = _ModelFrame._UNSET
+    self._fit12 = self._fit24 = self._klane = self._bsm = self._orient = _ModelFrame._UNSET
     probs = getattr(model_v2, "laneLineProbs", [])
     self.lane_min = min(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0
     self.lane_max = max(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0   # Phase 49
@@ -110,6 +111,21 @@ class _ModelFrame:
     if self._fit24 is _ModelFrame._UNSET:
       self._fit24 = self._fit(24)
     return self._fit24
+
+  @property
+  def orient_plan(self):
+    """Phase 55: (plan yaw rate z, plan speed x) on ModelConstants.T_IDXS; None = missing, short or non-finite."""
+    if self._orient is _ModelFrame._UNSET:
+      self._orient = None
+      try:
+        orr = np.array(list(self.ref.orientationRate.z), dtype=np.float64)
+        vx = np.array(list(self.ref.velocity.x), dtype=np.float64)
+        if (len(orr) == len(_PLAN_T_IDXS) and len(vx) == len(_PLAN_T_IDXS)
+            and np.all(np.isfinite(orr)) and np.all(np.isfinite(vx))):
+          self._orient = (orr, vx)
+      except (AttributeError, TypeError, ValueError):
+        pass
+    return self._orient
 
   @property
   def klane_raw(self):
@@ -230,6 +246,23 @@ LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
 # +50 ms, still inside the J = 0.7 m/s^3 budget (dk_max scales with t_ahead). The 7c-2 S-curve overshoot check is
 # the acceptance test on-road (swing p95 must not rise > 0.3 deg). Kill: 0.27 (7c-2).
 LOOKAHEAD_T_AHEAD_CAP = 0.32  # s
+# Phase 55 (report §52/§53): sample the lead from the plan's YAW RATE / SPEED at a fixed 0.9 s (+ tau(v)) instead of
+# the cubic y'' at t_ahead. 9 OPM10V3 routes, ~390k model frames, truth = lane-centre road curvature at the car
+# 0.45 s later (plan age 0.08 + MDPS/chassis 0.37): the cubic plan curvature lags the road by 0.4-0.6 s and is most
+# accurate when sampled 0.8-1.0 s ahead, while t_ahead sat at 0.24-0.37 s (budget bound 34 % of frames >= 90 km/h).
+# Through the unchanged gate/blend, with the jerk budget taken over the same 0.9 s + tau horizon (step 2 of the
+# proposal, applied together on the user's call), final-command RMSE vs road (1e-3/m) went straight 0.433 -> 0.334,
+# entry 1.909 -> 1.328, curve 0.808 -> 0.586, exit 2.278 -> 1.283; straight-road 20 Hz command change 0.091 -> 0.084.
+# Open-loop only: on-road acceptance = Seoul-Station S-curve without overshoot, swing p95 <= +0.3 deg, entry-outside /
+# exit-inside down, hands-off grabs not up. The data covered >= 30 km/h and no lane changes, so below
+# LOOKAHEAD_ORIENT_RAMP_V and during a lane change the cubic path is used, cross-faded over LOOKAHEAD_ORIENT_SLEW_S.
+# Kill switches: LOOKAHEAD_ORIENT_T_S = 0.0 (cubic path, Phase 41-2); LOOKAHEAD_ORIENT_WIDE_BUDGET = False (orient
+# sample with the old t_ahead budget = proposal step 1 only).
+LOOKAHEAD_ORIENT_T_S = 0.9            # s, plan sample time on top of tau(v)
+LOOKAHEAD_ORIENT_WIDE_BUDGET = True   # dk_max over 0.9 s + tau(v) instead of t_ahead
+LOOKAHEAD_ORIENT_RAMP_V = [25.0 / 3.6, 30.0 / 3.6]   # m/s: cubic below, orient above
+LOOKAHEAD_ORIENT_SLEW_S = 0.5         # s for a full cubic <-> orient cross-fade
+_PLAN_T_IDXS = np.array(ModelConstants.T_IDXS, dtype=np.float64)
 
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
@@ -243,6 +276,8 @@ STEER_FLAG_LANE_DROPOUT = 1 << 5      # Phase 39 dropout hold
 STEER_FLAG_DEPARTURE_HOLD = 1 << 6    # lane-departure guard held the command
 STEER_FLAG_BSM_HOLD = 1 << 7          # Phase 37b BSM lane guard held the command
 STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added curvature
+STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55 lead taken (fully or partly) from the plan yaw rate at 0.9 s
+STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55 orient lead clipped by the jerk budget
 
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
@@ -393,6 +428,8 @@ class Controls(ControlsExt):
     self.lowconf_cap = LowConfRateCap(DT_CTRL)   # Phase 41: low-lane-confidence steering-rate cap
     self.steer_flags = 0                         # Phase 46: STEER_FLAG_* of the last frame
     self._lookahead_capped = False
+    self._lookahead_flags = 0                    # Phase 55
+    self._lookahead_orient_w = 0.0               # Phase 55 cubic -> orient cross-fade weight
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -434,6 +471,7 @@ class Controls(ControlsExt):
     mf = self._model_frame(model_v2)
     fallback = mf.fallback
     self._lookahead_capped = False
+    self._lookahead_flags = 0   # Phase 55 STEER_FLAG_LOOKAHEAD_ORIENT / _BUDGET
 
     # Non-finite model action: hold the last command briefly, then ramp to
     # straight (see MODEL_NONFINITE_* above). Nothing non-finite may reach the
@@ -444,6 +482,17 @@ class Controls(ControlsExt):
                    (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
       return self.desired_curvature * float(ramp)
     self._model_nonfinite_frames = 0
+
+    # Phase 55 cross-fade weight toward the orient lead, updated on every engaged frame (also below the gate) so a
+    # speed / lane-change / plan-validity switch never steps the command.
+    plan = mf.orient_plan if LOOKAHEAD_ORIENT_T_S > 0.0 else None
+    w_tgt = 0.0
+    if plan is not None and mf.lane_change_state == LaneChangeState.off:
+      w_tgt = float(_interp(v_ego, LOOKAHEAD_ORIENT_RAMP_V, [0.0, 1.0]))
+    w_prev = getattr(self, "_lookahead_orient_w", w_tgt)
+    step = DT_CTRL / LOOKAHEAD_ORIENT_SLEW_S
+    w = 0.0 if plan is None else float(_clip(w_tgt, w_prev - step, w_prev + step))   # no plan -> nothing to fade from
+    self._lookahead_orient_w = w
 
     if mf.n < 5:
       return fallback
@@ -468,27 +517,36 @@ class Controls(ControlsExt):
     base_s = float(_interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
     boost_s = float(_interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
     t_ahead = min(base_s + boost_s + lookahead_extra_s, LOOKAHEAD_T_AHEAD_CAP + lookahead_extra_s)
-    self._lookahead_capped = (base_s + boost_s) > LOOKAHEAD_T_AHEAD_CAP   # Phase 46 telemetry
-    dist_ahead = min(v_ego * t_ahead, 10.0)
-
-    if dist_ahead < 0.3:
-      return fallback
-
-    # cubic fit of the first 12 plan points, computed once per model frame (_ModelFrame)
-    x, c = mf.fit12
-    if x[-1] < dist_ahead or c is None:
-      return fallback
-
-    curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
-    if not np.isfinite(curv):
-      return fallback
-    # Phase 6h-2: ADDITIVE, BOUNDED lead instead of replacement. Pre-validation:
-    # 0x42 seg4 spike: replace=0.0155 (model plan 0.0120 x1.30) -> bounded
-    # J=0.7 = 0.0141; straights (|fb|<0.0015, n=2668) injected-noise p99
-    # 0.00092->0.00058 (-37%); normal corners (n=1192) ratio p50/p90 unchanged.
-    dk_max = LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v_ego, 5.0) ** 2
     blend = float(_interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
-    return fallback + blend * float(_clip(float(curv) - fallback, -dk_max, dk_max))
+
+    cmd_cubic = fallback
+    if w < 1.0:
+      self._lookahead_capped = (base_s + boost_s) > LOOKAHEAD_T_AHEAD_CAP   # Phase 46 telemetry (cubic path only)
+      dist_ahead = min(v_ego * t_ahead, 10.0)
+      # cubic fit of the first 12 plan points, computed once per model frame (_ModelFrame)
+      x, c = mf.fit12 if dist_ahead >= 0.3 else (None, None)
+      if c is not None and x[-1] >= dist_ahead:
+        curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
+        if np.isfinite(curv):
+          # Phase 6h-2: ADDITIVE, BOUNDED lead instead of replacement. Pre-validation:
+          # 0x42 seg4 spike: replace=0.0155 (model plan 0.0120 x1.30) -> bounded
+          # J=0.7 = 0.0141; straights (|fb|<0.0015, n=2668) injected-noise p99
+          # 0.00092->0.00058 (-37%); normal corners (n=1192) ratio p50/p90 unchanged.
+          dk_max = LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v_ego, 5.0) ** 2
+          cmd_cubic = fallback + blend * float(_clip(float(curv) - fallback, -dk_max, dk_max))
+    if w <= 0.0:
+      return cmd_cubic
+
+    # Phase 55: plan yaw rate / plan speed at 0.9 s + tau(v), same gate/blend, budget over that horizon.
+    t_or = LOOKAHEAD_ORIENT_T_S + lookahead_extra_s
+    yaw_rate, vx = plan
+    k_or = float(np.interp(t_or, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t_or, _PLAN_T_IDXS, vx)), 1.0)
+    t_budget = t_or if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
+    dk_or = LOOKAHEAD_JERK_BUDGET * max(t_budget, 0.05) / max(v_ego, 5.0) ** 2
+    raw = k_or - fallback
+    cmd_or = fallback + blend * float(_clip(raw, -dk_or, dk_or))
+    self._lookahead_flags = STEER_FLAG_LOOKAHEAD_ORIENT | (STEER_FLAG_LOOKAHEAD_BUDGET if abs(raw) > dk_or and blend > 0.0 else 0)
+    return w * cmd_or + (1.0 - w) * cmd_cubic
 
   def _predicted_lat_accel_excess(self, model_v2, v_ego, lookahead_s=1.5):
     """Predicted v²·κ at lookahead_s ahead, normalized by LAT_ACCEL_ENVELOPE.
@@ -606,8 +664,9 @@ class Controls(ControlsExt):
     # Phase 6h-1 order: tau(v) first, so the lookahead lead matches the LP lag below.
     lat_smooth_tau = float(_interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
     self._lookahead_capped = False
+    self._lookahead_flags = 0
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
-    steer_flags = STEER_FLAG_LOOKAHEAD_CAP if self._lookahead_capped else 0   # Phase 46
+    steer_flags = (STEER_FLAG_LOOKAHEAD_CAP if self._lookahead_capped else 0) | self._lookahead_flags   # Phase 46 / 55
 
     # Phase 7c geometry entry assist (constants above).
     if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None:   # (lane-line read failed -> skip, as before)

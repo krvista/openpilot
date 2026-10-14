@@ -170,7 +170,7 @@ class TestControlsdFlags:
   def test_bits_unique_and_fit_uint16(self):
     src = open(os.path.join(ROOT, "openpilot/selfdrive/controls/controlsd.py")).read()
     vals = [int(line.split("1 <<")[1].split()[0]) for line in src.splitlines() if line.startswith("STEER_FLAG_")]
-    assert len(vals) == 9 and len(set(vals)) == len(vals) and max(vals) < 16
+    assert len(vals) == 11 and len(set(vals)) == len(vals) and max(vals) < 16   # 9 (Phase 46) + 2 (Phase 55)
 
   def test_low_confidence_step_sets_gate_and_cap(self):
     try:
