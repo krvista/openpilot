@@ -1,7 +1,9 @@
-"""Phase 55b (report §52-§55): the lookahead lead is HALF the plan's predicted curvature change (plan yaw rate / plan
-speed at 0.9 s + tau(v) minus at 0.3 s) added to the model action, bounded by the jerk budget over 0.9 s + tau, with no
-|k| gate — the action and its lane feedback are kept (Phase 55 replaced them). The cubic path stays below 25-30 km/h,
-during lane changes and when the plan arrays are missing, cross-faded over 0.5 s."""
+"""Phase 55b/55c (report §52-§57): the lookahead lead is a share of the plan's predicted curvature change (plan yaw rate /
+plan speed at 0.9 s + tau(v) minus at 0.3 s) added to the model action — the action and its lane feedback are kept
+(Phase 55 replaced them). 55c: share 0.5 while the plan predicts the curve TIGHTENING, 0.2 while it predicts loosening,
+a 0.15e-3 deadband and no lead on straights (gate on the larger |sample| 0.8 -> 1.5e-3); bounded by the jerk budget over
+0.9 s + tau. The cubic path stays below 25-30 km/h, during lane changes and when the plan arrays are missing,
+cross-faded over 0.5 s."""
 import types
 
 import numpy as np
@@ -17,9 +19,15 @@ T = np.array(cd.ModelConstants.T_IDXS)
 
 @pytest.fixture(autouse=True)
 def _shipped():
-  saved = (cd.LOOKAHEAD_ORIENT_T_S, cd.LOOKAHEAD_ORIENT_WIDE_BUDGET)
+  names = ("LOOKAHEAD_ORIENT_T_S", "LOOKAHEAD_ORIENT_WIDE_BUDGET", "LOOKAHEAD_ORIENT_WEIGHT_SHRINK", "LOOKAHEAD_ORIENT_DEADBAND",
+           "LOOKAHEAD_ORIENT_GATE")
+  saved = {nm: getattr(cd, nm) for nm in names}
   yield
-  cd.LOOKAHEAD_ORIENT_T_S, cd.LOOKAHEAD_ORIENT_WIDE_BUDGET = saved
+  for nm, val in saved.items():
+    setattr(cd, nm, val)
+
+
+DB = 0.15e-3
 
 
 def model(fb, k_far, v=20.0, t_step=0.6, k_geom=None, lcs=None, orient=True, k_base=None):
@@ -52,19 +60,42 @@ def settled(v=20.0):
 
 def test_shipped_constants():
   assert cd.LOOKAHEAD_ORIENT_T_S == 0.9 and cd.LOOKAHEAD_ORIENT_REF_T_S == 0.3 and cd.LOOKAHEAD_ORIENT_WEIGHT == 0.5
-  assert cd.LOOKAHEAD_ORIENT_WIDE_BUDGET is True
+  assert cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK == 0.2 and cd.LOOKAHEAD_ORIENT_DEADBAND == DB
+  assert cd.LOOKAHEAD_ORIENT_GATE == [0.8e-3, 1.5e-3] and cd.LOOKAHEAD_ORIENT_WIDE_BUDGET is True
   assert cd.LOOKAHEAD_ORIENT_SLEW_S == 0.5 and cd.LOOKAHEAD_JERK_BUDGET == 0.7
   assert cd.LOOKAHEAD_ORIENT_RAMP_V == pytest.approx([25.0 / 3.6, 30.0 / 3.6])
 
 
-def test_lead_is_half_the_predicted_change_on_top_of_the_action():
+def test_entry_gets_half_the_predicted_tightening():
   # yaw rate steps at 0.95 s: seen at 0.9 + 0.08 = 0.98 s, reference at 0.3 s still on the base value
   fb, kf, v = 0.002, 0.0026, 20.0
   s = settled()
   out = call(s, model(fb, kf, v, t_step=0.95), v)
-  assert out == pytest.approx(fb + 0.5 * (kf - fb), rel=1e-6)
+  assert out == pytest.approx(fb + 0.5 * (kf - fb - DB), rel=1e-6)
   assert s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_ORIENT and not s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_BUDGET
   assert call(settled(), model(fb, kf, v, t_step=1.2), v) == pytest.approx(fb)   # change beyond 0.98 s: no lead yet
+
+
+def test_exit_gets_a_fifth_of_the_predicted_loosening():
+  fb, kf = 0.003, 0.002
+  assert call(settled(), model(fb, kf, t_step=0.95)) == pytest.approx(fb - 0.2 * (fb - kf - DB), rel=1e-6)
+  # a reversal (sign change) is not a tightening either; -4e-3 is first clipped to the budget
+  dk = cd.LOOKAHEAD_JERK_BUDGET * (0.9 + 0.08) / 20.0 ** 2
+  assert call(settled(), model(0.002, -0.002, t_step=0.95)) == pytest.approx(0.002 - 0.2 * (dk - DB), rel=1e-6)
+
+
+def test_deadband_and_straight_gate():
+  assert call(settled(), model(0.002, 0.002 + 0.9 * DB, t_step=0.95)) == pytest.approx(0.002)   # inside the deadband
+  assert call(settled(), model(0.0003, 0.0007, t_step=0.5)) == pytest.approx(0.0003)          # straight: no lead
+  kf = 0.0009                                                                                     # gate 1/7 open
+  out = call(settled(), model(0.0003, kf, t_step=0.5))
+  assert out == pytest.approx(0.0003 + 0.5 * (0.1e-3 / 0.7e-3) * (kf - 0.0003 - DB), rel=1e-6)
+
+
+def test_kill_back_to_55b():
+  cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK, cd.LOOKAHEAD_ORIENT_DEADBAND, cd.LOOKAHEAD_ORIENT_GATE = 0.5, 0.0, [0.0, 0.0]
+  assert call(settled(), model(0.003, 0.002, t_step=0.95)) == pytest.approx(0.0025)
+  assert call(settled(), model(0.0003, 0.0009, t_step=0.5)) == pytest.approx(0.0006)
 
 
 def test_action_feedback_is_kept():
@@ -78,17 +109,11 @@ def test_wide_budget_bounds_the_lead():
   s = settled()
   out = call(s, model(fb, 0.05, v), v, tau)
   dk = cd.LOOKAHEAD_JERK_BUDGET * (0.9 + tau) / v ** 2
-  assert out == pytest.approx(fb + 0.5 * dk) and s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_BUDGET
+  assert out == pytest.approx(fb + 0.5 * (dk - DB)) and s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_BUDGET
   cd.LOOKAHEAD_ORIENT_WIDE_BUDGET = False                   # kill: budget back on t_ahead
   base = float(np.interp(v, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
   t_ahead = min(base + float(np.interp(fb, [0.0008, 0.005], [0.0, 0.20])), cd.LOOKAHEAD_T_AHEAD_CAP) + tau
-  assert call(settled(), model(fb, 0.05, v), v, tau) == pytest.approx(fb + 0.5 * cd.LOOKAHEAD_JERK_BUDGET * t_ahead / v ** 2)
-
-
-def test_no_gate_on_straights():
-  fb = 0.0003                                                # below the old 0.0008 gate
-  assert call(settled(), model(fb, fb + 0.0006, t_step=0.5)) == pytest.approx(fb + 0.5 * 0.0006)
-  assert call(settled(), model(0.0, 0.0)) == pytest.approx(0.0)
+  assert call(settled(), model(fb, 0.05, v), v, tau) == pytest.approx(fb + 0.5 * (cd.LOOKAHEAD_JERK_BUDGET * t_ahead / v ** 2 - DB))
 
 
 def test_kill_switch_is_the_cubic_path():
