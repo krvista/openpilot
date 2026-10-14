@@ -33,7 +33,10 @@ def routes(S):
   for pf in sorted(glob.glob(f"{S}/la/plan_*.npz")):
     r = pf[-12:-4]
     P = dict(np.load(pf))
-    d = dict(np.load((glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz"))[0], allow_pickle=True))
+    rf = glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz")
+    if not rf or len(np.load(pf)["T"]) < 2000:
+      continue
+    d = dict(np.load(rf[0], allow_pickle=True))
     T = P['T']
     f = {k: np.interp(T, d['T'], d[k].astype(float)) for k in ('v', 'ang', 'apply', 'k_ctrl', 'k_meas', 'yaw', 'gain', 'tq_s')}
     f['v'] = f['v'] / 3.6
