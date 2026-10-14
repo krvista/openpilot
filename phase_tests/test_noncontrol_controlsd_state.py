@@ -95,7 +95,7 @@ def mk_controls():
     'carState': types.SimpleNamespace(vEgo=20.0, steeringAngleDeg=0.0, standstill=False,
                                       steerFaultTemporary=False, steerFaultPermanent=False,
                                       leftBlinker=False, rightBlinker=False, leftBlindspot=False, rightBlindspot=False, vCruise=100.0,
-                                      vCruiseCluster=100.0, canValid=True, steeringPressed=False),
+                                      vCruiseCluster=100.0, canValid=True, steeringPressed=False, steeringTorque=0.0),
     'vehicleParameters': types.SimpleNamespace(stiffnessFactor=1.0, steerRatio=15.0, angleOffsetDeg=0.0, roll=0.0),
     'lateralDelay': types.SimpleNamespace(lateralDelay=0.2),
     'longitudinalPlan': types.SimpleNamespace(aTarget=0.0, shouldStop=False, hasLead=False),
@@ -121,6 +121,7 @@ def mk_controls():
   s.lane_dropout = False; s.lane_dropout_clear_frames = 0; s.lane_dropout_frames = 0   # Phase 39
   s.lane_dropout_low_frames = 0; s.lane_dropout_armed = True; s.lane_dropout_rearm_frames = 0   # Phase 39-2
   s.lane_dropout_lc_holdoff = 0; s.lane_dropout_hold_k = 0.0; s.lane_dropout_k_hist = collections.deque(maxlen=31)
+  s._turn_peak_buf = collections.deque(maxlen=50); s._turn_peak_cur = 0.0; s._turn_peak_n = 0; s._turn_exit = False   # Phase 56
   s._mf = None   # _ModelFrame cache
   s._model_nonfinite_frames = 0
   return s

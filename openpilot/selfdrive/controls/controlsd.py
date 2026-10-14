@@ -264,7 +264,21 @@ LOOKAHEAD_T_AHEAD_CAP = 0.32  # s
 # the cubic path's t_ahead instead of 0.9 s + tau).
 LOOKAHEAD_ORIENT_T_S = 0.9            # s, plan sample time on top of tau(v)
 LOOKAHEAD_ORIENT_REF_T_S = 0.3        # s, reference plan time (closest to the action, RMSE 0.27e-3)
-LOOKAHEAD_ORIENT_WEIGHT = 0.5         # share of the predicted change added to the action
+LOOKAHEAD_ORIENT_WEIGHT = 0.5         # share of a predicted TIGHTENING (entry) added to the action
+# Phase 55c (report §56/§57, first 55b drives 48-4f): entry improved as predicted (outside offset +0.057 -> +0.008 m)
+# but the car sat 6-10 cm further OUT in curves: 55b also unwinds early — its lead in the last 1.5 s of a curve is
+# -0.12e-3 (toward the outside) vs +0.05e-3 on the cubic build, exit -0.58 vs -0.21e-3. 55c keeps the full weight
+# only while the plan predicts the curve TIGHTENING, a cubic-build-sized weight while it predicts loosening, ignores
+# changes below a small deadband and adds nothing on straights (|k| gate on the larger of the two samples).
+# 12 drives: entry lead +0.41e-3 (55b +0.51), late-curve -0.01 (cubic +0.05, 55b -0.12), exit -0.20 (cubic -0.21),
+# straight lead RMS 0.027e-3 (cubic 0.049, 55b 0.128), lead 20 Hz change -32 % vs 55b in curves.
+# Kill (back to 55b): WEIGHT_SHRINK = 0.5, DEADBAND = 0.0, GATE = [0.0, 0.0]. (Weight continuous in the predicted
+# |k| growth and slewed — replay showed a hard 0.5/0.2 switch adding command steps on reversals.)
+LOOKAHEAD_ORIENT_WEIGHT_SHRINK = 0.2  # share of a predicted LOOSENING (exit) added to the action
+LOOKAHEAD_ORIENT_DEADBAND = 0.15e-3   # 1/m: predicted changes below this add nothing
+LOOKAHEAD_ORIENT_GATE = [0.8e-3, 1.5e-3]   # 1/m: max(|k_or(0.9+tau)|, |k_or(0.3)|) -> 0..1 (straights: no lead)
+LOOKAHEAD_ORIENT_GROW_SPAN = 0.5e-3   # 1/m: predicted |k| growth at which the full (entry) weight applies
+LOOKAHEAD_ORIENT_W_SLEW_S = 0.3       # s for a full SHRINK <-> WEIGHT change of the lead weight
 LOOKAHEAD_ORIENT_WIDE_BUDGET = True   # dk_max over 0.9 s + tau(v) instead of t_ahead
 LOOKAHEAD_ORIENT_RAMP_V = [25.0 / 3.6, 30.0 / 3.6]   # m/s: cubic below, orient above
 LOOKAHEAD_ORIENT_SLEW_S = 0.5         # s for a full cubic <-> orient cross-fade
@@ -375,6 +389,25 @@ LANE_DROPOUT_LC_HOLDOFF_S = 1.0   # no latch this long after a lane change ends
 LANE_DROPOUT_MAX_LM = CONF_FLOOR_LANE_HI   # the stronger inner line must be below this too
 LANE_DROPOUT_HANDS_OFF = True
 LANE_DROPOUT_EXIT_ON_ONE_LINE = True
+# Phase 56 (report §56/§57): turn exits. Both op-caused line crossings on the 55b drives (4a t455 / t2990, 0.6 m over
+# the right line) came straight out of an intersection right turn while accelerating through 40 km/h: the new road's
+# lines read 0.0-0.3, so the dropout latch held the command of 0.3 s earlier — a turn still unwinding (+6.1 / +8.1e-3
+# vs the model's +4 -> +0.2) — and once the lines returned the Phase 41 6 deg/s cap let it go slowly (command 3e-3
+# right of the model for 1.4-1.9 s). The driver's counter-torque (100-470) stayed under the 350 EPS press threshold.
+# Phase 46+ logs: 14 of 46 dropout holds were such stale-turn holds (3 of 5 on 55b). Turn-exit window = the CAR's
+# curvature (wheel angle) peaked >= TURN_EXIT_K within TURN_EXIT_S and the model action is now <= 1/TURN_EXIT_RATIO
+# of that peak: 7.5 % of active frames >= 30 km/h; it would have blocked 17 of the 46 holds, both crossings among them.
+# (a) no dropout latch in that window; (b) in that window a command moving toward straight is not rate-capped by
+# Phase 41 (treated like a declared manoeuvre); (c) a held dropout ends when the driver turns against it with
+# >= LANE_DROPOUT_COUNTER_TQ (angle = -curvature: opposing torque has the SAME sign as the held curvature);
+# (d) in that window a command moving toward straight is not frozen by the 6g low-confidence blend either, and the
+# 55c lead uses its full weight for the predicted unwinding (replay of 4a t451-458 through the real state_control:
+# without (d) the blend kept the command 1-2e-3 above the unwinding model for 1 s).
+# Kill: TURN_EXIT_K = 1e9 (a, b), LANE_DROPOUT_COUNTER_TQ = 1e9 (c).
+TURN_EXIT_K = 8e-3                    # 1/m (radius 125 m): intersection / tight-turn scale
+TURN_EXIT_S = 5.0
+TURN_EXIT_RATIO = 2.0
+LANE_DROPOUT_COUNTER_TQ = 200.0       # carState.steeringTorque units (EPS press threshold 350)
 
 # Non-finite model action handling. A NaN/inf model_v2.action.desiredCurvature
 # bypasses every isfinite check in _lookahead_curvature (they only cover the
@@ -424,6 +457,11 @@ class Controls(ControlsExt):
     self.lane_dropout_lc_holdoff = 0         # 39-2: frames left after a lane change / blinker
     self.lane_dropout_hold_k = 0.0           # 39-2: the command held while latched
     self.lane_dropout_k_hist = deque(maxlen=int(LANE_DROPOUT_ENTRY_S / DT_CTRL) + 1)   # 39-2: commands of the last ENTRY_S
+    self._turn_peak_buf = deque(maxlen=int(TURN_EXIT_S / 0.1))   # Phase 56: per-0.1 s max |model action|
+    self._turn_peak_cur = 0.0
+    self._turn_peak_n = 0
+    self._turn_exit = False
+    self._lookahead_lead_w = LOOKAHEAD_ORIENT_WEIGHT_SHRINK   # Phase 55c slewed lead weight
     self._mf = None                          # _ModelFrame cache (see class)
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
@@ -468,6 +506,22 @@ class Controls(ControlsExt):
     if mf is None or mf.key != key or mf.ref is not model_v2:
       mf = self._mf = _ModelFrame(model_v2, key)
     return mf
+
+  def _turn_exit_update(self, k_car, k_action):
+    """Phase 56: True while unwinding from a turn the CAR actually made — its curvature (from the wheel angle) peaked
+    >= TURN_EXIT_K within the last TURN_EXIT_S and the model action is now <= 1/TURN_EXIT_RATIO of that peak. The car's
+    curvature, not the action, so a model spike during a dropout (held, the car does not turn) never counts as a turn.
+    Peak kept as per-0.1 s maxima (cheap at 100 Hz)."""
+    c = abs(float(k_car)) if math.isfinite(k_car) else 0.0
+    a = abs(float(k_action)) if math.isfinite(k_action) else 0.0
+    self._turn_peak_cur = max(self._turn_peak_cur, c)
+    self._turn_peak_n += 1
+    if self._turn_peak_n >= int(round(0.1 / DT_CTRL)):
+      self._turn_peak_buf.append(self._turn_peak_cur)
+      self._turn_peak_cur = 0.0
+      self._turn_peak_n = 0
+    peak = max(max(self._turn_peak_buf, default=0.0), self._turn_peak_cur)
+    return peak >= TURN_EXIT_K and peak >= TURN_EXIT_RATIO * a
 
   def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
@@ -541,14 +595,31 @@ class Controls(ControlsExt):
     if w <= 0.0:
       return cmd_cubic
 
-    # Phase 55b: action + WEIGHT * (plan yaw-rate curvature at 0.9 s + tau - at 0.3 s), budget over 0.9 s + tau, no gate.
+    # Phase 55b/55c: action + weight * (plan yaw-rate curvature at 0.9 s + tau - at 0.3 s), budget over 0.9 s + tau.
     t_or = LOOKAHEAD_ORIENT_T_S + tau_v
     yaw_rate, vx = plan
     k_or = lambda t: float(np.interp(t, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t, _PLAN_T_IDXS, vx)), 1.0)
     t_budget = t_or if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
     dk_or = LOOKAHEAD_JERK_BUDGET * max(t_budget, 0.05) / max(v_ego, 5.0) ** 2
-    delta = k_or(t_or) - k_or(LOOKAHEAD_ORIENT_REF_T_S)
-    cmd_or = fallback + LOOKAHEAD_ORIENT_WEIGHT * float(_clip(delta, -dk_or, dk_or))
+    k_far, k_ref = k_or(t_or), k_or(LOOKAHEAD_ORIENT_REF_T_S)
+    delta = k_far - k_ref
+    d_c = float(_clip(delta, -dk_or, dk_or))
+    # Phase 55c: weight by how much the plan predicts |k| to grow — WEIGHT_SHRINK for loosening, WEIGHT once it grows by
+    # LOOKAHEAD_ORIENT_GROW_SPAN, linear in between (continuous: an S-curve reversal must not switch it in one frame);
+    # Phase 56d: unwinding out of a turn the car made gets the full weight (the LP lag must not keep it turning).
+    # The weight is slewed (LOOKAHEAD_ORIENT_W_SLEW_S for the full span) so neither change steps the command.
+    w_t = float(_interp(abs(k_far) - abs(k_ref), [0.0, LOOKAHEAD_ORIENT_GROW_SPAN],
+                        [LOOKAHEAD_ORIENT_WEIGHT_SHRINK, LOOKAHEAD_ORIENT_WEIGHT]))
+    if getattr(self, "_turn_exit", False):
+      w_t = LOOKAHEAD_ORIENT_WEIGHT
+    w_prev = getattr(self, "_lookahead_lead_w", w_t)
+    w_step = abs(LOOKAHEAD_ORIENT_WEIGHT - LOOKAHEAD_ORIENT_WEIGHT_SHRINK) * DT_CTRL / LOOKAHEAD_ORIENT_W_SLEW_S
+    weight = float(_clip(w_t, w_prev - w_step, w_prev + w_step)) if w_step > 0.0 else w_t
+    self._lookahead_lead_w = weight
+    g0, g1 = LOOKAHEAD_ORIENT_GATE
+    gate = 1.0 if g1 <= g0 else float(_clip((max(abs(k_far), abs(k_ref)) - g0) / (g1 - g0), 0.0, 1.0))
+    lead = math.copysign(max(abs(d_c) - LOOKAHEAD_ORIENT_DEADBAND, 0.0), d_c)
+    cmd_or = fallback + weight * gate * lead
     self._lookahead_flags = STEER_FLAG_LOOKAHEAD_ORIENT | (STEER_FLAG_LOOKAHEAD_BUDGET if abs(delta) > dk_or else 0)
     return w * cmd_or + (1.0 - w) * cmd_cubic
 
@@ -615,6 +686,8 @@ class Controls(ControlsExt):
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
     mf = self._model_frame(model_v2)    # per-model-frame derived values (see _ModelFrame)
+    turn_exit = self._turn_exit_update(self.curvature, mf.fallback)   # Phase 56
+    self._turn_exit = turn_exit                                         # (read by _lookahead_curvature)
 
     # curveSpeedAdvisory: EMA-filtered ratio of predicted v²·κ at 1.5 s
     # lookahead to LAT_ACCEL_ENVELOPE. Updated every frame (cheap) so the
@@ -724,6 +797,9 @@ class Controls(ControlsExt):
         else:
           self.lane_dropout_lc_holdoff = max(self.lane_dropout_lc_holdoff - 1, 0)
         hands_on = LANE_DROPOUT_HANDS_OFF and bool(CS.steeringPressed)                     # Phase 49
+        # Phase 56c: the driver turning against the held command (opposing torque has the held curvature's sign)
+        counter = self.lane_dropout and self.lane_dropout_hold_k * float(CS.steeringTorque) > 0.0 and \
+          abs(float(CS.steeringTorque)) >= LANE_DROPOUT_COUNTER_TQ
         both_weak = lane_min < LANE_DROPOUT_ENTRY_LM and mf.lane_max < LANE_DROPOUT_MAX_LM   # Phase 49
         self.lane_dropout_low_frames = self.lane_dropout_low_frames + 1 if (both_weak and not hands_on) else 0
         if not self.lane_dropout:
@@ -732,12 +808,12 @@ class Controls(ControlsExt):
           self.lane_dropout_rearm_frames = self.lane_dropout_rearm_frames + 1 if lane_min > CONF_FLOOR_LANE_HI else 0
           if self.lane_dropout_rearm_frames >= int(LANE_DROPOUT_REARM_S / DT_CTRL):
             self.lane_dropout_armed = True
-        if self.lane_dropout and (self.lane_dropout_lc_holdoff > 0 or CS.vEgo < LANE_DROPOUT_MIN_SPEED or hands_on):
+        if self.lane_dropout and (self.lane_dropout_lc_holdoff > 0 or CS.vEgo < LANE_DROPOUT_MIN_SPEED or hands_on or counter):
           self.lane_dropout = False                   # a lane change / slowing down / a driver press ends the hold at once
           self.lane_dropout_armed = False; self.lane_dropout_rearm_frames = 0
           self.lane_dropout_k_hist.clear()
         if (not self.lane_dropout and self.lane_dropout_armed and self.lane_dropout_lc_holdoff == 0 and not hands_on
-            and CS.vEgo >= LANE_DROPOUT_MIN_SPEED
+            and not turn_exit and CS.vEgo >= LANE_DROPOUT_MIN_SPEED
             and self.lane_dropout_low_frames >= int(LANE_DROPOUT_ENTRY_S / DT_CTRL)):
           self.lane_dropout = True
           self.lane_dropout_clear_frames = 0
@@ -759,7 +835,8 @@ class Controls(ControlsExt):
       if self.lane_dropout:
         new_desired_curvature = self.lane_dropout_hold_k
         self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
-      elif confidence < 1.0:
+      elif confidence < 1.0 and not (turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)):
+        # (Phase 56d: unwinding out of a turn is not frozen by the low-confidence blend — it only ever moves toward straight)
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
         steer_flags |= STEER_FLAG_CONF_BLEND
       if self.lane_dropout:
@@ -772,13 +849,15 @@ class Controls(ControlsExt):
       # and BSM guards (those only ever hold, so they cannot re-introduce a step). See lowconf_rate_cap.py.
       if LOWCONF_CAP_DPS > 0.0:
         blinker_or_lc = (mf.lane_change_state != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
+        # Phase 56b: unwinding out of a turn is a manoeuvre, not a re-centring snatch — no cap toward straight
+        unwinding = turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)
         k_per_deg = abs(float(self.VM.calc_curvature(math.radians(1.0), max(float(CS.vEgo), 1.0), 0.0)))
         release_left_before = self.lowconf_cap.release_left   # the ramp decrements inside update(): read it first
         new_desired_curvature = self.lowconf_cap.update(new_desired_curvature, self.desired_curvature, lane_min,
-                                                        bool(CS.steeringPressed), blinker_or_lc, float(CS.vEgo), k_per_deg)
+                                                        bool(CS.steeringPressed), blinker_or_lc or unwinding, float(CS.vEgo), k_per_deg)
         if self.lowconf_cap.active:
           steer_flags |= STEER_FLAG_LOWCONF_GATE
-        elif release_left_before > 0 and not (CS.steeringPressed or blinker_or_lc):   # a press / blinker cancels the ramp
+        elif release_left_before > 0 and not (CS.steeringPressed or blinker_or_lc or unwinding):   # a press / blinker cancels the ramp
           steer_flags |= STEER_FLAG_LOWCONF_RELEASE
         if self.lowconf_cap.capped:
           steer_flags |= STEER_FLAG_LOWCONF_CAPPED
