@@ -246,19 +246,25 @@ LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
 # +50 ms, still inside the J = 0.7 m/s^3 budget (dk_max scales with t_ahead). The 7c-2 S-curve overshoot check is
 # the acceptance test on-road (swing p95 must not rise > 0.3 deg). Kill: 0.27 (7c-2).
 LOOKAHEAD_T_AHEAD_CAP = 0.32  # s
-# Phase 55 (report §52/§53): sample the lead from the plan's YAW RATE / SPEED at a fixed 0.9 s (+ tau(v)) instead of
-# the cubic y'' at t_ahead. 9 OPM10V3 routes, ~390k model frames, truth = lane-centre road curvature at the car
-# 0.45 s later (plan age 0.08 + MDPS/chassis 0.37): the cubic plan curvature lags the road by 0.4-0.6 s and is most
-# accurate when sampled 0.8-1.0 s ahead, while t_ahead sat at 0.24-0.37 s (budget bound 34 % of frames >= 90 km/h).
-# Through the unchanged gate/blend, with the jerk budget taken over the same 0.9 s + tau horizon (step 2 of the
-# proposal, applied together on the user's call), final-command RMSE vs road (1e-3/m) went straight 0.433 -> 0.334,
-# entry 1.909 -> 1.328, curve 0.808 -> 0.586, exit 2.278 -> 1.283; straight-road 20 Hz command change 0.091 -> 0.084.
-# Open-loop only: on-road acceptance = Seoul-Station S-curve without overshoot, swing p95 <= +0.3 deg, entry-outside /
-# exit-inside down, hands-off grabs not up. The data covered >= 30 km/h and no lane changes, so below
-# LOOKAHEAD_ORIENT_RAMP_V and during a lane change the cubic path is used, cross-faded over LOOKAHEAD_ORIENT_SLEW_S.
-# Kill switches: LOOKAHEAD_ORIENT_T_S = 0.0 (cubic path, Phase 41-2); LOOKAHEAD_ORIENT_WIDE_BUDGET = False (orient
-# sample with the old t_ahead budget = proposal step 1 only).
+# Phase 55 (report §52/§53) -> 55b (report §54/§55): lead from the plan's YAW RATE / SPEED instead of the cubic y''.
+# 9 OPM10V3 routes, ~390k model frames: the cubic plan curvature lags the road by 0.4-0.6 s, and the plan yaw rate
+# sampled 0.9 s (+ tau(v)) ahead tracks the road best. Phase 55 REPLACED the action by that sample (bounded); the
+# closed-loop check (§54) showed the 0.9 s sample carries only 26-30 % of the action's lane-heading feedback and
+# 30-80 % of its offset feedback, so with the MDPS's ~10 % steady angle shortfall the car would drift outward in
+# curves (identified-model sim on the recorded roads: curve offset RMS +15-63 % vs the cubic build). 55b keeps the
+# action (and its feedback) and adds HALF of the plan's predicted curvature CHANGE between 0.3 s and 0.9 s + tau:
+#   cmd = K + LOOKAHEAD_ORIENT_WEIGHT * clip(k_or(0.9 + tau) - k_or(0.3), +-J (0.9 + tau) / v^2)
+# Same sim, three calibrations matched to the real offsets: curve offset RMS -11/-31 % vs the cubic build, straight
+# unchanged, 20 Hz command change -24 %, lateral jerk -27 %; open loop vs road at t + 0.45 s: straight -25 %,
+# entry -27 %, curve -16 %, exit -13 %; feedback kept (offset 1.00, heading 0.69 of the action's). Weight 0.3 gained
+# less in curves, 0.7 worsened straights. No |k| gate: the delta carries no straight-road noise (command change down).
+# Not covered by the data (cubic path, cross-faded over LOOKAHEAD_ORIENT_SLEW_S): < 25-30 km/h, lane change, plan
+# arrays missing / non-finite.
+# Kill switches: LOOKAHEAD_ORIENT_T_S = 0.0 (cubic path, Phase 41-2); LOOKAHEAD_ORIENT_WIDE_BUDGET = False (budget on
+# the cubic path's t_ahead instead of 0.9 s + tau).
 LOOKAHEAD_ORIENT_T_S = 0.9            # s, plan sample time on top of tau(v)
+LOOKAHEAD_ORIENT_REF_T_S = 0.3        # s, reference plan time (closest to the action, RMSE 0.27e-3)
+LOOKAHEAD_ORIENT_WEIGHT = 0.5         # share of the predicted change added to the action
 LOOKAHEAD_ORIENT_WIDE_BUDGET = True   # dk_max over 0.9 s + tau(v) instead of t_ahead
 LOOKAHEAD_ORIENT_RAMP_V = [25.0 / 3.6, 30.0 / 3.6]   # m/s: cubic below, orient above
 LOOKAHEAD_ORIENT_SLEW_S = 0.5         # s for a full cubic <-> orient cross-fade
@@ -276,8 +282,8 @@ STEER_FLAG_LANE_DROPOUT = 1 << 5      # Phase 39 dropout hold
 STEER_FLAG_DEPARTURE_HOLD = 1 << 6    # lane-departure guard held the command
 STEER_FLAG_BSM_HOLD = 1 << 7          # Phase 37b BSM lane guard held the command
 STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added curvature
-STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55 lead taken (fully or partly) from the plan yaw rate at 0.9 s
-STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55 orient lead clipped by the jerk budget
+STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55b lead taken (fully or partly) from the plan yaw-rate change
+STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55b orient lead clipped by the jerk budget
 
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
@@ -471,7 +477,7 @@ class Controls(ControlsExt):
     mf = self._model_frame(model_v2)
     fallback = mf.fallback
     self._lookahead_capped = False
-    self._lookahead_flags = 0   # Phase 55 STEER_FLAG_LOOKAHEAD_ORIENT / _BUDGET
+    self._lookahead_flags = 0   # Phase 55b STEER_FLAG_LOOKAHEAD_ORIENT / _BUDGET
 
     # Non-finite model action: hold the last command briefly, then ramp to
     # straight (see MODEL_NONFINITE_* above). Nothing non-finite may reach the
@@ -483,7 +489,7 @@ class Controls(ControlsExt):
       return self.desired_curvature * float(ramp)
     self._model_nonfinite_frames = 0
 
-    # Phase 55 cross-fade weight toward the orient lead, updated on every engaged frame (also below the gate) so a
+    # Phase 55b cross-fade weight toward the orient lead, updated on every engaged frame (also below the gate) so a
     # speed / lane-change / plan-validity switch never steps the command.
     plan = mf.orient_plan if LOOKAHEAD_ORIENT_T_S > 0.0 else None
     w_tgt = 0.0
@@ -498,11 +504,8 @@ class Controls(ControlsExt):
       return fallback
 
     abs_curv = abs(fallback)
-    # Phase 6h-2: gate lowered 0.001 -> 0.0008 to match the continuous blend at
-    # the return (below 0.0008 the blend is 0, so behaviour is identical — this
-    # only removes the replace/fallback discontinuity at the old gate).
-    if abs_curv < 0.0008:
-      return fallback
+    tau_v = lookahead_extra_s
+    cmd_cubic = fallback
     # Phase 6f-5 lane-tracking responsiveness:
     #   base_s: extend the high-speed shelf to 140 km/h (38.9 m/s) -> 0.18 s so
     #     highway cruise (frequent Gyeongbu expressway runs to Yongin) sees an
@@ -516,11 +519,11 @@ class Controls(ControlsExt):
     #     in shallow-to-medium corners (where it matters most for entry feel).
     base_s = float(_interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
     boost_s = float(_interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
-    t_ahead = min(base_s + boost_s + lookahead_extra_s, LOOKAHEAD_T_AHEAD_CAP + lookahead_extra_s)
-    blend = float(_interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
-
-    cmd_cubic = fallback
-    if w < 1.0:
+    t_ahead = min(base_s + boost_s + tau_v, LOOKAHEAD_T_AHEAD_CAP + tau_v)
+    # Phase 6h-2: gate lowered 0.001 -> 0.0008 to match the continuous blend at
+    # the return (below 0.0008 the blend is 0, so behaviour is identical — this
+    # only removes the replace/fallback discontinuity at the old gate). Phase 55b: gates the cubic path only.
+    if abs_curv >= 0.0008 and w < 1.0:
       self._lookahead_capped = (base_s + boost_s) > LOOKAHEAD_T_AHEAD_CAP   # Phase 46 telemetry (cubic path only)
       dist_ahead = min(v_ego * t_ahead, 10.0)
       # cubic fit of the first 12 plan points, computed once per model frame (_ModelFrame)
@@ -533,19 +536,20 @@ class Controls(ControlsExt):
           # J=0.7 = 0.0141; straights (|fb|<0.0015, n=2668) injected-noise p99
           # 0.00092->0.00058 (-37%); normal corners (n=1192) ratio p50/p90 unchanged.
           dk_max = LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v_ego, 5.0) ** 2
+          blend = float(_interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
           cmd_cubic = fallback + blend * float(_clip(float(curv) - fallback, -dk_max, dk_max))
     if w <= 0.0:
       return cmd_cubic
 
-    # Phase 55: plan yaw rate / plan speed at 0.9 s + tau(v), same gate/blend, budget over that horizon.
-    t_or = LOOKAHEAD_ORIENT_T_S + lookahead_extra_s
+    # Phase 55b: action + WEIGHT * (plan yaw-rate curvature at 0.9 s + tau - at 0.3 s), budget over 0.9 s + tau, no gate.
+    t_or = LOOKAHEAD_ORIENT_T_S + tau_v
     yaw_rate, vx = plan
-    k_or = float(np.interp(t_or, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t_or, _PLAN_T_IDXS, vx)), 1.0)
+    k_or = lambda t: float(np.interp(t, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t, _PLAN_T_IDXS, vx)), 1.0)
     t_budget = t_or if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
     dk_or = LOOKAHEAD_JERK_BUDGET * max(t_budget, 0.05) / max(v_ego, 5.0) ** 2
-    raw = k_or - fallback
-    cmd_or = fallback + blend * float(_clip(raw, -dk_or, dk_or))
-    self._lookahead_flags = STEER_FLAG_LOOKAHEAD_ORIENT | (STEER_FLAG_LOOKAHEAD_BUDGET if abs(raw) > dk_or and blend > 0.0 else 0)
+    delta = k_or(t_or) - k_or(LOOKAHEAD_ORIENT_REF_T_S)
+    cmd_or = fallback + LOOKAHEAD_ORIENT_WEIGHT * float(_clip(delta, -dk_or, dk_or))
+    self._lookahead_flags = STEER_FLAG_LOOKAHEAD_ORIENT | (STEER_FLAG_LOOKAHEAD_BUDGET if abs(delta) > dk_or else 0)
     return w * cmd_or + (1.0 - w) * cmd_cubic
 
   def _predicted_lat_accel_excess(self, model_v2, v_ego, lookahead_s=1.5):

@@ -1,6 +1,7 @@
-"""Phase 55 (report §52/§53): the lookahead lead is sampled from the plan yaw rate / plan speed at 0.9 s + tau(v)
-instead of the cubic y'' at t_ahead, with the jerk budget over the same horizon; same gate and blend. The cubic path
-stays below 25-30 km/h, during lane changes and when the plan arrays are missing, cross-faded over 0.5 s."""
+"""Phase 55b (report §52-§55): the lookahead lead is HALF the plan's predicted curvature change (plan yaw rate / plan
+speed at 0.9 s + tau(v) minus at 0.3 s) added to the model action, bounded by the jerk budget over 0.9 s + tau, with no
+|k| gate — the action and its lane feedback are kept (Phase 55 replaced them). The cubic path stays below 25-30 km/h,
+during lane changes and when the plan arrays are missing, cross-faded over 0.5 s."""
 import types
 
 import numpy as np
@@ -21,8 +22,10 @@ def _shipped():
   cd.LOOKAHEAD_ORIENT_T_S, cd.LOOKAHEAD_ORIENT_WIDE_BUDGET = saved
 
 
-def model(fb, k_far, v=20.0, t_step=0.6, k_geom=None, lcs=None, orient=True):
-  """Plan: action fb, cubic geometry of curvature k_geom (default fb), yaw rate stepping from fb*v to k_far*v at t_step."""
+def model(fb, k_far, v=20.0, t_step=0.6, k_geom=None, lcs=None, orient=True, k_base=None):
+  """Plan: action fb, cubic geometry of curvature k_geom (default fb), yaw rate stepping from k_base*v (default fb) to
+  k_far*v at t_step."""
+  kb = fb if k_base is None else k_base
   kg = fb if k_geom is None else k_geom
   xs = [v * t for t in T]
   m = types.SimpleNamespace(action=types.SimpleNamespace(desiredCurvature=fb),
@@ -30,7 +33,7 @@ def model(fb, k_far, v=20.0, t_step=0.6, k_geom=None, lcs=None, orient=True):
                             meta=types.SimpleNamespace(laneChangeState=cd.LaneChangeState.off if lcs is None else lcs,
                                                        laneChangeDirection=0))
   if orient:
-    m.orientationRate = types.SimpleNamespace(z=[(fb if t < t_step else k_far) * v for t in T])
+    m.orientationRate = types.SimpleNamespace(z=[(kb if t < t_step else k_far) * v for t in T])
     m.velocity = types.SimpleNamespace(x=[v] * len(T))
   return m
 
@@ -48,19 +51,26 @@ def settled(v=20.0):
 
 
 def test_shipped_constants():
-  assert cd.LOOKAHEAD_ORIENT_T_S == 0.9 and cd.LOOKAHEAD_ORIENT_WIDE_BUDGET is True
+  assert cd.LOOKAHEAD_ORIENT_T_S == 0.9 and cd.LOOKAHEAD_ORIENT_REF_T_S == 0.3 and cd.LOOKAHEAD_ORIENT_WEIGHT == 0.5
+  assert cd.LOOKAHEAD_ORIENT_WIDE_BUDGET is True
   assert cd.LOOKAHEAD_ORIENT_SLEW_S == 0.5 and cd.LOOKAHEAD_JERK_BUDGET == 0.7
   assert cd.LOOKAHEAD_ORIENT_RAMP_V == pytest.approx([25.0 / 3.6, 30.0 / 3.6])
 
 
-def test_orient_lead_reads_plan_at_09_plus_tau():
-  # yaw rate steps up at 0.95 s: seen at 0.9 + 0.08 = 0.98 s, not by the cubic (whose geometry stays at fb)
+def test_lead_is_half_the_predicted_change_on_top_of_the_action():
+  # yaw rate steps at 0.95 s: seen at 0.9 + 0.08 = 0.98 s, reference at 0.3 s still on the base value
   fb, kf, v = 0.002, 0.0026, 20.0
   s = settled()
   out = call(s, model(fb, kf, v, t_step=0.95), v)
-  assert out == pytest.approx(kf, rel=1e-6)                 # inside the budget -> exact plan value
+  assert out == pytest.approx(fb + 0.5 * (kf - fb), rel=1e-6)
   assert s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_ORIENT and not s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_BUDGET
-  assert call(settled(), model(fb, kf, v, t_step=1.2), v) == pytest.approx(fb)   # step beyond 0.98 s: no lead yet
+  assert call(settled(), model(fb, kf, v, t_step=1.2), v) == pytest.approx(fb)   # change beyond 0.98 s: no lead yet
+
+
+def test_action_feedback_is_kept():
+  # the plan's level differs from the action (the action carries lane feedback): a constant plan adds nothing,
+  # Phase 55 would have pulled the command to the plan level (0.004)
+  assert call(settled(), model(0.002, 0.004, k_base=0.004, t_step=0.1)) == pytest.approx(0.002)
 
 
 def test_wide_budget_bounds_the_lead():
@@ -68,18 +78,17 @@ def test_wide_budget_bounds_the_lead():
   s = settled()
   out = call(s, model(fb, 0.05, v), v, tau)
   dk = cd.LOOKAHEAD_JERK_BUDGET * (0.9 + tau) / v ** 2
-  assert out == pytest.approx(fb + dk) and s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_BUDGET
-  cd.LOOKAHEAD_ORIENT_WIDE_BUDGET = False                   # step-1 kill: budget back on t_ahead
+  assert out == pytest.approx(fb + 0.5 * dk) and s._lookahead_flags & cd.STEER_FLAG_LOOKAHEAD_BUDGET
+  cd.LOOKAHEAD_ORIENT_WIDE_BUDGET = False                   # kill: budget back on t_ahead
   base = float(np.interp(v, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
   t_ahead = min(base + float(np.interp(fb, [0.0008, 0.005], [0.0, 0.20])), cd.LOOKAHEAD_T_AHEAD_CAP) + tau
-  assert call(settled(), model(fb, 0.05, v), v, tau) == pytest.approx(fb + cd.LOOKAHEAD_JERK_BUDGET * t_ahead / v ** 2)
+  assert call(settled(), model(fb, 0.05, v), v, tau) == pytest.approx(fb + 0.5 * cd.LOOKAHEAD_JERK_BUDGET * t_ahead / v ** 2)
 
 
-def test_gate_and_blend_unchanged():
-  assert call(settled(), model(0.0005, 0.01), 20.0) == pytest.approx(0.0005)     # below the 0.0008 gate
-  fb = 0.00115                                                                     # blend 0.5
-  out = call(settled(), model(fb, fb + 0.0005, t_step=0.1), 20.0)
-  assert out == pytest.approx(fb + 0.5 * 0.0005)
+def test_no_gate_on_straights():
+  fb = 0.0003                                                # below the old 0.0008 gate
+  assert call(settled(), model(fb, fb + 0.0006, t_step=0.5)) == pytest.approx(fb + 0.5 * 0.0006)
+  assert call(settled(), model(0.0, 0.0)) == pytest.approx(0.0)
 
 
 def test_kill_switch_is_the_cubic_path():

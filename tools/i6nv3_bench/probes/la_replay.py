@@ -1,8 +1,8 @@
-"""Phase 55 replay: push the recorded OPM10V3 plans (la_plan_extract.py npz) through the REAL controlsd
+"""Phase 55b replay: push the recorded OPM10V3 plans (la_plan_extract.py npz) through the REAL controlsd
 _lookahead_curvature (shipped constants, then the kill switch) at 100 Hz — 5 calls per 20 Hz model frame, so the
 cubic <-> orient cross-fade slews as on the device — and score the command as la_cmd.py does: RMSE vs lane-centre road
-curvature at t + 0.45 s by regime, plus straight-road 20 Hz command change. The orient row must reproduce la_cmd.py's
-"orient09" and the kill-switch row its "current" (same frames).
+curvature at t + 0.45 s by regime, plus straight-road 20 Hz command change. The shipped row must reproduce
+qa/e4d_openloop.py's "act+0.5(k9-k3)" and the kill-switch row la_cmd.py's "current" (same frames).
 Usage (from the repo root): PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/i6nv3_bench/probes/la_replay.py <scratch dir>"""
 import glob
 import sys
@@ -62,7 +62,7 @@ def run(P, v, busy, orient_t, wide):
   return out, flags
 
 
-VARS = {"phase55": (0.9, True), "step1": (0.9, False), "kill": (0.0, True)}
+VARS = {"phase55b": (0.9, True), "narrowJ": (0.9, False), "kill": (0.0, True)}
 err, jit, fl = {}, {}, {}
 for pf in sorted(glob.glob(f"{S}/la/plan_*.npz")):
   r = pf[-12:-4]
