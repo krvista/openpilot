@@ -12,7 +12,7 @@ S = sys.argv[1]
 res = {}
 for pf in sorted(glob.glob(f"{S}/la/plan_*.npz")):
   r = pf[-12:-4]
-  rf = glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz")
+  rf = glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r3d/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/rx/{r}.npz")
   if not rf:
     continue
   P = dict(np.load(pf)); d = dict(np.load(rf[0], allow_pickle=True))

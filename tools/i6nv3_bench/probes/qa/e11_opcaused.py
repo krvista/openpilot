@@ -11,7 +11,7 @@ S = sys.argv[1]; GAP = float(sys.argv[2]) if len(sys.argv) > 2 else 0.7
 RT = {}
 for f in sorted(glob.glob(f"{S}/la/plan_*.npz")):
   r = f[-12:-4]
-  rf = glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz")
+  rf = glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r3d/{r}.npz") + glob.glob(f"{S}/rx/{r}.npz")
   if rf:
     RT[r] = rf[0]
 by_build = {}

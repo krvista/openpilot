@@ -50,6 +50,11 @@ def cmd_form(name, P, ab, v, tau):
     return K + np.clip(P['k9'] - P['k3'], -dk, dk)
   if name == "act+delta.5":
     return K + 0.5 * np.clip(P['k9'] - P['k3'], -dk, dk)
+  if name == "c55":                   # Phase 55c as shipped: weight 0.2 -> 0.5 with predicted |k| growth, deadband, straight gate
+    dl = np.clip(P['k9'] - P['k3'], -dk, dk)
+    w = np.interp(abs(P['k9']) - abs(P['k3']), [0.0, 0.5e-3], [0.2, 0.5])
+    g = np.clip((max(abs(P['k9']), abs(P['k3'])) - 0.8e-3) / 0.7e-3, 0, 1)
+    return K + w * g * np.sign(dl) * max(abs(dl) - 0.15e-3, 0.0)
   if name.startswith("ad:"):          # ad:<weight>:<ref pred>[:J]  -> K + w * clip(k9 - ref, +-dk(J))
     parts = name.split(":")
     w, ref = float(parts[1]), parts[2]

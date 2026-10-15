@@ -18,9 +18,16 @@ P: dict = {}
 d: dict = {}
 
 
+DRIVEN = {"8de98262a": "logged", "a0108a4": "new"}   # other (older) builds drove the cubic lookahead
+
+
 def load(S, r):
   global P, d
-  P = dict(np.load(f"{S}/la/plan_{r}.npz")); d = dict(np.load(f"{S}/r46/{r}.npz", allow_pickle=True))
+  import glob
+  P = dict(np.load(f"{S}/la/plan_{r}.npz"))
+  rf = (glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r3d/{r}.npz")
+        + glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/rx/{r}.npz"))
+  d = dict(np.load(rf[0], allow_pickle=True))
 DEG_PER = ([40, 60, 80, 100], [2.85, 3.12, 3.45, 3.74])     # wheel deg per 1e-3/m (qa/e9)
 
 
@@ -50,7 +57,8 @@ def model_at(i):
 def replay(variant, t0, t1):
   saved = {k: getattr(cd, k) for k in ("TURN_EXIT_K", "LANE_DROPOUT_COUNTER_TQ", "LOOKAHEAD_ORIENT_WEIGHT_SHRINK",
                                        "LOOKAHEAD_ORIENT_DEADBAND", "LOOKAHEAD_ORIENT_GATE", "LOOKAHEAD_ORIENT_T_S",
-                                       "LOOKAHEAD_ORIENT_W_SLEW_S")}
+                                       "LOOKAHEAD_ORIENT_W_SLEW_S", "LOOKAHEAD_ORIENT_GROW_SPAN", "LOOKAHEAD_ORIENT_WEIGHT",
+                                       "LOOKAHEAD_JERK_BUDGET")}
   if variant in ("logged", "c55only", "cubic") or variant.startswith("x_"):          # Phase 56 off
     cd.TURN_EXIT_K = cd.LANE_DROPOUT_COUNTER_TQ = 1e9
   if variant == "logged":                                # the 55b build that was driven
@@ -63,6 +71,12 @@ def replay(variant, t0, t1):
     cd.LOOKAHEAD_ORIENT_GATE = [0.0, 0.0]
   if variant == "x_w5":
     cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK = 0.5
+  # sensitivity set (Phase 56 ON): p_<param>=<value>
+  if variant.startswith("p_"):
+    k, v = variant[2:].split("=")
+    setattr(cd, {"shrink": "LOOKAHEAD_ORIENT_WEIGHT_SHRINK", "db": "LOOKAHEAD_ORIENT_DEADBAND", "span": "LOOKAHEAD_ORIENT_GROW_SPAN",
+                 "w": "LOOKAHEAD_ORIENT_WEIGHT", "ts": "LOOKAHEAD_ORIENT_T_S", "J": "LOOKAHEAD_JERK_BUDGET",
+                 "tek": "TURN_EXIT_K", "ctq": "LANE_DROPOUT_COUNTER_TQ"}[k], float(v))
   s = H.mk_controls(); s.VM = VM(); s._lookahead_orient_w = 1.0
   Tr = d['T']; a0 = np.searchsorted(Tr, t0 - 8.0); a1 = np.searchsorted(Tr, t1)
   cs = s.sm['carState']; out = []
