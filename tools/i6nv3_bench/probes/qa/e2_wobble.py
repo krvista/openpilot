@@ -12,7 +12,7 @@ BANDS = [(0.1, 0.5), (0.5, 1.5), (1.5, 3.0), (3.0, 6.0), (6.0, 12.0)]
 fr = np.fft.rfftfreq(N, 0.01)
 win = np.hanning(N)
 acc = {}
-for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz")):
+for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/rx/0*.npz")):
   d = np.load(f, allow_pickle=True)
   r = f[-12:-4]; build = str(d['commit'])
   T = d['T']
