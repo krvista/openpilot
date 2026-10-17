@@ -8,7 +8,7 @@ from common import T_IDXS
 
 S, r, t0, t1 = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4])
 P = dict(np.load(f"{S}/la/plan_{r}.npz"))
-d = dict(np.load((glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/ropm/{r}.npz"))[0], allow_pickle=True))
+d = dict(np.load((glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r50/{r}.npz"))[0], allow_pickle=True))
 T = P['T']; Tr = d['T']
 names = {0: "LCgate", 1: "LCcap", 2: "LCrel", 3: "LAcap", 4: "blend", 5: "drop", 6: "dep", 7: "bsm", 8: "7c", 9: "orient", 10: "budget"}
 print(" t      v   L1y   L2y  pL   pR   K      k_ctrl  lead   ang   apply  gain  tq   flags")

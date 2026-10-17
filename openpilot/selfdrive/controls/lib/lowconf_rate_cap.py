@@ -27,6 +27,13 @@ import math
 # swing, after the instantaneous gate has dropped) while slowing 15 legitimate swings; exit hysteresis to 0.5-0.6 or a
 # 2-3 s release only reach 9/24, a 4 deg/s cap 12/24. Adoption is decided on-road by the §23 criteria, not by these.
 LOWCONF_CAP_DPS = 6.0          # steering-angle rate cap while gated (deg/s); 0.0 = off
+# Phase 57 (report §59): the cap must limit its OWN output. controlsd passes prev_k = the previous frame's final command,
+# which is the 6h-1 low-pass output; the low-pass only moves alpha = dt/(tau+dt) = 6-11 % of the way per frame, so the
+# cap re-anchored to it every frame and the effective rate was alpha * cap = 0.4-0.7 deg/s instead of 6 (Namsan S-bends:
+# the command crawled 0.6 deg/s for 4 s behind a 12e-3 model action, then jumped when the lines returned). With
+# OWN_STATE the cap ramps from its own last output while engaged (gate or release ramp) — the designed 6 deg/s.
+# Kill: LOWCONF_CAP_OWN_STATE = False (previous behaviour).
+LOWCONF_CAP_OWN_STATE = True
 LOWCONF_RELEASE_DPS = 30.0     # cap at the end of the release ramp (corpus corner-entry request rate p50 ~20 deg/s, yank_probe)
 LOWCONF_RELEASE_S = 1.0        # ramp length after the gate drops
 LOWCONF_LANE_MIN = 0.3         # gate: min(inner-left, inner-right) lane-line prob below this
@@ -42,11 +49,15 @@ class LowConfRateCap:
     self.release_left = 0
     self.active = False      # gate on this frame (telemetry / tests)
     self.capped = False      # the cap actually held the command back this frame
+    self.engaged = False     # Phase 57: gate or release ramp acted last frame -> ramp from last_out
+    self.last_out = 0.0
 
   def reset(self):
     self.release_left = 0
     self.active = False
     self.capped = False
+    self.engaged = False
+    self.last_out = 0.0
 
   def update(self, new_k: float, prev_k: float, lane_min: float, pressed: bool, blinker_or_lc: bool,
              v_ego: float, k_per_deg: float, cap_dps: float = LOWCONF_CAP_DPS) -> float:
@@ -54,12 +65,16 @@ class LowConfRateCap:
     self.capped = False
     if cap_dps <= 0.0:
       self.active = False
+      self.engaged = False
       return new_k
     if pressed or blinker_or_lc:
       # the driver has the wheel or has declared a manoeuvre: no cap, and no release ramp to trip over afterwards
       self.release_left = 0
       self.active = False
+      self.engaged = False
       return new_k
+    if LOWCONF_CAP_OWN_STATE and self.engaged:
+      prev_k = self.last_out
     gate = (lane_min < LOWCONF_LANE_MIN) and (v_ego >= LOWCONF_MIN_SPEED)
     self.active = gate
     if gate:
@@ -71,11 +86,15 @@ class LowConfRateCap:
       dps = cap_dps + (LOWCONF_RELEASE_DPS - cap_dps) * frac
       self.release_left -= 1
     else:
+      self.engaged = False
       return new_k
     kpd = k_per_deg if (math.isfinite(k_per_deg) and k_per_deg > 1e-7) else NOMINAL_K_PER_DEG
     step = dps * kpd * self.dt
     delta = new_k - prev_k
+    self.engaged = True
     if abs(delta) > step:
       self.capped = True
-      return prev_k + math.copysign(step, delta)
+      self.last_out = prev_k + math.copysign(step, delta)
+      return self.last_out
+    self.last_out = new_k
     return new_k

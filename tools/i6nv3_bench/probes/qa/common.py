@@ -33,7 +33,8 @@ def routes(S):
   for pf in sorted(glob.glob(f"{S}/la/plan_*.npz")):
     r = pf[-12:-4]
     P = dict(np.load(pf))
-    rf = glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz")
+    rf = (glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r3d/{r}.npz")
+          + glob.glob(f"{S}/rx/{r}.npz") + glob.glob(f"{S}/r50/{r}.npz"))
     if not rf or len(np.load(pf)["T"]) < 2000:
       continue
     d = dict(np.load(rf[0], allow_pickle=True))
@@ -42,7 +43,7 @@ def routes(S):
     f['v'] = f['v'] / 3.6
     f['lat'] = np.interp(T, d['T'], d['lat'].astype(float)) > 0.5
     f['busy'] = window_any(T, d['T'], d['lb'] | d['rb'] | (d['lcs'] > 0), 1.0)
-    f['hands'] = window_any(T, d['T'], d['pressed'] | (np.abs(d['tq_s']) > 60), 1.0)
+    f['hands'] = window_any(T, d['T'], d['pressed'] | (np.abs(d['tq_s']) >= 150), 1.0)
     LX = P['LX'].astype(float)
     LC = 0.5 * (P['L1'].astype(float) + P['L2'].astype(float))
     xs0 = np.tile(np.linspace(0, 20, 9), (len(T), 1))

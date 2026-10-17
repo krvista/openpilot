@@ -17,7 +17,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.bsm_guard import BsmLaneGuard, BSM_LANE_GUARD_M, BSM_LANE_GUARD_MIN_PROB
-from openpilot.selfdrive.controls.lib.lowconf_rate_cap import LowConfRateCap, LOWCONF_CAP_DPS
+from openpilot.selfdrive.controls.lib.lowconf_rate_cap import LowConfRateCap, LOWCONF_CAP_DPS, LOWCONF_RELEASE_DPS
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -408,6 +408,15 @@ TURN_EXIT_K = 8e-3                    # 1/m (radius 125 m): intersection / tight
 TURN_EXIT_S = 5.0
 TURN_EXIT_RATIO = 2.0
 LANE_DROPOUT_COUNTER_TQ = 200.0       # carState.steeringTorque units (EPS press threshold 350)
+TURN_EXIT_SOFT_EXEMPT = True          # (b) Phase 41 cap and (d) 6g blend exemption while unwinding; False = (a)+(c) only
+# Phase 57 (report §59, routes 50-52): in a CURVE the model's plan is right even when the lane lines read low — on the
+# Namsan road (lines 0.1-0.5) the Phase 41 6 deg/s cap and the 6g blend held the command 1.5-4 s behind the model on
+# the second corner of S-bends (4a-like late response, then a jump when the lines returned). All Phase 46+ logs: when
+# the cap / blend acted with |action| >= 2e-3 the model action was closer to the car's path 0.6 s later in 56-63 % of
+# frames (median error 2.5-3.0 vs 3.5-4.8e-3) and the driver grabbed 2-4x more often, mostly WITH the model's turn.
+# The cap and the blend were made for merges / splits on near-straight road (|action| small), so they fade out with
+# |action|: cap rate 6 -> 30 deg/s and confidence floor -> 1 over LOWCONF_CURVE_K. Kill: LOWCONF_CURVE_K = [1e9, 1e9].
+LOWCONF_CURVE_K = [1.5e-3, 3.0e-3]   # 1/m: |model action| at which the low-confidence restraints start / have faded out
 
 # Non-finite model action handling. A NaN/inf model_v2.action.desiredCurvature
 # bypasses every isfinite check in _lookahead_curvature (they only cover the
@@ -788,7 +797,8 @@ class Controls(ControlsExt):
       # low-confidence command is frozen out instead of half-passed (6g-2).
       floor_eff = LAT_CONF_FLOOR * float(_clip(
         (lane_min - CONF_FLOOR_LANE_LO) / (CONF_FLOOR_LANE_HI - CONF_FLOOR_LANE_LO), 0.0, 1.0))
-      confidence = max(min(conf_y, conf_l), floor_eff)
+      curve_w = float(_interp(abs(mf.fallback), LOWCONF_CURVE_K, [0.0, 1.0]))   # Phase 57: in a curve trust the plan
+      confidence = max(min(conf_y, conf_l), floor_eff, curve_w)
       # Phase 39 / 39-2: dropout latch (see constants)
       if LANE_DROPOUT_LATCH:
         lc_busy = (mf.lane_change_state != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
@@ -835,7 +845,7 @@ class Controls(ControlsExt):
       if self.lane_dropout:
         new_desired_curvature = self.lane_dropout_hold_k
         self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
-      elif confidence < 1.0 and not (turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)):
+      elif confidence < 1.0 and not (TURN_EXIT_SOFT_EXEMPT and turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)):
         # (Phase 56d: unwinding out of a turn is not frozen by the low-confidence blend — it only ever moves toward straight)
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
         steer_flags |= STEER_FLAG_CONF_BLEND
@@ -850,11 +860,13 @@ class Controls(ControlsExt):
       if LOWCONF_CAP_DPS > 0.0:
         blinker_or_lc = (mf.lane_change_state != LaneChangeState.off) or bool(CS.leftBlinker or CS.rightBlinker)
         # Phase 56b: unwinding out of a turn is a manoeuvre, not a re-centring snatch — no cap toward straight
-        unwinding = turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)
+        unwinding = TURN_EXIT_SOFT_EXEMPT and turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)
         k_per_deg = abs(float(self.VM.calc_curvature(math.radians(1.0), max(float(CS.vEgo), 1.0), 0.0)))
         release_left_before = self.lowconf_cap.release_left   # the ramp decrements inside update(): read it first
+        cap_dps = LOWCONF_CAP_DPS + (LOWCONF_RELEASE_DPS - LOWCONF_CAP_DPS) * curve_w   # Phase 57: 6 -> 30 deg/s in a curve
         new_desired_curvature = self.lowconf_cap.update(new_desired_curvature, self.desired_curvature, lane_min,
-                                                        bool(CS.steeringPressed), blinker_or_lc or unwinding, float(CS.vEgo), k_per_deg)
+                                                        bool(CS.steeringPressed), blinker_or_lc or unwinding, float(CS.vEgo), k_per_deg,
+                                                        cap_dps=cap_dps)
         if self.lowconf_cap.active:
           steer_flags |= STEER_FLAG_LOWCONF_GATE
         elif release_left_before > 0 and not (CS.steeringPressed or blinker_or_lc or unwinding):   # a press / blinker cancels the ramp

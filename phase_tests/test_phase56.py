@@ -89,11 +89,20 @@ def test_unwinding_is_not_rate_capped():
   # outside the window the 6 deg/s cap still applies
   assert cap.update(0.002, 0.008, 0.1, False, False, 12.0, k_per_deg) == pytest.approx(0.008 - 6.0 * k_per_deg * cd.DT_CTRL)
   src = open(cd.__file__).read()
-  assert "unwinding = turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)" in src
+  assert "unwinding = TURN_EXIT_SOFT_EXEMPT and turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)" in src
   assert "blinker_or_lc or unwinding" in src
 
 
 def test_unwinding_is_not_frozen_by_the_low_confidence_blend():
+  saved = cd.LOWCONF_CURVE_K
+  cd.LOWCONF_CURVE_K = [1e9, 1e9]          # Phase 57 off: this test is about the 56d exemption alone
+  try:
+    _blend_test()
+  finally:
+    cd.LOWCONF_CURVE_K = saved
+
+
+def _blend_test():
   def unwind(turned):
     s = mk_controls(); run(s, 200, mk_model(fallback=0.02))           # op turning at 20e-3
     if turned:
@@ -117,3 +126,49 @@ def test_turn_exit_unwinding_lead_gets_the_full_weight():
   assert call(s, model(0.003, 0.002, t_step=0.95)) == pytest.approx(0.003 - 0.5 * (0.001 - DB), rel=1e-6)
   s = settled(); s._turn_exit = False
   assert call(s, model(0.003, 0.002, t_step=0.95)) == pytest.approx(0.003 - 0.2 * (0.001 - DB), rel=1e-6)
+
+
+def test_phase57_curve_fades_the_low_confidence_restraints():
+  """Phase 57: with |action| >= 3e-3 the 41 cap runs at 30 deg/s and the 6g blend floor is 1 — the command ramps toward
+  the model 5x faster through a low-line curve than near-straight (1.2e-3), where both restraints still act."""
+  assert cd.LOWCONF_CURVE_K == [1.5e-3, 3.0e-3]
+  from phase_tests.test_phase41 import _model
+  slope = {}; flags = {}
+  for k in (0.0012, 0.006):
+    s = mk_controls(); s.sm['carState'].vEgo = 12.0
+    run(s, 200, _model(0.0, [0.9, 0.95, 0.95, 0.9]))
+    f = 0; hist = []
+    for _ in range(25):
+      run(s, 1, _model(k, [0.9, 0.2, 0.95, 0.9]))
+      f |= s.steer_flags; hist.append(s.lowconf_cap.last_out)
+    slope[k] = (hist[-1] - hist[14]) / 10.0; flags[k] = f
+  assert flags[0.0012] & cd.STEER_FLAG_CONF_BLEND and flags[0.0012] & cd.STEER_FLAG_LOWCONF_CAPPED
+  assert not flags[0.006] & cd.STEER_FLAG_CONF_BLEND
+  assert slope[0.006] > 3.0 * slope[0.0012]            # 30 deg/s vs 6 deg/s own-state ramps
+
+
+def test_phase57_cap_ramps_from_its_own_output():
+  """The cap used to re-anchor to the low-passed command every frame (effective rate alpha * cap). Own-state: the
+  pre-LP command advances by the full step each frame."""
+  from phase_tests.test_phase41 import _model
+  import openpilot.selfdrive.controls.lib.lowconf_rate_cap as lrc
+  s = mk_controls(); s.sm['carState'].vEgo = 12.0
+  run(s, 200, _model(0.0, [0.9, 0.95, 0.95, 0.9]))
+  hist = []
+  for _ in range(30):
+    run(s, 1, _model(0.0012, [0.9, 0.2, 0.95, 0.9]))
+    hist.append(s.lowconf_cap.last_out)
+  step = 6.0 * lrc.NOMINAL_K_PER_DEG * cd.DT_CTRL          # the harness VM gives no k/deg -> nominal
+  assert hist[20] - hist[10] == pytest.approx(10 * step, rel=0.05)
+  saved = lrc.LOWCONF_CAP_OWN_STATE
+  lrc.LOWCONF_CAP_OWN_STATE = False                        # kill: the old crawl (a few % of the step per frame)
+  try:
+    s = mk_controls(); s.sm['carState'].vEgo = 12.0
+    run(s, 200, _model(0.0, [0.9, 0.95, 0.95, 0.9]))
+    h2 = []
+    for _ in range(30):
+      run(s, 1, _model(0.0012, [0.9, 0.2, 0.95, 0.9]))
+      h2.append(s.desired_curvature)
+    assert h2[20] - h2[10] < 0.3 * 10 * step
+  finally:
+    lrc.LOWCONF_CAP_OWN_STATE = saved

@@ -12,7 +12,7 @@ cc_names = {8: "drvPressed", 9: "epsPressed", 12: "fastFloor", 13: "tqArmFloor",
             21: "postGrip", 25: "outrun", 27: "txSat", 28: "hodTouch"}
 causes = Counter(); hrs = 0.0; rows = []
 for r in sys.argv[2:]:
-  d = np.load(f"{S}/r46/{r}.npz", allow_pickle=True)
+  import glob; d = np.load((glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r50/{r}.npz"))[0], allow_pickle=True)
   T = d['T']; n = len(T); v = d['v']
   tq = np.abs(d['tq_s']); pr = d['pressed']
   bl = d['lb'] | d['rb'] | (d['lcs'] > 0)
