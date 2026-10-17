@@ -182,10 +182,10 @@ class TestControlsdFlags:
     s = mk_controls(); s.sm['carState'].vEgo = 12.0
     run(s, 200, _model(0.0, [0.9, 0.95, 0.95, 0.9]))
     assert not s.steer_flags & (cd.STEER_FLAG_LOWCONF_GATE | cd.STEER_FLAG_LOWCONF_CAPPED)
-    run(s, 20, _model(0.006, [0.9, 0.2, 0.95, 0.9]))
+    run(s, 20, _model(0.0012, [0.9, 0.2, 0.95, 0.9]))   # near-straight: Phase 57 leaves the restraints in force
     assert s.steer_flags & cd.STEER_FLAG_LOWCONF_GATE and s.steer_flags & cd.STEER_FLAG_LOWCONF_CAPPED
     assert s.steer_flags & cd.STEER_FLAG_CONF_BLEND          # lane_min 0.2 < 0.30: the 6g blend acts too
-    run(s, 20, _model(0.006, [0.9, 0.95, 0.95, 0.9]))
+    run(s, 20, _model(0.0012, [0.9, 0.95, 0.95, 0.9]))
     assert s.steer_flags & cd.STEER_FLAG_LOWCONF_RELEASE and not s.steer_flags & cd.STEER_FLAG_LOWCONF_GATE
     n = 0
     for _ in range(200):                                 # the ramp is flagged on every one of its frames, then clears

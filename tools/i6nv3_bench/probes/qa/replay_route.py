@@ -62,6 +62,9 @@ for r in routes:
     a.setdefault("drop", []).append(dd[act])
     step = np.abs(k[30:] - k[:-30]) > 1e-3
     a.setdefault("steps", 0); a["steps"] += int(np.sum(step & act[30:] & (d['v'][j][30:] >= 40) & ~np.r_[False, step[:-1]]))
+    Km = P['K'].astype(float)[i]; dKm = np.abs(Km[30:] - Km[:-30]) < 0.4e-3     # the model itself did not move
+    own = step & dKm
+    a.setdefault("own_steps", 0); a["own_steps"] += int(np.sum(own & act[30:] & (d['v'][j][30:] >= 40) & ~np.r_[False, own[:-1]]))
     a.setdefault("min", 0.0); a["min"] += act.sum() * 0.01 / 60
     a.setdefault("diff", []).append(np.abs(k - ko)[act])
     for p in (0, 1, 2, 4, 3):
@@ -80,5 +83,5 @@ print(f"replay fidelity (driven constants vs logged k_ctrl): p50 {np.median(np.c
 for v in VARS:
   a = agg[v]; dfx = np.concatenate(a['diff'])
   ph_txt = " ".join(f"{nm} {np.mean(np.concatenate(a[p])) * 1e3:+.3f}" for p, nm in ((1, "entry"), (2, "steady"), (4, "late"), (3, "exit")))
-  print(f"{v:8} drop {np.concatenate(a['drop']).mean():.2%} steps {a['steps'] / a['min'] * 60:6.1f}/h | vs driven: |d| p95 "
+  print(f"{v:8} drop {np.concatenate(a['drop']).mean():.2%} steps {a['steps'] / a['min'] * 60:6.1f}/h (controlsd-made {a['own_steps'] / a['min'] * 60:5.1f}/h) | vs driven: |d| p95 "
         f"{np.percentile(dfx, 95) * 1e3:.3f} straight RMS {np.sqrt(np.mean(np.concatenate(a[0]) ** 2)) * 1e3:.3f} | toward inside: {ph_txt}")

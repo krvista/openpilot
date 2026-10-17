@@ -99,12 +99,21 @@ class TestIntegration:
     run(s, 200, _model(0.0, [0.9, 0.95, 0.95, 0.9]))
 
   def test_low_confidence_step_is_rate_capped_in_state_control(self):
+    saved = cd.LOWCONF_CURVE_K
+    cd.LOWCONF_CURVE_K = [1e9, 1e9]        # Phase 57 off: this test is about the cap itself (a 0.006 step is a curve)
+    try:
+      self._rate_capped_in_state_control()
+    finally:
+      cd.LOWCONF_CURVE_K = saved
+
+  def _rate_capped_in_state_control(self):
     s = mk_controls(); s.sm['carState'].vEgo = V
     self._settle(s)
     k_step = 0.006                                            # ~15 deg at the nominal ratio
     curv, _ = run(s, 50, _model(k_step, [0.9, 0.2, 0.95, 0.9]))   # weaker inner line at 0.2 for 0.5 s
     assert s.lowconf_cap.active
-    assert abs(curv) <= (0.5 * lc.LOWCONF_CAP_DPS + 0.3) * KPD    # <= ~3.3 deg worth, not 15
+    assert abs(curv) <= (0.5 * lc.LOWCONF_CAP_DPS + 0.3) * KPD    # <= ~3.3 deg worth, not 15 (Phase 57: own-state ramp, not the LP-anchored crawl)
+    assert abs(curv) >= 0.5 * 0.5 * lc.LOWCONF_CAP_DPS * KPD     # ... but at least half the designed 6 deg/s ramp (the LP takes the rest)
     # same step with confident lines is (nearly) through after 0.5 s
     s2 = mk_controls(); s2.sm['carState'].vEgo = V
     self._settle(s2)

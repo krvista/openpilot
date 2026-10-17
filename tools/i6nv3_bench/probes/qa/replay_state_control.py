@@ -18,7 +18,7 @@ P: dict = {}
 d: dict = {}
 
 
-DRIVEN = {"8de98262a": "logged", "a0108a4": "new"}   # other (older) builds drove the cubic lookahead
+DRIVEN = {"8de98262a": "logged", "a0108a47b": "new"}   # other (older) builds drove the cubic lookahead
 
 
 def load(S, r):
@@ -26,7 +26,7 @@ def load(S, r):
   import glob
   P = dict(np.load(f"{S}/la/plan_{r}.npz"))
   rf = (glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r3d/{r}.npz")
-        + glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/rx/{r}.npz"))
+        + glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/rx/{r}.npz") + glob.glob(f"{S}/r50/{r}.npz"))
   d = dict(np.load(rf[0], allow_pickle=True))
 DEG_PER = ([40, 60, 80, 100], [2.85, 3.12, 3.45, 3.74])     # wheel deg per 1e-3/m (qa/e9)
 
@@ -58,7 +58,7 @@ def replay(variant, t0, t1):
   saved = {k: getattr(cd, k) for k in ("TURN_EXIT_K", "LANE_DROPOUT_COUNTER_TQ", "LOOKAHEAD_ORIENT_WEIGHT_SHRINK",
                                        "LOOKAHEAD_ORIENT_DEADBAND", "LOOKAHEAD_ORIENT_GATE", "LOOKAHEAD_ORIENT_T_S",
                                        "LOOKAHEAD_ORIENT_W_SLEW_S", "LOOKAHEAD_ORIENT_GROW_SPAN", "LOOKAHEAD_ORIENT_WEIGHT",
-                                       "LOOKAHEAD_JERK_BUDGET")}
+                                       "LOOKAHEAD_JERK_BUDGET", "TURN_EXIT_SOFT_EXEMPT", "LOWCONF_CURVE_K")}
   if variant in ("logged", "c55only", "cubic") or variant.startswith("x_"):          # Phase 56 off
     cd.TURN_EXIT_K = cd.LANE_DROPOUT_COUNTER_TQ = 1e9
   if variant == "logged":                                # the 55b build that was driven
@@ -77,6 +77,34 @@ def replay(variant, t0, t1):
     setattr(cd, {"shrink": "LOOKAHEAD_ORIENT_WEIGHT_SHRINK", "db": "LOOKAHEAD_ORIENT_DEADBAND", "span": "LOOKAHEAD_ORIENT_GROW_SPAN",
                  "w": "LOOKAHEAD_ORIENT_WEIGHT", "ts": "LOOKAHEAD_ORIENT_T_S", "J": "LOOKAHEAD_JERK_BUDGET",
                  "tek": "TURN_EXIT_K", "ctq": "LANE_DROPOUT_COUNTER_TQ"}[k], float(v))
+  import openpilot.selfdrive.controls.lib.lowconf_rate_cap as lrc
+  if variant in ("logged", "new", "c55only", "cubic", "x_nosoft", "x_noslew") or variant.startswith(("x_", "p_")):
+    cd.LOWCONF_CURVE_K = [1e9, 1e9]          # Phase 57 is not part of any driven build; 'p57' / 'p57_<lo>_<hi>' enables it
+    lrc.LOWCONF_CAP_OWN_STATE = False
+  else:
+    lrc.LOWCONF_CAP_OWN_STATE = True
+  if variant.startswith("p57"):
+    parts = variant.split("_")
+    cd.LOWCONF_CURVE_K = [float(parts[1]), float(parts[2])] if len(parts) == 3 else [1.5e-3, 3.0e-3]
+  if variant == "p57capfix":                 # the cap fix alone (no curve fade)
+    cd.LOWCONF_CURVE_K = [1e9, 1e9]
+  if variant == "x_nosoft":
+    cd.TURN_EXIT_SOFT_EXEMPT = False
+  if variant.startswith("q_"):                 # Phase 57 ON (cap fix + curve fade) plus 55c shaping variants
+    cd.LOWCONF_CURVE_K = [1.5e-3, 3.0e-3]; lrc.LOWCONF_CAP_OWN_STATE = True
+    for tok in variant[2:].split("+"):
+      if tok == "nogate":
+        cd.LOOKAHEAD_ORIENT_GATE = [0.0, 0.0]
+      elif tok == "nodb":
+        cd.LOOKAHEAD_ORIENT_DEADBAND = 0.0
+      elif tok == "noslew":
+        cd.LOOKAHEAD_ORIENT_W_SLEW_S = 1e-9
+      elif tok.startswith("shrink"):
+        cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK = float(tok[6:])
+      elif tok.startswith("gate"):
+        cd.LOOKAHEAD_ORIENT_GATE = [float(tok[4:]) * 1e-3, float(tok[4:]) * 1e-3 + 0.7e-3]
+  if variant == "x_noslew":
+    cd.LOOKAHEAD_ORIENT_W_SLEW_S = 1e-9
   s = H.mk_controls(); s.VM = VM(); s._lookahead_orient_w = 1.0
   Tr = d['T']; a0 = np.searchsorted(Tr, t0 - 8.0); a1 = np.searchsorted(Tr, t1)
   cs = s.sm['carState']; out = []
