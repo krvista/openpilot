@@ -12,7 +12,7 @@ from common import T_IDXS
 S = sys.argv[1]
 for r in sys.argv[2:]:
   P = dict(np.load(f"{S}/la/plan_{r}.npz"))
-  rf = (glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz"))[0]
+  rf = (glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r50/{r}.npz"))[0]
   d = dict(np.load(rf, allow_pickle=True))
   T = P['T']; n = len(T); Tr = d['T']
   at = lambda k: np.interp(T, Tr, d[k].astype(float))

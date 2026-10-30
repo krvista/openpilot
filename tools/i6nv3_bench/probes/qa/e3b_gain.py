@@ -5,7 +5,7 @@ import numpy as np
 
 S = sys.argv[1]
 rows = []
-for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz")):
+for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r50/0*.npz")):
   d = np.load(f, allow_pickle=True)
   v = d['v'] / 3.6
   k = d['k_ctrl']

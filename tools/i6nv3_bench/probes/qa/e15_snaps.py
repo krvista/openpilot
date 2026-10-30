@@ -9,7 +9,7 @@ import numpy as np
 
 S = sys.argv[1]
 res = {}
-for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz")):
+for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/r50/0*.npz")):
   d = np.load(f, allow_pickle=True); b = str(d['commit'])
   T = d['T']; ang = d['ang']; ap = d['apply']; g = d['gain']; tq = d['tq_s']; v = d['v']
   bl = d['lb'] | d['rb'] | (d['lcs'] > 0)

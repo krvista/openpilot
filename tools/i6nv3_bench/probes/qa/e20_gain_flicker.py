@@ -6,7 +6,7 @@ import sys
 import numpy as np
 
 S = sys.argv[1]
-for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz")):
+for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/r50/0*.npz")):
   d = np.load(f, allow_pickle=True); b = str(d['commit']); r = f[-12:-4]
   v = d['v']; lat = d['lat']; g = d['gain']; tq = np.abs(d['tq_s']); pr = d['pressed']
   n = len(v)

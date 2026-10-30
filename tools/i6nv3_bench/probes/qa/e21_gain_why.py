@@ -10,9 +10,9 @@ S = sys.argv[1]
 CC = {15: "43b accel yield", 16: "boost suppressed", 17: "33 blind caution", 18: "39a city release", 19: "35b anchored rec",
       20: "blinker concession", 21: "29 post-grip", 27: "38 tx saturated", 28: "51 HOD touch", 5: "angle passive"}
 rows = []
-for f in sorted(glob.glob(f"{S}/r46/0*.npz")):
+for f in sorted(glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/r50/0*.npz")):
   d = np.load(f, allow_pickle=True)
-  if str(d['commit']) != "8de98262a":
+  if str(d["commit"]) not in ("98e912d3d", "a0108a47b"):
     continue
   v = d['v']; lat = d['lat']; g = d['gain']; tq = np.abs(d['tq_s']); pr = d['pressed']; sc = d['sf_cc'].astype(np.int64)
   n = len(v)

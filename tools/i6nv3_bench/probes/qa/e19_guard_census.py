@@ -14,7 +14,7 @@ CC = {2: "passthrough", 3: "lowspeed latch", 4: "scenario block", 5: "angle pass
       18: "39a city release", 19: "35b anchored recovery", 20: "blinker concession", 21: "29 post-grip", 22: "VM reject",
       23: "post-reverse", 24: "cam fault", 25: "38-3 wheel outrun", 26: "tx rejected", 27: "38 tx saturated", 28: "51 HOD touch"}
 agg = {}
-for f in sorted(glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/rx/0*.npz")):
+for f in sorted(glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/r50/0*.npz") + glob.glob(f"{S}/rx/0*.npz")):
   d = np.load(f, allow_pickle=True); b = str(d['commit'])
   v = d['v']; lat = d['lat']; sf = d['sf_ctl'].astype(np.int64); sc = d['sf_cc'].astype(np.int64)
   if not (sf.any() or sc.any()):

@@ -8,7 +8,7 @@ import numpy as np
 
 S = sys.argv[1]
 tot = {}
-for f in sorted(glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz")):
+for f in sorted(glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r46/0*.npz") + glob.glob(f"{S}/r50/0*.npz")):
   d = np.load(f, allow_pickle=True); r = f[-12:-4]; b = str(d['commit'])
   T = d['T']; sf = d['sf_ctl'].astype(int); K = d['k_model']; kc = d['k_ctrl']; v = d['v']
   drop = (sf >> 5) & 1

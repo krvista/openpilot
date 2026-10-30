@@ -7,7 +7,7 @@ import numpy as np
 
 S = sys.argv[1]
 rows = []
-for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz")):
+for f in sorted(glob.glob(f"{S}/ropm/0*.npz") + glob.glob(f"{S}/r3d/0*.npz") + glob.glob(f"{S}/r43/0*.npz") + glob.glob(f"{S}/r50/0*.npz")):
   d = np.load(f, allow_pickle=True)
   b = {"94b5b8454": 0, "d84d1a8f7": 1, "cb10ad784": 2}[str(d['commit'])]
   v = d['v'] / 3.6

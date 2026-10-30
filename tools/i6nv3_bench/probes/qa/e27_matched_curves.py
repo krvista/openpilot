@@ -11,7 +11,7 @@ sys.path.insert(0, sys.argv[0].rsplit('/', 1)[0])
 from common import routes
 
 S = sys.argv[1]
-NEW = "a0108a47b"
+NEW = "98e912d3d"
 cells = {}
 for r, P, d, T, f in routes(S):
   n = len(T); v = f['v']; kr = f['k_road']; b = str(d['commit']); Tr = d['T']

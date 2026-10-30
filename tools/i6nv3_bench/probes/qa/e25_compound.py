@@ -75,7 +75,7 @@ for b, evs in EV.items():
     print(f"== {b} {nm:12} n {m.sum():3d} | ctrl hold lag mean {np.mean(x[:, 1]) * 1e3:4.0f} ms p90 {np.percentile(x[:, 1], 90) * 1e3:4.0f} | "
           f"(cmd-model) toward 2nd {np.mean(x[:, 2]) * 1e3:+.2f}e-3 | cap {np.mean(x[:, 3]):4.1%} blend {np.mean(x[:, 4]):4.1%} drop {np.mean(x[:, 5]):4.1%} "
           f"lm p10 {np.median(x[:, 6]):.2f} | 55c w {np.mean(x[:, 7]):.2f} | outside max p50/p90 {np.nanmedian(x[:, 8]):+.2f}/{np.nanpercentile(x[:, 8], 90):+.2f} m | v {np.median(x[:, 9]):.0f} peak {np.median(x[:, 10]) * 1e3:.1f}e-3")
-  if b in ("a0108a47b", "8de98262a"):
+  if b in ("98e912d3d", "a0108a47b"):
     for e in evs:
       if e[1] >= 0.4 or (np.isfinite(e[8]) and e[8] > 0.4):
         print(f"     {e[12]} t {e[13]:7.1f} {'S' if e[0] else 'same'} v {e[9]:3.0f} lag {e[1] * 1e3:4.0f} ms held {e[2] * 1e3:+.2f} cap {e[3]:.0%} blend {e[4]:.0%} drop {e[5]:.0%} lm {e[6]:.2f} w {e[7]:.2f} out {e[8]:+.2f}")
