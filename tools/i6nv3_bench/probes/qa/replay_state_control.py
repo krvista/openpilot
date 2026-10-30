@@ -18,7 +18,7 @@ P: dict = {}
 d: dict = {}
 
 
-DRIVEN = {"8de98262a": "logged", "a0108a47b": "new"}   # other (older) builds drove the cubic lookahead
+DRIVEN = {"8de98262a": "logged", "a0108a47b": "new", "98e912d3d": "p57"}   # other (older) builds drove the cubic lookahead
 
 
 def load(S, r):
