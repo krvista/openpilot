@@ -160,6 +160,7 @@ SF_WHEEL_OUTRUN       = 1 << 25   # 38-3 wheel-outrun passive
 SF_TX_REJECTED        = 1 << 26   # panda rejected the previous LKAS_ALT echo
 SF_TX_SATURATED       = 1 << 27   # 38 TX governor held the wire behind the request
 SF_HOD_TOUCH          = 1 << 28   # Phase 51: brief light touch exempted from the yield (HOD-silencing touch)
+SF_HAND_GAP           = 1 << 29   # Phase 58: hand-on gap cap bound the request this frame
 
 
 def compute_hold_torque(v_ego, lat_acc):
@@ -566,6 +567,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.hod_touch_clear_frames = 10**6
     self.hod_touch_armed = False
     self.hod_touch_exempt = False
+    # Phase 58: hand-on gap cap (values.py HAND_GAP_*)
+    self.hand_gap_on = False
+    self.hand_gap_quiet = 0
+    self.hand_gap_cap = None      # deg; None = inactive
+    self.hand_gap_binding = False
     self.rain_active = False
     self.rain_w = 0.0
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
@@ -640,6 +646,36 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_exit_frames = 0
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
+
+  def _hand_gap_cap(self, desired: float, wheel: float, v_ego: float, driver_tq: float, lat_active: bool) -> float:
+    """Phase 58: keep the request within HAND_GAP_CAP_DEG of the wheel while a hand rests on it (values.py HAND_GAP_*)."""
+    P = CarControllerParams
+    self.hand_gap_binding = False
+    if P.HAND_GAP_CAP_DEG <= 0.0 or not lat_active or v_ego * CV.MS_TO_KPH < P.HAND_GAP_MIN_KPH:
+      self.hand_gap_on = False
+      self.hand_gap_quiet = 0
+      self.hand_gap_cap = None
+      return desired
+    if driver_tq >= P.HAND_GAP_ON_NM:
+      self.hand_gap_on = True
+      self.hand_gap_quiet = 0
+    elif self.hand_gap_on:
+      self.hand_gap_quiet = self.hand_gap_quiet + 1 if driver_tq < P.HAND_GAP_OFF_NM else 0
+      if self.hand_gap_quiet >= P.HAND_GAP_OFF_FRAMES:
+        self.hand_gap_on = False
+    if self.hand_gap_on:
+      if self.hand_gap_cap is None:
+        self.hand_gap_cap = max(abs(self.apply_angle_last - wheel), P.HAND_GAP_CAP_DEG)
+      self.hand_gap_cap = max(P.HAND_GAP_CAP_DEG, self.hand_gap_cap - P.HAND_GAP_DOWN_DPS * DT_CTRL)
+    elif self.hand_gap_cap is not None:
+      self.hand_gap_cap += P.HAND_GAP_UP_DPS * DT_CTRL
+      if self.hand_gap_cap >= P.HAND_GAP_RELEASE_DEG:
+        self.hand_gap_cap = None
+    if self.hand_gap_cap is None:
+      return desired
+    out = float(_clip(desired, wheel - self.hand_gap_cap, wheel + self.hand_gap_cap))
+    self.hand_gap_binding = out != desired
+    return out
 
   def _stall_kick(self, wheel: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool) -> float:
     """Phase 40b: request offset (deg) for this frame. Ramp away from a stuck wheel until it moves, hold, slow decay
@@ -1556,6 +1592,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Phase 40: stall kick — a short request pulse away from a stuck wheel (values.py STALL_KICK_*).
       # Added after the smoothing so it reaches TX in full; the VM/panda rate limits below still bound it.
       desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive))
+      # Phase 58: hand-on gap cap — a resting hand cannot release more than HAND_GAP_CAP_DEG of stored gap at once.
+      desired_angle = self._hand_gap_cap(desired_angle, steer_angle_safe, v_ego_safe, driver_tq, bool(CC.latActive))
 
       # Phase 9 (yield-by-authority): op keeps its own clean commanded angle — the
       # driver yield is done entirely on the ACIGain authority axis below, so the
@@ -2095,7 +2133,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                     (self.blinker_concession, SF_BLINKER_CONCESSION), (vm_reject_persistent, SF_VM_REJECT),
                     (self.was_in_reverse, SF_REVERSE), (cam_stale_tripped or fault_lfa_bool, SF_CAM_FAULT),
                     (self.wheel_outrun_passive, SF_WHEEL_OUTRUN), (bool(getattr(CS, "tx_rejected", False)), SF_TX_REJECTED),
-                    (self.tx_sat_frames > 0, SF_TX_SATURATED), (self.hod_touch_exempt, SF_HOD_TOUCH)):
+                    (self.tx_sat_frames > 0, SF_TX_SATURATED), (self.hod_touch_exempt, SF_HOD_TOUCH),
+                    (self.hand_gap_binding, SF_HAND_GAP)):
       if on:
         sf |= bit
     self.steer_debug_flags = sf

@@ -461,6 +461,26 @@ class CarControllerParams:
   HOD_TOUCH_DEBOUNCE_FRAMES       = 30       # 0.3 s of continuous torque above the yield start before yielding
   HOD_TOUCH_MAX_NM                = 160.0    # = ACIGAIN_GRIP_RATE_DN_GATE_NM; a brief touch above this yields at once
   HOD_TOUCH_REFRACTORY_FRAMES     = 100      # 1 s below the yield start before a new touch may be exempt
+  # Phase 58 (i6nv3 routes 50-73, report §62): hand-on GAP CAP. The ACI pulls the wheel toward the request roughly in
+  # proportion to the gap (MDPS torque p50 2 at a 5-8 deg gap, 11 at >= 12 deg), so in curves the wheel sits 5-20 deg
+  # behind the request (44 episodes/h at gain >= 0.7). When the resting hand changes force — mostly a small push the
+  # same way — the stored gap is released at once: 8.3 snaps/h at >= 40 deg/s (up to 211 deg/s), 33 of 35 followed by
+  # a firm grab; snap odds 7 % (gap 5-8 deg), 24 % (8-12), 48 % (>= 12). While a hand rests on the wheel (hold-
+  # compensated driver torque >= ON_NM; off after OFF_FRAMES below OFF_NM) the request is kept within CAP_DEG of the
+  # measured wheel, so at most CAP_DEG can be released. The cap starts at the current gap and tightens at DOWN_DPS (no
+  # step toward the wheel); after the hand leaves it widens at UP_DPS and switches off at RELEASE_DEG (the request
+  # returns to the plan as a ramp, not a step). Applied to the desired angle before the VM / panda limiters.
+  # Cost: with a hand resting in a sharp curve op pulls with at most a CAP_DEG gap (73 of 134 gain >= 0.7 op-minutes
+  # had a resting hand; 4.7 of those had a gap > 6 deg).
+  # Kill: HAND_GAP_CAP_DEG = 0.
+  HAND_GAP_CAP_DEG          = 6.0
+  HAND_GAP_ON_NM            = 60.0     # driver-domain (hold-compensated) torque
+  HAND_GAP_OFF_NM           = 40.0
+  HAND_GAP_OFF_FRAMES       = 50       # 0.5 s below OFF_NM -> hand gone
+  HAND_GAP_DOWN_DPS         = 20.0     # cap tightening rate from the current gap
+  HAND_GAP_UP_DPS           = 10.0     # cap widening rate after the hand leaves
+  HAND_GAP_RELEASE_DEG      = 30.0     # cap at/above this = inactive
+  HAND_GAP_MIN_KPH          = 15.0
   # Phase 36: low-speed CURVE-conditional ceiling with a continuous ramp.
   # The 24a hands-off ceiling (0.18 @0 -> 0.30 @20 -> 0.75 @40 km/h) is the
   # measured shake/authority balance on STRAIGHTS, where model churn lives;
