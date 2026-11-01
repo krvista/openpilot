@@ -685,7 +685,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     kp = float(_interp(v_kph, sp, P.MDPS_COMP_KP))
     kc = float(_interp(v_kph, sp, P.MDPS_COMP_KC))
     dly = float(_interp(v_kph, sp, P.MDPS_COMP_DELAY_S))
-    ref = cmd + dly * self.mdps_comp_ref_rate
+    ref = cmd + P.MDPS_COMP_PREVIEW * dly * self.mdps_comp_ref_rate
     tx = float(self.apply_angle_last)
     if hold:
       rate = self.mdps_comp_ref_rate + (ref - tx) * P.MDPS_COMP_RETURN_RATE
