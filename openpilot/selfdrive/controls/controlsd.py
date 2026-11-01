@@ -283,6 +283,19 @@ LOOKAHEAD_ORIENT_WIDE_BUDGET = True   # dk_max over 0.9 s + tau(v) instead of t_
 LOOKAHEAD_ORIENT_RAMP_V = [25.0 / 3.6, 30.0 / 3.6]   # m/s: cubic below, orient above
 LOOKAHEAD_ORIENT_SLEW_S = 0.5         # s for a full cubic <-> orient cross-fade
 _PLAN_T_IDXS = np.array(ModelConstants.T_IDXS, dtype=np.float64)
+# Phase 60 (report §67): speed-scheduled DELAY MATCH. The model's action is the curvature for t + 0.375 s (lateral delay
+# 0.3 + 0.075; lagd never converges on this driving), but the measured action -> vehicle-curvature delay depends on speed
+# (102 routes: 0.40 / 0.50 / 0.55 / 0.60 s at 40-55 / 55-70 / 70-90 / 90+ km/h on the current chain). Instead of
+# extrapolating, read the model's OWN planned curvature further ahead: the base command becomes
+#   K + clip(k_plan(REF + extra(v)) - k_plan(REF), +-LOOKAHEAD_DELAY_JERK * |extra| / v^2)
+# (k_plan = plan yaw rate / speed, REF = LOOKAHEAD_ORIENT_REF_T_S, the plan time closest to the action). extra(v) may be
+# negative (a chain faster than the model assumes). Faded in with the orient path (25-30 km/h), off in lane changes.
+# The 55c entry lead and everything downstream act on top of this base. Kill: LOOKAHEAD_DELAY_EXTRA_S all 0.
+LOOKAHEAD_DELAY_SPEEDS_MS = [35.0 / 3.6, 47.5 / 3.6, 62.5 / 3.6, 80.0 / 3.6, 100.0 / 3.6]
+# §67 full-chain sim (real controlsd + CarController + identified MDPS, 206 windows / 23 routes, route-fold choice):
+# +0.2 / +0.1 s at 30-40 / 40-55 km/h, 0 above (with Phase 59, whose own preview is then off).
+LOOKAHEAD_DELAY_EXTRA_S = [0.2, 0.1, 0.0, 0.0, 0.0]
+LOOKAHEAD_DELAY_JERK = 2.5            # m/s^3 envelope for the delay-match shift
 
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
@@ -551,6 +564,23 @@ class Controls(ControlsExt):
                    (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
       return self.desired_curvature * float(ramp)
     self._model_nonfinite_frames = 0
+
+    # Phase 60: speed-scheduled delay match (see LOOKAHEAD_DELAY_*): shift the base along the model's own plan.
+    self._delay_match = 0.0
+    dm_extra = float(_interp(v_ego, LOOKAHEAD_DELAY_SPEEDS_MS, LOOKAHEAD_DELAY_EXTRA_S))
+    dm_plan = mf.orient_plan
+    if dm_extra != 0.0 and dm_plan is not None and mf.lane_change_state == LaneChangeState.off:
+      dm_yr, dm_vx = dm_plan
+      dm_k = lambda t: float(np.interp(t, _PLAN_T_IDXS, dm_yr)) / max(float(np.interp(t, _PLAN_T_IDXS, dm_vx)), 1.0)
+      dm_ref = LOOKAHEAD_ORIENT_REF_T_S
+      dm = dm_k(max(dm_ref + dm_extra, 0.0)) - dm_k(dm_ref)
+      dm_max = LOOKAHEAD_DELAY_JERK * max(abs(dm_extra), 0.05) / max(v_ego, 5.0) ** 2
+      dm_w = float(_interp(v_ego, LOOKAHEAD_ORIENT_RAMP_V, [0.0, 1.0]))
+      self._delay_match = dm_w * float(_clip(dm, -dm_max, dm_max))
+      if math.isfinite(self._delay_match):
+        fallback = fallback + self._delay_match
+      else:
+        self._delay_match = 0.0
 
     # Phase 55b cross-fade weight toward the orient lead, updated on every engaged frame (also below the gate) so a
     # speed / lane-change / plan-validity switch never steps the command.

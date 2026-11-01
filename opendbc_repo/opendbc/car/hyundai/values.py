@@ -492,13 +492,16 @@ class CarControllerParams:
   # returns to the command at RETURN_RATE (no wind-up against a hand). Active from MIN_KPH (cruise floor 30 km/h).
   # While active the curve trim and the stall kick are off. Kill: MDPS_COMP_LAMBDA = 0.
   MDPS_COMP_LAMBDA          = 2.0      # 1/s
-  # all-data output-error fits (report §66: 91 routes, 125 min hands-off at gain >= 0.95; band centres 30-40 / 40-55 /
-  # 55-70 / 70-90 / 90+ km/h; route-fold cross-validated RMS 0.55-1.6 deg vs 1.9-5.3 for a pure 0.3 s delay)
+  # all-data output-error fits (report §66-67: 91 routes, 125 min hands-off at gain >= 0.95; band centres 30-40 / 40-55 /
+  # 55-70 / 70-90 / 90+ km/h). §67: the delay is weakly identified (free per band / one common / linear in speed:
+  # cross-validated RMS 1.547 / 1.568 / 1.572 deg), so one common 0.20 s replaces the uneven per-band values.
   MDPS_COMP_SPEEDS_KPH      = [35.0, 47.5, 62.5, 80.0, 100.0]
-  MDPS_COMP_KF              = [0.447, 0.668, 0.582, 0.524, 0.466]
-  MDPS_COMP_KP              = [0.052, 0.068, 0.180, 0.084, 0.301]
-  MDPS_COMP_KC              = [0.053, 0.023, 0.157, 0.093, 0.277]
-  MDPS_COMP_DELAY_S         = [0.36, 0.12, 0.32, 0.28, 0.20]
+  MDPS_COMP_KF              = [0.435, 0.676, 0.559, 0.520, 0.466]
+  MDPS_COMP_KP              = [0.059, 0.077, 0.180, 0.086, 0.301]
+  MDPS_COMP_KC              = [0.052, 0.029, 0.150, 0.091, 0.277]
+  MDPS_COMP_DELAY_S         = [0.20, 0.20, 0.20, 0.20, 0.20]
+  MDPS_COMP_PREVIEW         = 0.0      # cmd' * d preview scale. §67: off — controlsd's plan-based delay match (Phase 60)
+                                       # does the time advance (full-chain sim: intent RMS 0.802 -> 0.773e-3, jerk p95 0.74 -> 0.62)
   MDPS_COMP_KF_MIN          = 0.30
   MDPS_COMP_GMAX_DEG        = 6.0      # 8 -> 6: time with |TX - wheel| > 8 deg 6.7 -> 4.2 % for RMS 2.08 -> 2.14 deg
   MDPS_COMP_MIN_KPH         = 30.0     # on at >= MIN, off below MIN - 2
