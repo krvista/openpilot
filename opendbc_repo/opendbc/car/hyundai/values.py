@@ -481,6 +481,30 @@ class CarControllerParams:
   HAND_GAP_UP_DPS           = 10.0     # cap widening rate after the hand leaves
   HAND_GAP_RELEASE_DEG      = 30.0     # cap at/above this = inactive
   HAND_GAP_MIN_KPH          = 15.0
+  # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
+  # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
+  #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel
+  # i.e. the MDPS passes ~55-60 % of a request CHANGE, closes the remaining error slowly (Kp, ~0 at town speed) and the
+  # wheel self-centres (Kc). The compensator inverts it with wheel feedback and a preview of the plant delay:
+  #   TX' = ( ref' + LAMBDA * (ref - wheel) - Kp * (TX(t-d) - wheel) + Kc * wheel ) / Kf,   ref = cmd + d * cmd'
+  # |TX - ref| <= GMAX_DEG, integrated from the last sent angle (anti-windup: the VM / panda limiters bound each step).
+  # With a hand detected (Phase 58), a debounced press or the ACI gain below HOLD_GAIN the feedback stops and TX
+  # returns to the command at RETURN_RATE (no wind-up against a hand). Active from MIN_KPH (cruise floor 30 km/h).
+  # While active the curve trim and the stall kick are off. Kill: MDPS_COMP_LAMBDA = 0.
+  MDPS_COMP_LAMBDA          = 2.0      # 1/s
+  # all-data output-error fits (report §66: 91 routes, 125 min hands-off at gain >= 0.95; band centres 30-40 / 40-55 /
+  # 55-70 / 70-90 / 90+ km/h; route-fold cross-validated RMS 0.55-1.6 deg vs 1.9-5.3 for a pure 0.3 s delay)
+  MDPS_COMP_SPEEDS_KPH      = [35.0, 47.5, 62.5, 80.0, 100.0]
+  MDPS_COMP_KF              = [0.447, 0.668, 0.582, 0.524, 0.466]
+  MDPS_COMP_KP              = [0.052, 0.068, 0.180, 0.084, 0.301]
+  MDPS_COMP_KC              = [0.053, 0.023, 0.157, 0.093, 0.277]
+  MDPS_COMP_DELAY_S         = [0.36, 0.12, 0.32, 0.28, 0.20]
+  MDPS_COMP_KF_MIN          = 0.30
+  MDPS_COMP_GMAX_DEG        = 6.0      # 8 -> 6: time with |TX - wheel| > 8 deg 6.7 -> 4.2 % for RMS 2.08 -> 2.14 deg
+  MDPS_COMP_MIN_KPH         = 30.0     # on at >= MIN, off below MIN - 2
+  MDPS_COMP_RATE_TAU_S      = 0.10     # command-rate low-pass
+  MDPS_COMP_RETURN_RATE     = 2.0      # 1/s, TX back to the command while held
+  MDPS_COMP_HOLD_GAIN       = 0.5      # below this the yield dominates (hands-off ceilings sit at 0.8-0.9)
   # Phase 36: low-speed CURVE-conditional ceiling with a continuous ramp.
   # The 24a hands-off ceiling (0.18 @0 -> 0.30 @20 -> 0.75 @40 km/h) is the
   # measured shake/authority balance on STRAIGHTS, where model churn lives;

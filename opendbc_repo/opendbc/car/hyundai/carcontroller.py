@@ -161,6 +161,7 @@ SF_TX_REJECTED        = 1 << 26   # panda rejected the previous LKAS_ALT echo
 SF_TX_SATURATED       = 1 << 27   # 38 TX governor held the wire behind the request
 SF_HOD_TOUCH          = 1 << 28   # Phase 51: brief light touch exempted from the yield (HOD-silencing touch)
 SF_HAND_GAP           = 1 << 29   # Phase 58: hand-on gap cap bound the request this frame
+SF_MDPS_COMP          = 1 << 30   # Phase 59: MDPS inverse-model compensator shaping the request (feedback on)
 
 
 def compute_hold_torque(v_ego, lat_acc):
@@ -572,6 +573,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.hand_gap_quiet = 0
     self.hand_gap_cap = None      # deg; None = inactive
     self.hand_gap_binding = False
+    # Phase 59: MDPS inverse-model compensator (values.py MDPS_COMP_*)
+    self.mdps_comp_active = False
+    self.mdps_comp_feedback = False
+    self.mdps_comp_hist = []          # recent sent angles (apply_angle_last), newest last
+    self.mdps_comp_ref_prev = None
+    self.mdps_comp_ref_rate = 0.0
     self.rain_active = False
     self.rain_w = 0.0
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
@@ -646,6 +653,49 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_exit_frames = 0
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
+
+  def _mdps_comp(self, cmd: float, wheel: float, v_ego: float, lat_active: bool, hold: bool) -> float:
+    """Phase 59: inverse of the identified MDPS response with wheel feedback (values.py MDPS_COMP_*). Returns the request."""
+    P = CarControllerParams
+    v_kph = v_ego * CV.MS_TO_KPH
+    self.mdps_comp_feedback = False
+    if self.mdps_comp_ref_prev is None:
+      self.mdps_comp_ref_prev = cmd
+    raw_rate = (cmd - self.mdps_comp_ref_prev) / DT_CTRL
+    self.mdps_comp_ref_prev = cmd
+    self.mdps_comp_ref_rate += (DT_CTRL / max(P.MDPS_COMP_RATE_TAU_S, DT_CTRL)) * (raw_rate - self.mdps_comp_ref_rate)
+    if P.MDPS_COMP_LAMBDA <= 0.0 or not lat_active:
+      self.mdps_comp_active = False
+      self.mdps_comp_hist = []
+      self.mdps_comp_ref_rate = 0.0
+      return cmd
+    if self.mdps_comp_active:
+      if v_kph < P.MDPS_COMP_MIN_KPH - 2.0:
+        self.mdps_comp_active = False
+    elif v_kph >= P.MDPS_COMP_MIN_KPH:
+      self.mdps_comp_active = True
+      self.mdps_comp_hist = []
+    self.mdps_comp_hist.append(float(self.apply_angle_last))
+    if len(self.mdps_comp_hist) > 40:
+      self.mdps_comp_hist.pop(0)
+    if not self.mdps_comp_active:
+      return cmd
+    sp = P.MDPS_COMP_SPEEDS_KPH
+    kf = max(float(_interp(v_kph, sp, P.MDPS_COMP_KF)), P.MDPS_COMP_KF_MIN)
+    kp = float(_interp(v_kph, sp, P.MDPS_COMP_KP))
+    kc = float(_interp(v_kph, sp, P.MDPS_COMP_KC))
+    dly = float(_interp(v_kph, sp, P.MDPS_COMP_DELAY_S))
+    ref = cmd + dly * self.mdps_comp_ref_rate
+    tx = float(self.apply_angle_last)
+    if hold:
+      rate = self.mdps_comp_ref_rate + (ref - tx) * P.MDPS_COMP_RETURN_RATE
+    else:
+      nd = int(round(dly / DT_CTRL))
+      tx_d = self.mdps_comp_hist[-1 - nd] if len(self.mdps_comp_hist) > nd else tx
+      rate = (self.mdps_comp_ref_rate + P.MDPS_COMP_LAMBDA * (ref - wheel) - kp * (tx_d - wheel) + kc * wheel) / kf
+      self.mdps_comp_feedback = True
+    out = tx + rate * DT_CTRL
+    return float(_clip(out, ref - P.MDPS_COMP_GMAX_DEG, ref + P.MDPS_COMP_GMAX_DEG))
 
   def _hand_gap_cap(self, desired: float, wheel: float, v_ego: float, driver_tq: float, lat_active: bool) -> float:
     """Phase 58: keep the request within HAND_GAP_CAP_DEG of the wheel while a hand rests on it (values.py HAND_GAP_*)."""
@@ -1519,6 +1569,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle = self.cmd_hyst
       else:
         self.cmd_hyst = desired_angle
+      comp_cmd = desired_angle   # Phase 59: the command the compensator tracks (before trim / smoothing / kick)
 
       # Phase 12a (P1): steady-curve trim — close the MDPS's sustained-curve
       # realization deficit (wheel/TX = 0.55-0.63, |TX-wheel| p50 3.7° on
@@ -1545,7 +1596,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # problem is closed by zeroing curve_trim on a re-anchor fire instead.)
       trim_gate = (bool(CC.latActive) and not self.driver_pressed
                    and not self.parking_mode_active and not in_passthrough
-                   and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate)
+                   and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate
+                   and not self.mdps_comp_active)   # Phase 59 replaces the trim
       self.curve_trim_sustain = min(self.curve_trim_sustain + 1, 10 * CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES) if trim_gate else 0
       # S-curve direction flip: a trim built for the previous curve points the
       # wrong way once desired crosses zero. The 2°/s integrator (or the 0.5 s
@@ -1591,7 +1643,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       # Phase 40: stall kick — a short request pulse away from a stuck wheel (values.py STALL_KICK_*).
       # Added after the smoothing so it reaches TX in full; the VM/panda rate limits below still bound it.
-      desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive))
+      desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on,
+                                        bool(CC.latActive) and not self.mdps_comp_active)   # Phase 59 replaces the kick
+      # Phase 59: MDPS inverse-model compensator (replaces the trim / kick output while active).
+      comp_hold = (self.hand_gap_on or self.driver_pressed or self.aci_gain_last < CarControllerParams.MDPS_COMP_HOLD_GAIN)
+      comp_out = self._mdps_comp(comp_cmd, steer_angle_safe, v_ego_safe, bool(CC.latActive), comp_hold)
+      if self.mdps_comp_active:
+        desired_angle = comp_out
       # Phase 58: hand-on gap cap — a resting hand cannot release more than HAND_GAP_CAP_DEG of stored gap at once.
       desired_angle = self._hand_gap_cap(desired_angle, steer_angle_safe, v_ego_safe, driver_tq, bool(CC.latActive))
 
@@ -2134,7 +2192,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                     (self.was_in_reverse, SF_REVERSE), (cam_stale_tripped or fault_lfa_bool, SF_CAM_FAULT),
                     (self.wheel_outrun_passive, SF_WHEEL_OUTRUN), (bool(getattr(CS, "tx_rejected", False)), SF_TX_REJECTED),
                     (self.tx_sat_frames > 0, SF_TX_SATURATED), (self.hod_touch_exempt, SF_HOD_TOUCH),
-                    (self.hand_gap_binding, SF_HAND_GAP)):
+                    (self.hand_gap_binding, SF_HAND_GAP), (self.mdps_comp_active and self.mdps_comp_feedback, SF_MDPS_COMP)):
       if on:
         sf |= bit
     self.steer_debug_flags = sf
