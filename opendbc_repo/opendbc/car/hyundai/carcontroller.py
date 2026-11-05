@@ -42,9 +42,15 @@ CANCEL_BUTTON_DELAY_FRAMES = 10
 ANGLE_SAFETY_BASELINE_MODEL = "KIA_SPORTAGE_HEV_2026"
 
 
-def get_baseline_safety_cp():
+# Phase 62 (report §72): cars whose panda angle-model entry carries their OWN CarSpecs. For these the secondary safety
+# VM is the car's own model (it must mirror the panda table exactly); every other car keeps the Sportage baseline.
+ANGLE_SAFETY_OWN_SPECS = ("HYUNDAI_IONIQ_6_N",)
+
+
+def get_baseline_safety_cp(car_fingerprint=None):
   from opendbc.car.hyundai.interface import CarInterface
-  return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
+  model = car_fingerprint if car_fingerprint in ANGLE_SAFETY_OWN_SPECS else ANGLE_SAFETY_BASELINE_MODEL
+  return CarInterface.get_non_essential_params(model)
 
 
 def is_ccnc_angle_platform(flags):
@@ -521,9 +527,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # panda's hardcoded baseline. If corner-entry rate budget ever needs the
     # full i6n envelope, revisit ANGLE_SAFETY_BASELINE_MODEL together with the
     # panda safety params (firmware) — not independently here.
+    # Phase 62: for the Ioniq 6 N the panda now enforces the car's own specs (hyundai_canfd_angle_models.h [11]), so the
+    # secondary VM is the car's own model too (get_baseline_safety_cp) — the two must stay identical.
     if is_ccnc_angle_platform(CP.flags):
       self.VM = VehicleModel(CP)
-      self.BASELINE_VM = VehicleModel(get_baseline_safety_cp())
+      self.BASELINE_VM = VehicleModel(get_baseline_safety_cp(str(CP.carFingerprint)))
     # F1: camera staleness tracker (kept-feature #10) — LKAS_ALT COUNTER
     # advance is monitored so a stale link forces passive output.
     self.cam_msg_last_frame = 0

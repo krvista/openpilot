@@ -1842,3 +1842,13 @@ phase_tests 457 통과(신규 `test_phase58.py` 5 건: 손 뗌 무변화(kill �
 영향: 각속도 허용치(횡 저크 3.6 m/s³ 를 각도로 환산)가 실제보다 11–16 % 낮다 — 40 / 60 / 80 / 100 km/h 에서 80.7 / 36.4 / 22.0 / 15.6 °/s(CP 값이면 93.7 / 41.6 / 24.7 / 17.2). 실효 횡 저크 한도가 3.6 대신 약 3.1 m/s³ — 안전 쪽이지만 거버너 포화·블라인드 재동기·고속 진입 응답을 그만큼 제한한다.
 
 **제안(승인 대기, 안전 펌웨어 변경).** panda Ioniq 6 N 항목과 파이썬 안전 기준 VM 을 CP 값(14.96 / 2.965 / −4.92e-4)으로 같이 바꾼다 — 둘이 정확히 같아야 거부가 늘지 않는다. panda 안전 테스트(hyundai_canfd·i6n) 통과 후, 다음 부팅에 pandad 가 펌웨어를 한 번 플래시.
+
+## 73. Phase 62 — 안전 차량 모델값을 아이오닉 6 N 제원으로 (11-05)
+
+§72 의 제안 적용. panda `hyundai_canfd_angle_models.h` [11] HYUNDAI_IONIQ_6_N: slip −0.0004919077400089671 / 조향비 14.96 / 휠베이스 2.965(= `calc_slip_factor(VehicleModel(CP))`, CP: mass 2175 + 136, wb 2.965, sR 14.96, tire 1.15). carcontroller: `ANGLE_SAFETY_OWN_SPECS = ("HYUNDAI_IONIQ_6_N",)` — 이 차는 보조 안전 VM 도 자기 CP(`get_baseline_safety_cp(fingerprint)`), 다른 차는 스포티지 기준 그대로. 두 값이 다르면 TX 가 거부되므로 테스트로 묶음.
+
+**테스트.** `test_hyundai_canfd_i6n.py`: 모델 11 의 허용 각도 변화가 i6n VM 과 일치·그 1.15 배는 차단, 스포티지와 i6n 사이 값이 이제 통과(변경 실효), 파이썬 보조 VM 이 C 표와 같은 수(조향비·휠베이스·slip 12 자리). 공용 `test_lateral_accel_limit` 의 대상 차를 클래스 속성(`ANGLE_TEST_CAR`)으로 — 기본 스포티지, i6n 클래스는 i6n. hyundai·canfd·i6n 안전 테스트 3600 통과(853 skip), phase_tests 474 통과. `opendbc/car/hyundai/tests` 의 지문 테스트 2 건 실패는 변경 전에도 같음(무관).
+
+**실주행 재생(`e75`, 76–79 op ≥ 25 km/h 43 분, 실제 CarController 개루프 + panda 검사 파이썬 미러, 제원 짝 맞춤).** 예측 거부 38 → 23(−40 %, 전부 각도 변화 초과 — 가속·비활성 위반 0), 거버너 포화 4.7 → 4.0 %, ≥ 55 km/h 프레임당 TX 이동 p99 0.20 → 0.30°. 미러는 실제(주행 중 9 건)보다 많이 세므로 전후 비교로만 쓴다.
+
+**배포.** panda 펌웨어가 바뀌므로 다음 시동 때 pandad 가 한 번 플래시한다(수 초). 실차 판정: 주행 중 0x110 거부 수(현재 ≈ 4 /h), 거버너 포화 시간, 고속 코너 진입 지연(§68 `e68b`).

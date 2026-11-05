@@ -59,15 +59,14 @@ static const AngleSteeringParams *hyundai_get_angle_params(uint8_t model_id) {
       .wheelbase = 2.756,
     },
 
-    // [11] HYUNDAI_IONIQ_6_N (i6n port) — intentionally IDENTICAL to the
-    // baseline: the road-validated i6nv2 firmware hardcoded exactly these
-    // values, so this entry preserves that safety envelope bit-for-bit.
-    // Switching to the true CarSpecs (wb 2.965 / sr 14.96) is a deliberate
-    // BENCH-PHASE decision, not a port side effect.
+    // [11] HYUNDAI_IONIQ_6_N (i6n port) — the car's own CarSpecs (mass 2175 + cargo, wb 2.965, sr 14.96). Until
+    // Phase 62 this entry carried the Kia Sportage baseline (wb 2.756 / sr 13.7), which converted the same ISO
+    // lateral jerk / accel budget to an 11-16 % lower steering-angle rate for this car (report §72). Must stay equal to
+    // the carcontroller's safety VM for this car (get_baseline_safety_cp), or TX frames get rejected.
     [HYUNDAI_ANGLE_MODEL_HYUNDAI_IONIQ_6_N] = {
-      .slip_factor = -0.0006085930193026732,
-      .steer_ratio = 13.7,
-      .wheelbase = 2.756,
+      .slip_factor = -0.0004919077400089671,
+      .steer_ratio = 14.96,
+      .wheelbase = 2.965,
     },
 
     // [1] KIA_SPORTAGE_HEV_2026 — mass=1812, wb=2.756, sr=13.7

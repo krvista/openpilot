@@ -2,9 +2,8 @@
 
 Runs the upstream LKAS_ALT angle-steering suite under the REAL i6n safety
 param (CCNC forces angle steering — no CANFD_ANGLE_STEERING bit), and adds
-the model-id path falsification the port review asked for: model 11 carries
-baseline-identical params, so a broken encode/decode would silently produce
-baseline behaviour and nothing could tell. Proving that a DIFFERENT model id
+the model-id path falsification the port review asked for. Phase 62: model 11
+carries the Ioniq 6 N's own CarSpecs (it carried the Sportage baseline before). Proving that a DIFFERENT model id
 (KIA_EV9, distinct physics) changes the enforced limits under the very same
 CCNC config demonstrates the selector is live; proving id 11 resolves to the
 baseline numbers pins the intended (bit-identical) envelope.
@@ -31,6 +30,7 @@ class TestI6nCcncAngleSteering(TestHyundaiCanfdLKASteeringAltAngle):
   """Upstream LKAS_ALT angle suite + i6n additions, under the i6n CCNC param."""
 
   GAS_MSG = ("ACCELERATOR", "ACCELERATOR_PEDAL")  # EV_GAS
+  ANGLE_TEST_CAR = I6N_CAR                         # Phase 62: model 11 = the car's own CarSpecs
 
   def setUp(self):
     self.packer = CANPackerSafety("hyundai_canfd_generated")
@@ -90,15 +90,34 @@ class TestI6nCcncAngleSteering(TestHyundaiCanfdLKASteeringAltAngle):
     self._tx(self._angle_cmd_msg(0, True))
     return self._tx(self._angle_cmd_msg(delta, True))
 
-  def test_model_11_enforces_baseline_envelope(self):
-    # id 11 params are intentionally bit-identical to baseline: the accepted
-    # jerk envelope must equal get_max_angle_delta_vm(baseline VM)
-    vm = self.get_vm(ANGLE_SAFETY_BASELINE_MODEL)
+  def test_model_11_enforces_i6n_envelope(self):
+    # Phase 62: id 11 carries the Ioniq 6 N's own CarSpecs — the accepted jerk envelope must equal
+    # get_max_angle_delta_vm(i6n VM), and anything clearly above it is still blocked
+    vm = self.get_vm(I6N_CAR)
     lim = self.get_baseline_limits()
     for speed in (5.0, 12.0, 20.0, 30.0):
       d = round_angle(get_max_angle_delta_vm(speed, vm, lim))
-      self.assertTrue(self._delta_allowed(speed, d), f"baseline delta {d} rejected at {speed}")
-      self.assertFalse(self._delta_allowed(speed, round_angle(d * 1.15, 6)), f"over-baseline accepted at {speed}")
+      self.assertTrue(self._delta_allowed(speed, d), f"i6n delta {d} rejected at {speed}")
+      self.assertFalse(self._delta_allowed(speed, round_angle(d * 1.15, 6)), f"over-i6n accepted at {speed}")
+
+  def test_model_11_is_no_longer_the_baseline(self):
+    # a step between the baseline (Sportage) and the i6n envelope must now pass — proves the table entry changed
+    vm_i6n, vm_base = self.get_vm(I6N_CAR), self.get_vm(ANGLE_SAFETY_BASELINE_MODEL)
+    lim = self.get_baseline_limits()
+    for speed in (12.0, 20.0, 30.0):
+      d_i6n = get_max_angle_delta_vm(speed, vm_i6n, lim)
+      d_base = get_max_angle_delta_vm(speed, vm_base, lim)
+      self.assertGreater(d_i6n, d_base * 1.08, f"i6n envelope not wider than baseline at {speed}")
+      self.assertTrue(self._delta_allowed(speed, round_angle((d_i6n + d_base) / 2.0)), f"baseline still enforced at {speed}")
+
+  def test_python_safety_vm_mirrors_panda_entry(self):
+    # the carcontroller's secondary safety VM for this car must be the car's own model (same numbers as the C table)
+    from opendbc.car.hyundai.carcontroller import get_baseline_safety_cp
+    from opendbc.car.vehicle_model import VehicleModel, calc_slip_factor
+    cp = get_baseline_safety_cp(I6N_CAR)
+    self.assertAlmostEqual(cp.steerRatio, 14.96, places=4)
+    self.assertAlmostEqual(cp.wheelbase, 2.965, places=4)
+    self.assertAlmostEqual(calc_slip_factor(VehicleModel(cp)), -0.0004919077400089671, places=12)
 
   def test_model_selection_is_live_under_ccnc(self):
     # FALSIFICATION: same CCNC param, different model id -> different envelope.

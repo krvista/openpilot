@@ -207,8 +207,11 @@ class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSa
     # We properly test lateral acceleration and jerk below
     pass
 
+  # the car whose VM the panda enforces under this test class's safety param (i6n overrides: its own model id 11)
+  ANGLE_TEST_CAR = ANGLE_SAFETY_BASELINE_MODEL
+
   def test_lateral_accel_limit(self):
-    car_name = ANGLE_SAFETY_BASELINE_MODEL
+    car_name = self.ANGLE_TEST_CAR
     for speed in np.linspace(0, 40, 100):
       speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
       speed = max(speed, 1)
