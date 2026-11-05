@@ -65,13 +65,13 @@ def run(args):
   comp = np.array([COMP[f"{'B' if fold == 0 else 'A'}{i}"] for i in range(1, 6)])
   res = {}
   for var in VARS:
-    e = float(var[3:]) if var.startswith("P") else 0.0
+    e = float(var[3:]) if (var.startswith("P") or var.startswith("B0")) else 0.0
     cd.LOOKAHEAD_DELAY_EXTRA_S = list(FINAL_E) if var == "final" else [e] * 5
     out = R.replay("p57", T[a], T[b - 1])
     cd.LOOKAHEAD_DELAY_EXTRA_S = [0.0] * 5
     kcmd = np.interp(T[a:b], [o[0] for o in out], [o[1] for o in out])
     cmd = sc * kcmd + off
-    CCP.MDPS_COMP_LAMBDA = 0.0 if var == "base" else 2.0
+    CCP.MDPS_COMP_LAMBDA = 0.0 if (var == "base" or var.startswith("B0")) else 2.0
     CCP.MDPS_COMP_PREVIEW = 0.0 if (var.startswith("P0") or var == "final") else 1.0
     CCP.MDPS_COMP_SPEEDS_KPH = CENT; CCP.MDPS_COMP_DELAY_S = comp[:, 0].tolist(); CCP.MDPS_COMP_KF = comp[:, 1].tolist()
     CCP.MDPS_COMP_KP = comp[:, 2].tolist(); CCP.MDPS_COMP_KC = comp[:, 3].tolist()
