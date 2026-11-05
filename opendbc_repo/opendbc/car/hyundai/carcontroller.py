@@ -579,6 +579,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.mdps_comp_hist = []          # recent sent angles (apply_angle_last), newest last
     self.mdps_comp_ref_prev = None
     self.mdps_comp_ref_rate = 0.0
+    self.mdps_comp_ref_last = None    # Phase 59b: previous frame's reference (delta = sent - reference)
+    self.mdps_comp_wheel_prev = None
+    self.mdps_comp_wheel_rate = 0.0
+    self.mdps_comp_frozen = False
     self.rain_active = False
     self.rain_w = 0.0
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
@@ -655,19 +659,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.boot_parking_pending = True
 
   def _mdps_comp(self, cmd: float, wheel: float, v_ego: float, lat_active: bool, hold: bool) -> float:
-    """Phase 59: inverse of the identified MDPS response with wheel feedback (values.py MDPS_COMP_*). Returns the request."""
+    """Phase 59/59b: inverse of the identified MDPS response with wheel feedback (values.py MDPS_COMP_*). The request is
+    reference + delta; delta is the compensator's own share (leaky, freeze-on-no-response, speed-bounded)."""
     P = CarControllerParams
     v_kph = v_ego * CV.MS_TO_KPH
     self.mdps_comp_feedback = False
+    self.mdps_comp_frozen = False
     if self.mdps_comp_ref_prev is None:
       self.mdps_comp_ref_prev = cmd
     raw_rate = (cmd - self.mdps_comp_ref_prev) / DT_CTRL
     self.mdps_comp_ref_prev = cmd
     self.mdps_comp_ref_rate += (DT_CTRL / max(P.MDPS_COMP_RATE_TAU_S, DT_CTRL)) * (raw_rate - self.mdps_comp_ref_rate)
+    if self.mdps_comp_wheel_prev is None:
+      self.mdps_comp_wheel_prev = wheel
+    w_raw = (wheel - self.mdps_comp_wheel_prev) / DT_CTRL
+    self.mdps_comp_wheel_prev = wheel
+    self.mdps_comp_wheel_rate += (DT_CTRL / max(P.MDPS_COMP_WHEEL_RATE_TAU_S, DT_CTRL)) * (w_raw - self.mdps_comp_wheel_rate)
     if P.MDPS_COMP_LAMBDA <= 0.0 or not lat_active:
       self.mdps_comp_active = False
       self.mdps_comp_hist = []
       self.mdps_comp_ref_rate = 0.0
+      self.mdps_comp_ref_last = None
       return cmd
     if self.mdps_comp_active:
       if v_kph < P.MDPS_COMP_MIN_KPH - 2.0:
@@ -675,27 +687,39 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     elif v_kph >= P.MDPS_COMP_MIN_KPH:
       self.mdps_comp_active = True
       self.mdps_comp_hist = []
+      self.mdps_comp_ref_last = None
     self.mdps_comp_hist.append(float(self.apply_angle_last))
     if len(self.mdps_comp_hist) > 40:
       self.mdps_comp_hist.pop(0)
     if not self.mdps_comp_active:
+      self.mdps_comp_ref_last = None
       return cmd
     sp = P.MDPS_COMP_SPEEDS_KPH
     kf = max(float(_interp(v_kph, sp, P.MDPS_COMP_KF)), P.MDPS_COMP_KF_MIN)
     kp = float(_interp(v_kph, sp, P.MDPS_COMP_KP))
     kc = float(_interp(v_kph, sp, P.MDPS_COMP_KC))
     dly = float(_interp(v_kph, sp, P.MDPS_COMP_DELAY_S))
+    gmax = min(float(_interp(v_kph, sp, P.MDPS_COMP_GMAX_V)), P.MDPS_COMP_GMAX_DEG)
     ref = cmd + P.MDPS_COMP_PREVIEW * dly * self.mdps_comp_ref_rate
     tx = float(self.apply_angle_last)
+    ref_last = ref if self.mdps_comp_ref_last is None else self.mdps_comp_ref_last
+    self.mdps_comp_ref_last = ref
+    delta = tx - ref_last                      # what the compensator actually added last frame (after the limiters)
     if hold:
-      rate = self.mdps_comp_ref_rate + (ref - tx) * P.MDPS_COMP_RETURN_RATE
-    else:
-      nd = int(round(dly / DT_CTRL))
-      tx_d = self.mdps_comp_hist[-1 - nd] if len(self.mdps_comp_hist) > nd else tx
-      rate = (self.mdps_comp_ref_rate + P.MDPS_COMP_LAMBDA * (ref - wheel) - kp * (tx_d - wheel) + kc * wheel) / kf
-      self.mdps_comp_feedback = True
-    out = tx + rate * DT_CTRL
-    return float(_clip(out, ref - P.MDPS_COMP_GMAX_DEG, ref + P.MDPS_COMP_GMAX_DEG))
+      delta -= delta * min(P.MDPS_COMP_RETURN_RATE * DT_CTRL, 1.0)
+      return float(ref + delta)
+    nd = int(round(dly / DT_CTRL))
+    tx_d = self.mdps_comp_hist[-1 - nd] if len(self.mdps_comp_hist) > nd else tx
+    ff = self.mdps_comp_ref_rate * (1.0 / kf - 1.0)
+    fb = (P.MDPS_COMP_LAMBDA * (ref - wheel) - kp * (tx_d - wheel) + kc * wheel) / kf
+    if (P.MDPS_COMP_FREEZE and abs(self.mdps_comp_wheel_rate) < P.MDPS_COMP_FREEZE_RATE_DPS
+        and abs(ref - wheel) > P.MDPS_COMP_FREEZE_ERR_DEG and abs(delta) > P.MDPS_COMP_FREEZE_MIN_DEG and fb * delta > 0.0):
+      fb = 0.0                                  # the wheel is not following: do not wind the request up any further
+      self.mdps_comp_frozen = True
+    self.mdps_comp_feedback = True
+    delta += (ff + fb) * DT_CTRL
+    delta -= delta * DT_CTRL / max(P.MDPS_COMP_LEAK_TAU_S, DT_CTRL)
+    return float(ref + _clip(delta, -gmax, gmax))
 
   def _hand_gap_cap(self, desired: float, wheel: float, v_ego: float, driver_tq: float, lat_active: bool) -> float:
     """Phase 58: keep the request within HAND_GAP_CAP_DEG of the wheel while a hand rests on it (values.py HAND_GAP_*)."""

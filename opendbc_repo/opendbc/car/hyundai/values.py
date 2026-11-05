@@ -491,7 +491,12 @@ class CarControllerParams:
   # With a hand detected (Phase 58), a debounced press or the ACI gain below HOLD_GAIN the feedback stops and TX
   # returns to the command at RETURN_RATE (no wind-up against a hand). Active from MIN_KPH (cruise floor 30 km/h).
   # While active the curve trim and the stall kick are off. Kill: MDPS_COMP_LAMBDA = 0.
-  MDPS_COMP_LAMBDA          = 2.0      # 1/s
+  # Phase 61 (report §69, routes 76-79): OFF by default. On the road the compensator wound up against a wheel that did
+  # not follow (clamp 15-31 % of the time vs <= 1 %, weave 1.9 -> 2.4 deg at 55-90 km/h). The 59b redesign below (leak,
+  # freeze, per-speed GMAX) removes the wind-up (open-loop replay of 76-79: windups 2.2 -> 0.1 /min) but even then the
+  # full-chain sim shows more 70-90 km/h weave and lateral jerk than the trim / kick layers (jerk p95 0.57 vs 0.35), so
+  # the curve trim and stall kick are back and Phase 60's plan lookahead carries the timing. Set 2.0 to enable 59 + 59b.
+  MDPS_COMP_LAMBDA          = 0.0      # 1/s
   # all-data output-error fits (report §66-67: 91 routes, 125 min hands-off at gain >= 0.95; band centres 30-40 / 40-55 /
   # 55-70 / 70-90 / 90+ km/h). §67: the delay is weakly identified (free per band / one common / linear in speed:
   # cross-validated RMS 1.547 / 1.568 / 1.572 deg), so one common 0.20 s replaces the uneven per-band values.
@@ -504,6 +509,22 @@ class CarControllerParams:
                                        # does the time advance (full-chain sim: intent RMS 0.802 -> 0.773e-3, jerk p95 0.74 -> 0.62)
   MDPS_COMP_KF_MIN          = 0.30
   MDPS_COMP_GMAX_DEG        = 6.0      # 8 -> 6: time with |TX - wheel| > 8 deg 6.7 -> 4.2 % for RMS 2.08 -> 2.14 deg
+  # Phase 59b (report §69, routes 76-79): the 31520b9 drives sat at the GMAX clamp 15-31 % of the time (old builds <= 1 %
+  # at >= 55 km/h): the feedback integrates whenever the wheel does not follow — a light resting hand below the hand
+  # detection, the MDPS ignoring sub-degree requests — and the stored request is released at once (0.15-0.35 Hz weave,
+  # wheel swing 1.9 -> 2.4 deg at 55-90 km/h). The request is kept as cmd + delta; delta (the compensator's own share)
+  #   * leaks toward 0 with LEAK_TAU_S,
+  #   * stops integrating the feedback further in the same direction while the wheel is not moving
+  #     (|wheel rate| < FREEZE_RATE_DPS, |ref - wheel| > FREEZE_ERR_DEG, |delta| > FREEZE_MIN_DEG),
+  #   * is bounded by GMAX_V(speed) instead of the single GMAX_DEG.
+  # Kill (back to 59): LEAK_TAU_S = 1e9, FREEZE = False, GMAX_V = [GMAX_DEG] * 5.
+  MDPS_COMP_LEAK_TAU_S      = 2.0
+  MDPS_COMP_FREEZE          = True
+  MDPS_COMP_FREEZE_RATE_DPS = 1.5
+  MDPS_COMP_FREEZE_ERR_DEG  = 1.0
+  MDPS_COMP_FREEZE_MIN_DEG  = 1.0
+  MDPS_COMP_GMAX_V          = [6.0, 5.0, 4.0, 3.0, 3.0]   # at MDPS_COMP_SPEEDS_KPH (35 / 47.5 / 62.5 / 80 / 100 km/h)
+  MDPS_COMP_WHEEL_RATE_TAU_S = 0.2
   MDPS_COMP_MIN_KPH         = 30.0     # on at >= MIN, off below MIN - 2
   MDPS_COMP_RATE_TAU_S      = 0.10     # command-rate low-pass
   MDPS_COMP_RETURN_RATE     = 2.0      # 1/s, TX back to the command while held

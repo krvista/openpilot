@@ -11,6 +11,15 @@ from opendbc.car.hyundai.values import CarControllerParams as P
 import opendbc.car.hyundai.carcontroller as ccmod
 
 USE_MDPS_COMP = True
+
+
+@pytest.fixture(autouse=True)
+def _compensator_on():
+  # Phase 61 ships the compensator off (MDPS_COMP_LAMBDA = 0); these tests cover it in its enabled configuration
+  old = P.MDPS_COMP_LAMBDA
+  P.MDPS_COMP_LAMBDA = 2.0
+  yield
+  P.MDPS_COMP_LAMBDA = old
 D, KF, KP, KC = 0.32, 0.58, 0.18, 0.16
 
 
@@ -44,9 +53,10 @@ class TestMdpsCompensator:
     # 6 deg: the steady lead it needs (6 * Kc / Kp ~ 5.3 deg) fits inside GMAX
     w_on, tx_on, fl, sim = run(ramp_to(6.0), 600)
     w_off, _, _, _ = run(ramp_to(6.0), 600, lam=0.0)
-    assert w_on[-1] >= 5.4, w_on[-1]                        # compensated: wheel at the command
-    t90 = lambda w: int(np.argmax(w >= 0.9 * 6.0)) if (w >= 0.9 * 6.0).any() else 10 ** 6
-    assert t90(w_on) + 50 <= t90(w_off), (t90(w_on), t90(w_off))   # gets there >= 0.5 s sooner than today's trim / kick
+    # Phase 59b: the leak / per-speed GMAX trade some steady delivery (report §69: closed-loop curve delivery 0.99 -> 0.89)
+    assert w_on[-1] >= 0.85 * 6.0, w_on[-1]
+    t85 = lambda w: int(np.argmax(w >= 0.85 * 6.0)) if (w >= 0.85 * 6.0).any() else 10 ** 6
+    assert t85(w_on) + 50 <= t85(w_off), (t85(w_on), t85(w_off))   # gets there >= 0.5 s sooner than the trim / kick
     assert any(f & ccmod.SF_MDPS_COMP for f in fl[200:])
     assert sim.cc.curve_trim == 0.0                         # the trim is replaced, not stacked
 
@@ -60,8 +70,8 @@ class TestMdpsCompensator:
   def test_gmax_bounds_delivery_in_a_sharp_steady_curve(self):
     # 15 deg at 60 km/h needs ~13 deg of lead on this plant; GMAX trades the rest for a smaller stored gap (report §66)
     w, tx, _, _ = run(ramp_to(15.0), 900)
-    assert 15.0 * 0.6 <= w[-1] < 15.0
-    assert abs(tx[-1] - 15.0) <= P.MDPS_COMP_GMAX_DEG + 0.2
+    assert 15.0 * 0.5 <= w[-1] < 15.0                     # 59b: GMAX_V ~4 deg at 60 km/h
+    assert abs(tx[-1] - 15.0) <= float(np.interp(60.0, P.MDPS_COMP_SPEEDS_KPH, P.MDPS_COMP_GMAX_V)) + 0.2
 
   def test_hand_stops_the_feedback_and_returns_to_the_command(self):
     # a resting hand (raw 330 in a 10 deg curve at 60 km/h = ~130 driver-domain over op's own ~200 hold torque)

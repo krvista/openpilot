@@ -66,7 +66,10 @@ def run(args):
   res = {}
   for var in VARS:
     e = float(var[3:]) if (var.startswith("P") or var.startswith("B0")) else 0.0
-    cd.LOOKAHEAD_DELAY_EXTRA_S = list(FINAL_E) if var == "final" else [e] * 5
+    if var.startswith("Ce"):
+      eh = float(var[2:]); cd.LOOKAHEAD_DELAY_EXTRA_S = ([float(x) for x in os.environ["E64_ETAB"].split(",")] if os.environ.get("E64_ETAB") else [0.2, 0.1, eh, eh, eh])
+    else:
+      cd.LOOKAHEAD_DELAY_EXTRA_S = list(FINAL_E) if var == "final" else [e] * 5
     out = R.replay("p57", T[a], T[b - 1])
     cd.LOOKAHEAD_DELAY_EXTRA_S = [0.0] * 5
     kcmd = np.interp(T[a:b], [o[0] for o in out], [o[1] for o in out])
@@ -75,6 +78,14 @@ def run(args):
     CCP.MDPS_COMP_PREVIEW = 0.0 if (var.startswith("P0") or var == "final") else 1.0
     CCP.MDPS_COMP_SPEEDS_KPH = CENT; CCP.MDPS_COMP_DELAY_S = comp[:, 0].tolist(); CCP.MDPS_COMP_KF = comp[:, 1].tolist()
     CCP.MDPS_COMP_KP = comp[:, 2].tolist(); CCP.MDPS_COMP_KC = comp[:, 3].tolist()
+    if var.startswith("Ce") or var == "final":
+      CCP.MDPS_COMP_PREVIEW = 0.0
+    for kv in [x for x in os.environ.get("E64_CCP", "").split(";") if x] if var.startswith("Ce") else []:
+      k_, v_ = kv.split("=")
+      cur = getattr(CCP, k_)
+      setattr(CCP, k_, [float(x) for x in v_.split(",")] if isinstance(cur, (list, np.ndarray)) else (v_ in ("1", "True") if isinstance(cur, bool) else float(v_)))
+    if not var.startswith("Ce"):
+      CCP.MDPS_COMP_LEAK_TAU_S = 1e9; CCP.MDPS_COMP_FREEZE = False; CCP.MDPS_COMP_GMAX_V = [6.0] * 5
     a0 = max(a - 300, 0)
     sim = Sim(); w = float(d['ang'][a0]); hist = []; W = []
     for k in range(a0, b):

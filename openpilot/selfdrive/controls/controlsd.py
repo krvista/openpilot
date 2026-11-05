@@ -292,9 +292,11 @@ _PLAN_T_IDXS = np.array(ModelConstants.T_IDXS, dtype=np.float64)
 # negative (a chain faster than the model assumes). Faded in with the orient path (25-30 km/h), off in lane changes.
 # The 55c entry lead and everything downstream act on top of this base. Kill: LOOKAHEAD_DELAY_EXTRA_S all 0.
 LOOKAHEAD_DELAY_SPEEDS_MS = [35.0 / 3.6, 47.5 / 3.6, 62.5 / 3.6, 80.0 / 3.6, 100.0 / 3.6]
-# §67 full-chain sim (real controlsd + CarController + identified MDPS, 206 windows / 23 routes, route-fold choice):
-# +0.2 / +0.1 s at 30-40 / 40-55 km/h, 0 above (with Phase 59, whose own preview is then off).
-LOOKAHEAD_DELAY_EXTRA_S = [0.2, 0.1, 0.0, 0.0, 0.0]
+# §67 picked 0.2 / 0.1 / 0 / 0 / 0 s with Phase 59 on. Phase 61 (§69): Phase 59 is off again (trim / kick layers), whose
+# chain is slower: full-chain sim E 0 / 0.1 / 0.2 / 0.3 s at all speeds -> intent error 0.854 / 0.836 / 0.828 / 0.827e-3,
+# model -> car delay 500 / 420 / 360 / 300 ms, lateral jerk p95 0.34 / 0.34 / 0.34 / 0.35 (31520b9 corners on the road:
+# car 639 ms behind the model at >= 55 km/h).
+LOOKAHEAD_DELAY_EXTRA_S = [0.3, 0.3, 0.3, 0.3, 0.3]
 LOOKAHEAD_DELAY_JERK = 2.5            # m/s^3 envelope for the delay-match shift
 
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of

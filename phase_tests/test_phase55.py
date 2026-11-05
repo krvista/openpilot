@@ -22,6 +22,8 @@ def _shipped():
   names = ("LOOKAHEAD_ORIENT_T_S", "LOOKAHEAD_ORIENT_WIDE_BUDGET", "LOOKAHEAD_ORIENT_WEIGHT_SHRINK", "LOOKAHEAD_ORIENT_DEADBAND",
            "LOOKAHEAD_ORIENT_GATE")
   saved = {nm: getattr(cd, nm) for nm in names}
+  saved["LOOKAHEAD_DELAY_EXTRA_S"] = cd.LOOKAHEAD_DELAY_EXTRA_S
+  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.0] * len(cd.LOOKAHEAD_DELAY_EXTRA_S)   # Phase 60 shift isolated (test_phase60.py)
   yield
   for nm, val in saved.items():
     setattr(cd, nm, val)
