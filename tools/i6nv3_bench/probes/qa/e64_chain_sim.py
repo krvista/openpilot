@@ -18,6 +18,12 @@ import os
 VARS = os.environ.get("E64_VARS", "").split(",") if os.environ.get("E64_VARS") else (["base", "p59"] + [f"P0e{e:+.1f}" for e in EGRID] + [f"P1e{e:+.1f}" for e in EGRID])
 FINAL_E = [0.2, 0.1, 0.0, 0.0, 0.0]
 TRUTH = json.load(open(f"{S}/qa/e59_params.json")); COMP = json.load(open(f"{S}/qa/e64_common_fold.json"))
+# E64_PLANT=rf: truth = E89 request-rate-floor plant (d, Kf, Kp, Kc, r0) per fold; default m1 = E59 (r0 = 0)
+PLANT = os.environ.get("E64_PLANT", "m1")
+if PLANT == "rf":
+  _rf = json.load(open(f"{S}/qa/e89_params.json"))
+  TRUTH = {f"{fo}{i}": _rf.get(f"RF{fo}{i}", _rf.get(f"RF{i}")) for fo in "AB" for i in range(1, 6)}
+COMMITS = tuple(os.environ.get("E64_COMMITS", "a0108a47b,98e912d3d,8de98262a").split(","))
 CENT = [35.0, 47.5, 62.5, 80.0, 100.0]
 BANDS = [(30, 40), (40, 55), (55, 70), (70, 90), (90, 200)]
 
@@ -31,7 +37,7 @@ def windows():
   for f in files:
     r = f[-12:-4]
     d = np.load(f, allow_pickle=True)
-    if str(d['commit']) not in ("a0108a47b", "98e912d3d", "8de98262a"):
+    if str(d['commit']) not in COMMITS:
       continue
     T = d['T']; n = len(T); v = d['v']
     vm = v / 3.6; la = np.abs(vm ** 2 * d['k_meas'])
@@ -61,7 +67,7 @@ def run(args):
   T = d['T']
   m = d['lat'] & np.isfinite(d['apply'])
   A = np.stack([d['k_ctrl'][m], np.ones(m.sum())], 1); sc, off = np.linalg.lstsq(A, d['apply'][m], rcond=None)[0]
-  truth = np.array([TRUTH[f"{'A' if fold == 0 else 'B'}{i}"] for i in range(1, 6)])
+  truth = np.array([(list(TRUTH[f"{'A' if fold == 0 else 'B'}{i}"]) + [0.0])[:5] for i in range(1, 6)])
   comp = np.array([COMP[f"{'B' if fold == 0 else 'A'}{i}"] for i in range(1, 6)])
   res = {}
   for var in VARS:
@@ -99,11 +105,18 @@ def run(args):
       tx = float(mm["ADAS_StrAnglReqVal"]) if act else wheel
       g = min(max((float(mm["ADAS_ACIAnglTqRedcGainVal"]) - 0.2) / 0.5, 0.0), 1.0) if act else 0.0
       hist.append(tx)
-      pt = [np.interp(vk, CENT, truth[:, j]) for j in range(4)]
+      pt = [np.interp(vk, CENT, truth[:, j]) for j in range(5)]
       nd = int(round(pt[0] / 0.01))
       u1 = hist[-1 - nd] if len(hist) > nd else hist[0]; u2 = hist[-2 - nd] if len(hist) > nd + 1 else hist[0]
       if closed:
-        w = w + 0.01 * (g * (pt[1] * (u1 - u2) / 0.01 + pt[2] * (u1 - w)) - pt[3] * w)
+        if pt[4] > 0.0:   # rate floor: only the request rate (0.1 s difference) above r0 drives the wheel
+          ua = hist[-11 - nd] if len(hist) > nd + 10 else hist[0]; ub = hist[-12 - nd] if len(hist) > nd + 11 else hist[0]
+          r1 = (u1 - ua) / 0.1; r2 = (u2 - ub) / 0.1
+          dz = lambda r: r - pt[4] if r > pt[4] else (r + pt[4] if r < -pt[4] else 0.0)
+          du = 0.5 * (dz(r1) + dz(r2)) * 0.01   # increment of the rate-floored target over this 10 ms step
+        else:
+          du = u1 - u2
+        w = w + 0.01 * (g * (pt[1] * du / 0.01 + pt[2] * (u1 - w)) - pt[3] * w)
         W.append(w)
       else:
         w = float(d['ang'][k])

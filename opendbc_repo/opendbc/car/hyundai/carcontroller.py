@@ -168,6 +168,7 @@ SF_TX_SATURATED       = 1 << 27   # 38 TX governor held the wire behind the requ
 SF_HOD_TOUCH          = 1 << 28   # Phase 51: brief light touch exempted from the yield (HOD-silencing touch)
 SF_HAND_GAP           = 1 << 29   # Phase 58: hand-on gap cap bound the request this frame
 SF_MDPS_COMP          = 1 << 30   # Phase 59: MDPS inverse-model compensator shaping the request (feedback on)
+SF_ENTRY_BOOST        = 1 << 31   # Phase 63b: corner-entry boost added to the request
 
 
 def compute_hold_torque(v_ego, lat_acc):
@@ -581,6 +582,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.hand_gap_quiet = 0
     self.hand_gap_cap = None      # deg; None = inactive
     self.hand_gap_binding = False
+    # Phase 63b: corner-entry boost (values.py ENTRY_BOOST_*)
+    self.eb_ref = 0.0
+    self.eb_off = 0.0
+    self.eb_init = False
     # Phase 59: MDPS inverse-model compensator (values.py MDPS_COMP_*)
     self.mdps_comp_active = False
     self.mdps_comp_feedback = False
@@ -758,6 +763,33 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     out = float(_clip(desired, wheel - self.hand_gap_cap, wheel + self.hand_gap_cap))
     self.hand_gap_binding = out != desired
     return out
+
+  def _entry_boost(self, cmd: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool, gate_ok: bool) -> float:
+    """Phase 63b: request offset (deg) on a corner entry — values.py ENTRY_BOOST_*."""
+    P = CarControllerParams
+    if P.ENTRY_BOOST_GAIN <= 0.0 or not lat_active or not self.eb_init:
+      self.eb_ref = cmd
+      self.eb_off = 0.0
+      self.eb_init = lat_active
+      return 0.0
+    self.eb_ref += (cmd - self.eb_ref) * DT_CTRL / max(P.ENTRY_BOOST_REF_TAU_S, DT_CTRL)
+    cap = float(_interp(v_ego * CV.MS_TO_KPH, P.ENTRY_BOOST_SPEEDS_KPH, P.ENTRY_BOOST_CAP_DEG))
+    hands_off = (driver_tq < P.ENTRY_BOOST_HANDS_OFF_NM and not self.driver_pressed and not self.hand_gap_on
+                 and self.aci_gain_last >= 0.9)
+    if not (gate_ok and hands_off and not blinker_on) or cap <= 0.0:
+      self.eb_off -= self.eb_off * DT_CTRL / max(P.ENTRY_BOOST_ABORT_TAU_S, DT_CTRL)
+    elif self.eb_off * _sign(cmd) < 0.0:
+      self.eb_off -= self.eb_off * DT_CTRL / max(P.ENTRY_BOOST_FLIP_TAU_S, DT_CTRL)
+    else:
+      lead = cmd - self.eb_ref   # the high-passed command: positive away from centre while the command grows
+      excess = max(0.0, abs(lead) - P.ENTRY_BOOST_DEADBAND_DEG) if lead * _sign(cmd) > 0.0 else 0.0
+      tgt = float(_sign(cmd)) * min(P.ENTRY_BOOST_GAIN * excess, cap)
+      mag = abs(self.eb_off) if self.eb_off * _sign(cmd) >= 0.0 else 0.0
+      mag = max(abs(tgt), mag - P.ENTRY_BOOST_BLEED_DPS * DT_CTRL, 0.0)   # rise with the target, bleed under the rate floor
+      self.eb_off = float(_sign(cmd)) * min(mag, cap)
+    if abs(self.eb_off) < 1e-3:
+      self.eb_off = 0.0
+    return self.eb_off
 
   def _stall_kick(self, wheel: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool) -> float:
     """Phase 40b: request offset (deg) for this frame. Ramp away from a stuck wheel until it moves, hold, slow decay
@@ -1615,10 +1647,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # band and blocked the trim almost always — TX-cmd p50 +0.02° as
       # shipped). Hold the angle gate with hysteresis (arm 4°, hold 3°) so
       # the gate cannot flap at the curve threshold.
+      # Phase 63a: gates and deadband scheduled on speed (4° / 3° / 0.7° up to 55 km/h -> 1.5° / 1° / 0.35° from 70).
+      v_kph_trim = v_ego_safe * CV.MS_TO_KPH
+      trim_arm_deg = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_GATE_SPEEDS_KPH, CarControllerParams.CURVE_TRIM_GATE_V))
+      trim_hold_deg = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_GATE_SPEEDS_KPH, CarControllerParams.CURVE_TRIM_HOLD_V))
       angle_gate = abs(desired_angle) >= (
-        CarControllerParams.CURVE_TRIM_HOLD_CMD_DEG
-        if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES
-        else CarControllerParams.CURVE_TRIM_MIN_CMD_DEG)
+        trim_hold_deg if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES else trim_arm_deg)
       # Phase 26: gate on driver_pressed — the raw EPS flag self-triggers in
       # exactly the sustained curves the trim exists for (41% of pressed
       # frames sit at hold-model >= 300 Nm), so the delivery fix was being
@@ -1655,7 +1689,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         residual = desired_angle - steer_angle_safe
         alpha = DT_CTRL / max(CarControllerParams.CURVE_TRIM_RESID_LP_TAU_S, DT_CTRL)
         self.trim_resid_lp += alpha * (residual - self.trim_resid_lp)
-        db = CarControllerParams.CURVE_TRIM_RESID_DEADBAND_DEG
+        db = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_GATE_SPEEDS_KPH, CarControllerParams.CURVE_TRIM_DEADBAND_V))
         res_eff = float(_sign(self.trim_resid_lp)) * max(0.0, abs(self.trim_resid_lp) - db)
         step = trim_rate * DT_CTRL
         self.curve_trim = float(_clip(self.curve_trim + _clip(res_eff, -step, step),
@@ -1677,6 +1711,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Added after the smoothing so it reaches TX in full; the VM/panda rate limits below still bound it.
       desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on,
                                         bool(CC.latActive) and not self.mdps_comp_active)   # Phase 59 replaces the kick
+      # Phase 63b: corner-entry boost on the clean command (values.py ENTRY_BOOST_*); the hand-gap cap below still binds.
+      desired_angle += self._entry_boost(comp_cmd, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive),
+                                         not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active)
       # Phase 59: MDPS inverse-model compensator (replaces the trim / kick output while active).
       comp_hold = (self.hand_gap_on or self.driver_pressed or self.aci_gain_last < CarControllerParams.MDPS_COMP_HOLD_GAIN)
       comp_out = self._mdps_comp(comp_cmd, steer_angle_safe, v_ego_safe, bool(CC.latActive), comp_hold)
@@ -2224,7 +2261,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                     (self.was_in_reverse, SF_REVERSE), (cam_stale_tripped or fault_lfa_bool, SF_CAM_FAULT),
                     (self.wheel_outrun_passive, SF_WHEEL_OUTRUN), (bool(getattr(CS, "tx_rejected", False)), SF_TX_REJECTED),
                     (self.tx_sat_frames > 0, SF_TX_SATURATED), (self.hod_touch_exempt, SF_HOD_TOUCH),
-                    (self.hand_gap_binding, SF_HAND_GAP), (self.mdps_comp_active and self.mdps_comp_feedback, SF_MDPS_COMP)):
+                    (self.hand_gap_binding, SF_HAND_GAP), (self.mdps_comp_active and self.mdps_comp_feedback, SF_MDPS_COMP),
+                    (self.eb_off != 0.0, SF_ENTRY_BOOST)):
       if on:
         sf |= bit
     self.steer_debug_flags = sf

@@ -224,8 +224,11 @@ class CarControllerParams:
   # tracking gap sat unchanged at |cmd-wheel| p50 = 5.45 deg because the slew
   # x curve-duration product was too small to matter (median trim +0.88 deg).
   CURVE_TRIM_RATE_DPS       = 2.0
-  CURVE_TRIM_CAP_SPEEDS_MS  = [8.3, 27.8]   # 30 -> 100 km/h
-  CURVE_TRIM_CAP_DEG        = [6.0, 4.0]    # tighter cap at speed
+  # Phase 63a: unchanged up to 70 km/h (6 -> 4.86°), then 2.5° at 90 and 1.5° from 108 km/h — with the 1.5° gate the
+  # trim now runs on highway curves, where 13-21 % of a 2-6° command is all it has to add (chain sim: 90+ km/h jerk
+  # +43 % with the old 4° cap, +13-29 % with this one, curve delivery 0.93 either way).
+  CURVE_TRIM_CAP_SPEEDS_MS  = [8.3, 19.4, 25.0, 30.0]   # 30 / 70 / 90 / 108 km/h
+  CURVE_TRIM_CAP_DEG        = [6.0, 4.86, 2.5, 1.5]
   CURVE_TRIM_BLEED_TAU_S    = 0.5     # decay when gate drops (grip/straight/inactive)
   CURVE_TRIM_FLIP_TAU_S     = 0.15    # fast decay of trim opposing the curve direction (S-curve flip)
   # Phase 12b (P2): hysteresis deadband on the desired angle. Model replan churn
@@ -339,6 +342,17 @@ class CarControllerParams:
   CURVE_TRIM_HOLD_CMD_DEG       = 3.0
   CURVE_TRIM_RESID_LP_TAU_S     = 1.5
   CURVE_TRIM_RESID_DEADBAND_DEG = 0.7
+  # Phase 63a (routes 7a-7f, ROUTE8_REPORT §74-75): highway curves need small wheel angles — at >= 70 km/h 67-74 % of
+  # sustained-curve time had the command under the 4° arm gate, so the trim never armed there and the car turned 13-21 %
+  # less than the plan (yaw / model 0.79-0.87, outside drift +14-18 cm). Speed-schedule the arm / hold gates and the
+  # residual deadband (the 0.6-1.2 Hz weave it was sized against is 0.64° at >= 70 km/h now, was 1.65-2.6°).
+  # Kill: CURVE_TRIM_GATE_V = [4.0, 4.0], CURVE_TRIM_HOLD_V = [3.0, 3.0], CURVE_TRIM_DEADBAND_V = [0.7, 0.7] (and the
+  # cap above back to [8.3, 27.8] / [6.0, 4.0]). CURVE_TRIM_MIN_CMD_DEG / _HOLD_CMD_DEG / _RESID_DEADBAND_DEG are the
+  # pre-63a flat values, kept for reference only.
+  CURVE_TRIM_GATE_SPEEDS_KPH = [55.0, 70.0]
+  CURVE_TRIM_GATE_V          = [4.0, 1.5]    # arm: |desired| >= this for CURVE_TRIM_SUSTAIN_FRAMES
+  CURVE_TRIM_HOLD_V          = [3.0, 1.0]    # hold once armed
+  CURVE_TRIM_DEADBAND_V      = [0.7, 0.35]   # residual deadband
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a
@@ -481,6 +495,26 @@ class CarControllerParams:
   HAND_GAP_UP_DPS           = 10.0     # cap widening rate after the hand leaves
   HAND_GAP_RELEASE_DEG      = 30.0     # cap at/above this = inactive
   HAND_GAP_MIN_KPH          = 15.0
+  # Phase 63b (routes 7a-7f + 50-73, ROUTE8_REPORT §75): corner-entry boost. Hands-off entries at >= 55 km/h: the
+  # car's yaw reached 50 % of the model's curvature 618 ms after it (98e912d 512 ms) although TX already led the
+  # model by 0.6-0.7 s — the wheel started 0.56-0.76 s after TX (e87/e89). The CCNC MDPS follows the request RATE
+  # (wheel ~ Kf 0.6-0.7 x TX motion above a 0.7-2.2 deg/s floor, e89 plant RF), so an entry ramp reaches the wheel
+  # at ~2/3 size. While the clean command moves AWAY from centre faster than its own slow reference (tau
+  # ENTRY_BOOST_REF_TAU_S) by more than ENTRY_BOOST_DEADBAND_DEG, add ENTRY_BOOST_GAIN x the excess (rises with
+  # the command); when the command settles the offset bleeds at ENTRY_BOOST_BLEED_DPS, under the MDPS rate floor,
+  # so the wheel keeps what it gained. Never on unwinding (exit) — an offset opposing the command collapses in
+  # ENTRY_BOOST_FLIP_TAU_S. Hands off only (driver-domain < ENTRY_BOOST_HANDS_OFF_NM, no press, no hand-gap cap,
+  # gain >= 0.9), no blinker / passthrough; otherwise it decays in ENTRY_BOOST_ABORT_TAU_S. Capped per speed.
+  # steerFlags bit 31. Kill: ENTRY_BOOST_GAIN = 0.
+  ENTRY_BOOST_GAIN           = 0.4
+  ENTRY_BOOST_REF_TAU_S      = 1.0
+  ENTRY_BOOST_DEADBAND_DEG   = 1.0
+  ENTRY_BOOST_BLEED_DPS      = 0.5
+  ENTRY_BOOST_FLIP_TAU_S     = 0.15
+  ENTRY_BOOST_ABORT_TAU_S    = 0.2
+  ENTRY_BOOST_HANDS_OFF_NM   = 60.0
+  ENTRY_BOOST_SPEEDS_KPH     = [45.0, 55.0, 90.0, 120.0]
+  ENTRY_BOOST_CAP_DEG        = [0.0, 3.0, 2.5, 2.0]
   # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
   # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
   #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel
