@@ -40,6 +40,28 @@ SMOOTH_SIGMA = 1.0
 
 VERSION = 1  # bump this to invalidate old parameter caches
 
+# i6n Phase 64a (report §76): CCNC angle-steering profile. On this car the stock acceptance almost never completes
+# (0-160 accepted estimates per 45-min drive, 500 needed, the unfinished block lost at every ignition off):
+#  - the MDPS follows the request RATE, not a clean delay, so the command -> yaw cross-correlation rarely reaches 0.95
+#    (e95 replay of 7c: NCC 2730 / confidence 223 rejections vs 160 accepted) although the accepted delays are tight
+#    (median 0.600, IQR 0.575-0.600 s);
+#  - 80 km/h is only ~1/3 of this car's op time;
+#  - the hands-on (HOD) warning cannot be turned off, so short "I'm here" touches set steeringPressed and each one
+#    blanked 2 s.
+# Profile: NCC >= 0.9, confidence >= 0.5, >= 60 km/h, only a press held >= 0.5 s counts as steering, 1 s recovery.
+# e95 replay 7a-7f: estimated within drive 7c after ~12 min at >= 60 km/h (42-84 accepted / min), learned 0.57 s
+# (stock-accepted delays 0.59), block std 0.07 < MAX_LAG_STD. Kill: CCNC_PROFILE = False.
+CCNC_PROFILE = True
+CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
+                       min_press_sec=0.5)
+
+
+def lagd_profile(CP) -> dict:
+  """Estimator settings for this car: the CCNC profile for Hyundai angle-steering (CCNC) cars, stock otherwise."""
+  if CCNC_PROFILE and CP.brand == "hyundai" and str(CP.steerControlType) == "angle":
+    return dict(CCNC_PROFILE_KW)
+  return {}
+
 
 def masked_symmetric_moving_average(x: np.ndarray, mask: np.ndarray, k: int, sigma: float) -> np.ndarray:
   assert k >= 1 and k % 2 == 1, "k must be positive and odd"
@@ -178,8 +200,11 @@ class LateralLagEstimator:
                block_count: int = BLOCK_NUM, min_valid_block_count: int = BLOCK_NUM_NEEDED, block_size: int = BLOCK_SIZE,
                window_sec: float = MOVING_WINDOW_SEC, okay_window_sec: float = MIN_OKAY_WINDOW_SEC, min_recovery_buffer_sec: float = MIN_RECOVERY_BUFFER_SEC,
                min_vego: float = MIN_VEGO, min_yr: float = MIN_ABS_YAW_RATE, min_ncc: float = MIN_NCC,
-               max_lat_accel: float = MAX_LAT_ACCEL, max_lat_accel_diff: float = MAX_LAT_ACCEL_DIFF, min_confidence: float = MIN_CONFIDENCE):
+               max_lat_accel: float = MAX_LAT_ACCEL, max_lat_accel_diff: float = MAX_LAT_ACCEL_DIFF, min_confidence: float = MIN_CONFIDENCE,
+               min_press_sec: float = 0.0):
     self.dt = dt
+    self.min_press_sec = min_press_sec   # i6n Phase 64a: a press shorter than this (HOD touch) is not steering
+    self.press_start_t: float | None = None
     self.window_sec = window_sec
     self.okay_window_sec = okay_window_sec
     self.min_recovery_buffer_sec = min_recovery_buffer_sec
@@ -260,7 +285,15 @@ class LateralLagEstimator:
     if which == "carControl":
       self.lat_active = msg.latActive
     elif which == "carState":
-      self.steering_pressed = msg.steeringPressed
+      if self.min_press_sec > 0.0:
+        if msg.steeringPressed:
+          self.press_start_t = t if self.press_start_t is None else self.press_start_t
+          self.steering_pressed = t - self.press_start_t >= self.min_press_sec
+        else:
+          self.press_start_t = None
+          self.steering_pressed = False
+      else:
+        self.steering_pressed = msg.steeringPressed
       self.v_ego = msg.vEgo
     elif which == "controlsState":
       self.steering_saturated = getattr(msg.lateralControlState, msg.lateralControlState.which()).saturated
@@ -396,7 +429,7 @@ def main():
   params = Params()
   CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
 
-  lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency)
+  lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP))
   if (initial_lag_params := retrieve_initial_lag(params, CP)) is not None:
     lag, valid_blocks = initial_lag_params
     lag_learner.reset(lag, valid_blocks)

@@ -298,6 +298,18 @@ LOOKAHEAD_DELAY_SPEEDS_MS = [35.0 / 3.6, 47.5 / 3.6, 62.5 / 3.6, 80.0 / 3.6, 100
 # car 639 ms behind the model at >= 55 km/h).
 LOOKAHEAD_DELAY_EXTRA_S = [0.3, 0.3, 0.3, 0.3, 0.3]
 LOOKAHEAD_DELAY_JERK = 2.5            # m/s^3 envelope for the delay-match shift
+# i6n Phase 64b (report §76): LOOKAHEAD_DELAY_EXTRA_S was tuned while the model was told a 0.3 s lateral delay (lagd
+# unestimated -> CP.steerActuatorDelay 0.1 + 0.2). Once lagd is estimated (Phase 64a: ~0.57 s on this car) modeld
+# itself plans for the real delay — the delay is a model input and sets where the action is read on the plan — and
+# the same shift added here again would steer ~0.3 s early. So the shift is what the model's delay still lacks:
+#   E_eff(v) = clip(E(v) + LOOKAHEAD_DELAY_BASE_S - model delay, LOOKAHEAD_DELAY_EFF_CLIP)
+# (model delay as modeld reads it: lagd's lateralDelay with LagdToggle on, else LagdValueCache). The total timing
+# (model delay + shift, 0.6 s, the Phase 61 sim optimum) is kept, and the model's own planning takes over the part
+# lagd has learned. Kill: LOOKAHEAD_DELAY_FOLLOW_MODEL = False.
+LOOKAHEAD_DELAY_FOLLOW_MODEL = True
+LOOKAHEAD_DELAY_BASE_S = 0.3
+LOOKAHEAD_DELAY_EFF_CLIP = (-0.3, 0.6)
+LOOKAHEAD_DELAY_PARAM_FRAMES = 300    # LagdToggle / LagdValueCache re-read every 3 s (modeld: every 3 s)
 
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
@@ -547,6 +559,23 @@ class Controls(ControlsExt):
     peak = max(max(self._turn_peak_buf, default=0.0), self._turn_peak_cur)
     return peak >= TURN_EXIT_K and peak >= TURN_EXIT_RATIO * a
 
+  def _update_model_lat_delay(self):
+    """Phase 64b: the lateral delay modeld is using (sunnypilot get_lat_delay: lagd's value with LagdToggle on, else the
+    cached fixed value). The toggle / cache params are re-read every LOOKAHEAD_DELAY_PARAM_FRAMES."""
+    n = getattr(self, "_lat_delay_param_n", 0)
+    if n % LOOKAHEAD_DELAY_PARAM_FRAMES == 0:
+      try:
+        self._lagd_toggle = self.params.get_bool("LagdToggle")
+        self._lagd_value_cache = float(self.params.get("LagdValueCache", return_default=True))
+      except Exception:  # noqa: BLE001 - a param read must never take controls down; keep the last values
+        pass
+    self._lat_delay_param_n = n + 1
+    if getattr(self, "_lagd_toggle", True):
+      d = float(self.sm["lateralDelay"].lateralDelay)
+    else:
+      d = getattr(self, "_lagd_value_cache", LOOKAHEAD_DELAY_BASE_S)
+    self._model_lat_delay = d if math.isfinite(d) and d > 0.0 else LOOKAHEAD_DELAY_BASE_S
+
   def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
 
@@ -570,11 +599,19 @@ class Controls(ControlsExt):
     # Phase 60: speed-scheduled delay match (see LOOKAHEAD_DELAY_*): shift the base along the model's own plan.
     self._delay_match = 0.0
     dm_extra = float(_interp(v_ego, LOOKAHEAD_DELAY_SPEEDS_MS, LOOKAHEAD_DELAY_EXTRA_S))
+    # Phase 64b: the action now sits at the model's own delay, so the plan reference times move with it (ref_shift)
+    # and the extra shift is only what that delay does not cover yet.
+    ref_shift = 0.0
+    if LOOKAHEAD_DELAY_FOLLOW_MODEL:
+      model_delay = getattr(self, "_model_lat_delay", LOOKAHEAD_DELAY_BASE_S)
+      ref_shift = float(_clip(model_delay - LOOKAHEAD_DELAY_BASE_S, -LOOKAHEAD_ORIENT_REF_T_S, 0.5))
+      dm_extra = float(_clip(dm_extra - ref_shift, *LOOKAHEAD_DELAY_EFF_CLIP))
+    self._delay_extra_eff = dm_extra
     dm_plan = mf.orient_plan
     if dm_extra != 0.0 and dm_plan is not None and mf.lane_change_state == LaneChangeState.off:
       dm_yr, dm_vx = dm_plan
       dm_k = lambda t: float(np.interp(t, _PLAN_T_IDXS, dm_yr)) / max(float(np.interp(t, _PLAN_T_IDXS, dm_vx)), 1.0)
-      dm_ref = LOOKAHEAD_ORIENT_REF_T_S
+      dm_ref = LOOKAHEAD_ORIENT_REF_T_S + ref_shift
       dm = dm_k(max(dm_ref + dm_extra, 0.0)) - dm_k(dm_ref)
       dm_max = LOOKAHEAD_DELAY_JERK * max(abs(dm_extra), 0.05) / max(v_ego, 5.0) ** 2
       dm_w = float(_interp(v_ego, LOOKAHEAD_ORIENT_RAMP_V, [0.0, 1.0]))
@@ -637,12 +674,12 @@ class Controls(ControlsExt):
       return cmd_cubic
 
     # Phase 55b/55c: action + weight * (plan yaw-rate curvature at 0.9 s + tau - at 0.3 s), budget over 0.9 s + tau.
-    t_or = LOOKAHEAD_ORIENT_T_S + tau_v
+    t_or = LOOKAHEAD_ORIENT_T_S + tau_v + ref_shift   # Phase 64b: same lead horizon beyond the action
     yaw_rate, vx = plan
     k_or = lambda t: float(np.interp(t, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t, _PLAN_T_IDXS, vx)), 1.0)
     t_budget = t_or if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
     dk_or = LOOKAHEAD_JERK_BUDGET * max(t_budget, 0.05) / max(v_ego, 5.0) ** 2
-    k_far, k_ref = k_or(t_or), k_or(LOOKAHEAD_ORIENT_REF_T_S)
+    k_far, k_ref = k_or(t_or), k_or(LOOKAHEAD_ORIENT_REF_T_S + ref_shift)
     delta = k_far - k_ref
     d_c = float(_clip(delta, -dk_or, dk_or))
     # Phase 55c: weight by how much the plan predicts |k| to grow — WEIGHT_SHRINK for loosening, WEIGHT once it grows by
@@ -710,6 +747,7 @@ class Controls(ControlsExt):
     # assigned (latent AttributeError on torque-tuned cars; angle cars like the
     # Ioniq 6 N never took that branch). Assign it once here and reuse downstream.
     self.lat_delay = self.sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    self._update_model_lat_delay()   # Phase 64b
 
     # Update Torque Params
     if self.CP.lateralTuning.which() == 'torque':
