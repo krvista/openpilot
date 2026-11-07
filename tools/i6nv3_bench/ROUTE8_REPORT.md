@@ -2014,3 +2014,28 @@ RF 가 저속·중속에서 더 잘 맞고 진입 지연도 일부 설명하지�
 2. **GPS(ublox) 오류.** 매 주행 "Received NACK from ublox"·"Error storing almanac" 5–9 회, 7a 에서 locationd 와 ublox 위치 차이로 칼만 리셋 9 회(7b 1, 7c 4). 조향·차로 유지는 GPS 를 쓰지 않아 영향 없음; 지도 기반 기능(속도 제한·커브 감속 등)과 주행 위치 기록의 정확도에 영향 가능.
 3. **차로 변경 중 운전자 개입.** 깜빡이 + 핸들 툭(자동 차로 변경 꺼짐, AutoLaneChangeTimer 0) 방식. 변경 시작 1 s 뒤에도 운전자가 ≥ 150(보상 후) 토크를 0.3 s 이상 준 비율 98e912d 77 % / 31520b9 79 % → **bf36aa2 45 %**, 최대 횡가속 p50 1.25 / 1.69 → 0.94 m/s², 저크 p95 2.13 / 3.36 → 1.64 — 크게 나아졌지만 절반 가까이는 여전히 운전자가 거든다(소요 4.8 s). 운전 습관인지 op 가 느린지는 이 데이터로 구분 불가 — 다음 주행에서 손을 떼고 몇 번 맡겨 보면 판단 가능.
 4. lagd 미완료(§76 에서 수정).
+
+## 78. GPS 오류 원인 — 매 시동이 완전 냉시동, 첫 위치 3–7 분 (11-07, 루트 7a–7f, 코드 변경 없음)
+
+`e101`(pigeond·locationd 로그, gpsLocationExternal, deviceState).
+
+| 주행 | 첫 위치(fix) | 이후 fix 비율 | 정확도 p50 / p90 | 위성 p50 |
+|---|---|---|---|---|
+| 7a | 시동 후 174 s | 75 % | 1.8 / 3.2 m | 10 |
+| 7b | 271 s | 62 % | 1.6 / 3.2 m | 11 |
+| 7c | 413 s | 74 % | 1.4 / 2.4 m | 13 |
+| 7f | 187 s | 70 % | 1.4 / 3.2 m | 12 |
+
+**원인 사슬.**
+1. 장치가 시동마다 콜드 부팅하고 **인터넷이 전 주행 내내 없음**(deviceState networkType none 100 %) → 시간 동기·AssistNow(comma AGPS) 다운로드 불가.
+2. **부팅 시 시스템 시계가 2026-07-28 15:05**(실제보다 약 101 일 전) — 시계를 유지할 RTC 가 없어 OS(systemd) 빌드 시각으로 시작(`time_helpers.min_date` 주석과 일치). `system_time_valid()` 가 거짓 → pigeond 가 ublox 에 현재 시각을 넘기지 않음("Sending current time to ublox" 없음). 시계는 첫 GPS fix 뒤에야 timed 가 맞춘다.
+3. **ublox 플래시의 almanac 백업이 한 번도 저장되지 않음** — 5 분마다 저장 시도(UBX-UPD-SOS)가 매번 NACK("Received NACK from ublox" + "Error storing almanac" 쌍, 주행당 5–9 회 = 시도 횟수 전부, 30 분 연속 fix 뒤에도 실패) → 매 부팅 "no almanac backup found".
+4. 결과: 시각·almanac·ephemeris·AGPS 없이 매번 완전 냉시동 → 첫 fix 3–7 분. 첫 fix 순간 locationd 가 그때까지 추정한 위치와 100 m 넘게 달라 칼만 리셋(주행당 1 회, 정상 동작).
+
+**주행 중 리셋.** 7a 916–957 s·7b 1098 s·7c 1100–1177 s 의 리셋은 80–140 s fix 공백(터널·지하차도 추정) 뒤 위치·방향이 크게 벌어져 생긴 것으로, 설계된 재초기화 — 결함 아님.
+
+**영향.** 조향·차로 유지는 GPS 를 쓰지 않음(카메라·IMU). 시동 후 3–7 분간 지도 기반 기능(liveMapDataSP 속도 제한·커브 감속 등) 위치 없음, 그 사이 로그·파일의 시각이 7 월로 기록됨, 업로드·원격 기능(athenad·sunnylinkd 오류) 불가.
+
+**해결책.**
+1. (권장, 코드 변경 없음) 장치에 인터넷 연결 — 휴대폰 핫스팟 자동 연결 또는 SIM. 부팅 직후 시각 동기 → ublox 에 시각 전달, comma AGPS 다운로드 → 첫 fix 수 초–수십 초. 업로드·원격 기능도 해결.
+2. (코드, 승인 필요, 인터넷 없이 쓰는 경우) almanac 백업 저장 방식 수정 — u-blox 는 수신기를 멈춘 상태에서 백업을 만들도록 권장하는데, 현재(upstream 2025-07 변경 그대로)는 동작 중에 저장을 시도해 NACK 로 보임. 주행 중 정차(신호 대기 등) 때 fix 가 15 분 이상 유지됐으면 한 번: 수신기 정지(UBX-CFG-RST 0x08) → 백업 저장 → 재시작(0x09) — GPS 1–2 s 공백, 조향 무관. 성공하면 다음 시동부터 "almanac backup restored" 로 첫 fix 가 수십 초대로 줄 것으로 예상. 실차에서만 확인 가능(로그의 "Done storing almanac"/"almanac backup restored").
