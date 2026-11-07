@@ -157,6 +157,86 @@ def save_almanac(pigeon: TTYPigeon) -> None:
   except TimeoutError:
     pass
 
+# i6n Phase 65 (report §78-79): the almanac backup never stored on this device — every 5-min UBX-UPD-SOS save while the
+# receiver runs was NACKed (5-9 of 5-9 per drive), so each ignition (a cold boot, no network, clock at the OS build date)
+# started the GNSS from nothing: first fix 3-7 min. u-blox expects the receiver stopped for the backup, so the backup is
+# made the way the receiver accepts it: controlled GNSS stop (UBX-CFG-RST 0x08), create backup, controlled GNSS start
+# (0x09; RAM data kept = hot start, ~1-2 s without GNSS — locationd keeps running on IMU / camera, GNSS is never used for
+# steering). Once per boot, after ALMANAC_FIX_MIN_S of fix in total (a full almanac takes 12.5 min of tracking; tunnels
+# only pause it), at a standstill — or anywhere once ALMANAC_FIX_ANYWAY_S of fix has passed without one. Retried after
+# ALMANAC_RETRY_S, at most ALMANAC_MAX_TRIES per boot. Kill: ALMANAC_SAVE_STOPPED = False (periodic save while running).
+ALMANAC_SAVE_STOPPED = True
+ALMANAC_FIX_MIN_S = 12.5 * 60.    # total fix time before the almanac is complete enough to keep
+ALMANAC_FIX_ANYWAY_S = 25 * 60.   # total fix time after which no standstill is waited for
+ALMANAC_FIX_STALE_S = 2.          # fix time only counts while fix messages keep coming
+ALMANAC_STANDSTILL_S = 2.         # stopped for this long (a red light) before the receiver is paused
+ALMANAC_STANDSTILL_MS = 0.3
+ALMANAC_RETRY_S = 5 * 60.
+ALMANAC_MAX_TRIES = 3
+ALMANAC_SOS_TIMEOUT_S = 2.        # flash write
+UBLOX_GNSS_STOP = b"\xB5\x62\x06\x04\x04\x00\x00\x00\x08\x00\x16\x74"
+UBLOX_GNSS_START = b"\xB5\x62\x06\x04\x04\x00\x00\x00\x09\x00\x17\x76"
+UBLOX_SOS_CREATE = b"\xB5\x62\x09\x14\x04\x00\x00\x00\x00\x00\x21\xEC"
+
+
+def save_almanac_stopped(pigeon) -> bool:
+  """Phase 65: stop the receiver, store the almanac backup in flash, start the receiver again. Returns success."""
+  ok = False
+  pigeon.send(UBLOX_GNSS_STOP)
+  time.sleep(0.1)
+  pigeon.receive()   # drop what was in flight
+  pigeon.send(UBLOX_SOS_CREATE)
+  try:
+    ok = pigeon.wait_for_ack(ack=UBLOX_SOS_ACK, nack=UBLOX_SOS_NACK, timeout=ALMANAC_SOS_TIMEOUT_S)
+  except TimeoutError:
+    ok = False
+  finally:
+    pigeon.send(UBLOX_GNSS_START)
+  if ok:
+    cloudlog.warning("Done storing almanac (receiver stopped)")
+  else:
+    cloudlog.error("Error storing almanac (receiver stopped)")
+  return ok
+
+
+class AlmanacSaver:
+  """Phase 65: decides when to make the stopped-receiver backup (pure state machine, fed with monotonic time,
+  GNSS fix and vehicle speed)."""
+  def __init__(self):
+    self.fix_total = 0.0
+    self.last_fix_t: float | None = None
+    self.has_fix = False
+    self.still_since: float | None = None
+    self.last_try_t: float | None = None
+    self.tries = 0
+    self.saved = False
+
+  def update(self, now: float, has_fix: bool | None, v_ego: float | None) -> bool:
+    """Feed the latest state (None = no new message); returns True when a backup should be made now."""
+    if has_fix is not None:
+      if has_fix and self.has_fix and self.last_fix_t is not None and now - self.last_fix_t <= ALMANAC_FIX_STALE_S:
+        self.fix_total += now - self.last_fix_t
+      self.has_fix = has_fix
+      self.last_fix_t = now
+    elif self.last_fix_t is not None and now - self.last_fix_t > ALMANAC_FIX_STALE_S:
+      self.has_fix = False
+    if v_ego is not None:
+      if v_ego < ALMANAC_STANDSTILL_MS:
+        self.still_since = now if self.still_since is None else self.still_since
+      else:
+        self.still_since = None
+    if self.saved or self.tries >= ALMANAC_MAX_TRIES or not self.has_fix or self.fix_total < ALMANAC_FIX_MIN_S:
+      return False
+    still = self.still_since is not None and now - self.still_since >= ALMANAC_STANDSTILL_S
+    spaced = self.last_try_t is None or now - self.last_try_t >= ALMANAC_RETRY_S
+    return spaced and (still or self.fix_total >= ALMANAC_FIX_ANYWAY_S)
+
+  def done(self, now: float, ok: bool) -> None:
+    self.tries += 1
+    self.last_try_t = now
+    self.saved = ok
+
+
 def init_baudrate(pigeon: TTYPigeon):
   # ublox default setting on startup is 9600 baudrate
   pigeon.set_baud(9600)
@@ -279,6 +359,9 @@ def run_receiving(duration: int = 0):
 
   start_time = time.monotonic()
   last_almanac_save = time.monotonic()
+  almanac = AlmanacSaver()                                          # Phase 65
+  sm = messaging.SubMaster(['gpsLocationExternal', 'carState']) if ALMANAC_SAVE_STOPPED else None
+  last_sm_t = 0.0
   assist_attempted = False
   assist_messages = None
 
@@ -318,8 +401,18 @@ def run_receiving(duration: int = 0):
       msg.ubloxRaw = dat[:]
       pm.send('ubloxRaw', msg)
 
-      # save almanac every 5 minutes
-      if (time.monotonic() - last_almanac_save) > 60*5:
+      if ALMANAC_SAVE_STOPPED:
+        # Phase 65: one stopped-receiver backup per boot, at a standstill after a long continuous fix
+        now = time.monotonic()
+        if now - last_sm_t >= 0.25:
+          last_sm_t = now
+          sm.update(0)
+          has_fix = sm['gpsLocationExternal'].hasFix if sm.updated['gpsLocationExternal'] else None
+          v_ego = sm['carState'].vEgo if sm.updated['carState'] else None
+          if almanac.update(now, has_fix, v_ego):
+            almanac.done(now, save_almanac_stopped(pigeon))
+      # save almanac every 5 minutes (pre-Phase-65 path)
+      elif (time.monotonic() - last_almanac_save) > 60*5:
         save_almanac(pigeon)
         last_almanac_save = time.monotonic()
     else:

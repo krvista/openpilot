@@ -2039,3 +2039,13 @@ RF 가 저속·중속에서 더 잘 맞고 진입 지연도 일부 설명하지�
 **해결책.**
 1. (권장, 코드 변경 없음) 장치에 인터넷 연결 — 휴대폰 핫스팟 자동 연결 또는 SIM. 부팅 직후 시각 동기 → ublox 에 시각 전달, comma AGPS 다운로드 → 첫 fix 수 초–수십 초. 업로드·원격 기능도 해결.
 2. (코드, 승인 필요, 인터넷 없이 쓰는 경우) almanac 백업 저장 방식 수정 — u-blox 는 수신기를 멈춘 상태에서 백업을 만들도록 권장하는데, 현재(upstream 2025-07 변경 그대로)는 동작 중에 저장을 시도해 NACK 로 보임. 주행 중 정차(신호 대기 등) 때 fix 가 15 분 이상 유지됐으면 한 번: 수신기 정지(UBX-CFG-RST 0x08) → 백업 저장 → 재시작(0x09) — GPS 1–2 s 공백, 조향 무관. 성공하면 다음 시동부터 "almanac backup restored" 로 첫 fix 가 수십 초대로 줄 것으로 예상. 실차에서만 확인 가능(로그의 "Done storing almanac"/"almanac backup restored").
+
+## 79. Phase 65 — GNSS almanac 백업을 수신기 정지 상태로 (11-07)
+
+§78 해결책 2. `pigeond.py`: 동작 중 5 분마다 하던 백업(매번 NACK) 대신, 부팅당 한 번 **수신기 정지(UBX-CFG-RST 0x08) → 백업 생성(UBX-UPD-SOS) → 재시작(0x09)**. RAM 데이터를 지우지 않는 정지/재시작이라 재시작은 핫 스타트(GNSS 1–2 s 공백 — locationd 는 IMU·카메라로 계속, 조향은 GNSS 를 쓰지 않음). 시점(`AlmanacSaver`): fix 누적 12.5 분(almanac 전체 수신에 필요한 시간; 터널 공백은 멈춤일 뿐 초기화 아님, 실제로 fix 메시지가 오는 동안만 누적) 이후 현재 fix 가 있고 2 s 이상 정차 중일 때 — 정차가 없으면 fix 누적 25 분에 주행 중이라도 실행. 실패 시 5 분 뒤 재시도, 부팅당 최대 3 회. 성공/실패는 로그 "Done storing almanac (receiver stopped)" / "Error storing almanac (receiver stopped)", 다음 부팅의 "almanac backup restored" 로 확인. Kill: `ALMANAC_SAVE_STOPPED = False`.
+
+**실주행 재생(`e102`, 7a–7f 의 실제 fix·속도).** 처음 설계(연속 fix 15 분 + 정차)는 터널 공백 때문에 7c 하나에서만 실행(44 분) → 누적 기준으로 바꿔 네 주행 모두 1 회: 7a 18.7 분·7b 19.3 분(정차 중), 7f 33.0 분(57 km/h)·7c 33.7 분(106 km/h, 정차 없이 25 분 경과).
+
+**테스트.** `test_phase65.py` 13 건(UBX 메시지 체크섬·CFG-RST 모드, fix 누적 전 금지, 정차 시점·2 s 대기, 주행 중 25 분 대체 실행, 터널 공백 누적 유지, 현재 fix 없으면 금지, 메시지 간격이 빈 시간은 불산입, 재시도 간격·최대 횟수, 성공 뒤 부팅 내 반복 없음, 정지→백업→재시작 순서와 ACK/NACK/무응답 모두 재시작). phase_tests 전체 통과.
+
+**실차 확인.** 첫 주행: 위 로그 문구와 시각; 그다음 시동: "almanac backup restored" 와 첫 fix 시간(현재 174–413 s).
