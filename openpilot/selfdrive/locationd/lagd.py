@@ -38,7 +38,7 @@ LAG_CANDIDATE_CORR_THRESHOLD = 0.9
 SMOOTH_K = 5
 SMOOTH_SIGMA = 1.0
 
-VERSION = 1  # bump this to invalidate old parameter caches
+VERSION = 2  # bump this to invalidate old parameter caches (i6n Phase 66: caches learned with the 0.60 s-clipped search)
 
 # i6n Phase 64a (report §76): CCNC angle-steering profile. On this car the stock acceptance almost never completes
 # (0-160 accepted estimates per 45-min drive, 500 needed, the unfinished block lost at every ignition off):
@@ -59,9 +59,21 @@ CCNC_PROFILE = True
 # Total timing is unchanged: Phase 64b makes controlsd add 0.3 + 0.3 - model_delay, so a 0.55 s seed just moves the
 # compensation from controlsd's shift into the model's own planning (the Phase 64b intent), from boot. Kill:
 # LAGD_SEED_S = None (back to steerActuatorDelay + 0.2).
-LAGD_SEED_S: float | None = 0.55
+LAGD_SEED_S: float | None = 0.65
+# i6n Phase 66 (report §85): the lag search only looked at [MIN_LAG, MAX_LAG) = 0.15..0.60 s in 0.05 s steps, and a peak
+# at the last sample is returned un-interpolated, so on this car 76 % of the accepted estimates were exactly 0.600 — the
+# "learned 0.56-0.60 s" of §76/§82 was the search edge, not the car. With the search widened the command -> yaw peak sits
+# at 0.65-0.75 s (median 0.70, in line with the 639 ms of Phase 60). The spread that then shows up (block means 0.48-0.85,
+# std > MAX_LAG_STD -> status invalid -> cache dropped at the next boot) comes from windows that contain a driver press:
+# 87 % of the low (< 0.45 s) estimates have a < 0.5 s press inside their 60 s window, 2-3 % of the press-free ones do.
+# So an estimate is only accepted when no press (of any length) happened within the last LAGD_PRESS_FREE_S — the whole
+# correlation window — and the search runs to LAGD_MAX_LAG_S. 7a-7f replay: 16-17 / 5 blocks, learned 0.69 s, block std
+# <= 0.072 (never invalid), done within drive 7c as before. The seed follows (0.65). Kill: LAGD_MAX_LAG_S = MAX_LAG,
+# LAGD_PRESS_FREE_S = 0.0.
+LAGD_MAX_LAG_S = 1.0
+LAGD_PRESS_FREE_S = MOVING_WINDOW_SEC
 CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
-                       min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S)
+                       min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S, max_lag=LAGD_MAX_LAG_S, press_free_sec=LAGD_PRESS_FREE_S)
 
 
 def lagd_profile(CP) -> dict:
@@ -209,8 +221,12 @@ class LateralLagEstimator:
                window_sec: float = MOVING_WINDOW_SEC, okay_window_sec: float = MIN_OKAY_WINDOW_SEC, min_recovery_buffer_sec: float = MIN_RECOVERY_BUFFER_SEC,
                min_vego: float = MIN_VEGO, min_yr: float = MIN_ABS_YAW_RATE, min_ncc: float = MIN_NCC,
                max_lat_accel: float = MAX_LAT_ACCEL, max_lat_accel_diff: float = MAX_LAT_ACCEL_DIFF, min_confidence: float = MIN_CONFIDENCE,
-               min_press_sec: float = 0.0, initial_lag_seed: float | None = None):
+               min_press_sec: float = 0.0, initial_lag_seed: float | None = None,
+               max_lag: float = MAX_LAG, press_free_sec: float = 0.0):
     self.dt = dt
+    self.max_lag = max_lag               # i6n Phase 66: end of the lag search
+    self.press_free_sec = press_free_sec # i6n Phase 66: no press (any length) within this long before an estimate counts
+    self.last_press_raw_t = -1e9
     self.min_press_sec = min_press_sec   # i6n Phase 64a: a press shorter than this (HOD touch) is not steering
     self.press_start_t: float | None = None
     self.window_sec = window_sec
@@ -271,7 +287,7 @@ class LateralLagEstimator:
       lateralDelay.status = log.LateralDelay.Status.unestimated
 
     if lateralDelay.status == log.LateralDelay.Status.estimated:
-      lateralDelay.lateralDelay = min(MAX_LAG, max(MIN_LAG, valid_mean_lag))
+      lateralDelay.lateralDelay = min(self.max_lag, max(MIN_LAG, valid_mean_lag))
     else:
       lateralDelay.lateralDelay = self.initial_lag
 
@@ -295,6 +311,8 @@ class LateralLagEstimator:
     if which == "carControl":
       self.lat_active = msg.latActive
     elif which == "carState":
+      if msg.steeringPressed:
+        self.last_press_raw_t = t
       if self.min_press_sec > 0.0:
         if msg.steeringPressed:
           self.press_start_t = t if self.press_start_t is None else self.press_start_t
@@ -317,6 +335,10 @@ class LateralLagEstimator:
       self.yaw_rate_std = calibrated_pose.angular_velocity.yaw_std
       self.pose_valid = msg.angularVelocityDevice.valid and msg.posenetOK and msg.inputsOK
     self.t = t
+
+  def press_free(self) -> bool:
+    """Phase 66: no driver press within the correlation window (always True on the stock profile)."""
+    return self.press_free_sec <= 0.0 or self.t - self.last_press_raw_t >= self.press_free_sec
 
   def points_enough(self):
     return self.points.num_points >= int(self.okay_window_sec / self.dt)
@@ -366,8 +388,8 @@ class LateralLagEstimator:
     desired = masked_symmetric_moving_average(desired, okay, SMOOTH_K, SMOOTH_SIGMA)
     actual = masked_symmetric_moving_average(actual, okay, SMOOTH_K, SMOOTH_SIGMA)
 
-    delay, corr, confidence = self.actuator_delay(desired, actual, okay, self.dt, MIN_LAG, MAX_LAG)
-    if corr < self.min_ncc or confidence < self.min_confidence or not is_valid:
+    delay, corr, confidence = self.actuator_delay(desired, actual, okay, self.dt, MIN_LAG, self.max_lag)
+    if corr < self.min_ncc or confidence < self.min_confidence or not is_valid or not self.press_free():
       return
 
     self.block_avg.update(delay)
