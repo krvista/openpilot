@@ -16,11 +16,21 @@ LaneChangeState = log.LaneChangeState
 # centre in a curve; it never steers inward and is gated off on straights, lane changes and blinkers.
 # Routes 51-5b (1df7448, on): inside offset 0.20 -> 0.12 m at 0.6-1.0 m/s^2 and 0.29 -> 0.12 m at 1.0-1.5,
 # time > 0.3 m inside 26-48% -> 2-4%, > 0.3 m outside 0.3% of curve time; tracking error unchanged (0.074).
+#
+# CameraOffset moves the model frame: its lane centre sits CameraOffset m left of the road's, so the car holds
+# that line left of centre on straights. That is where the driver drives by hand (routes 3a-69, 73 min manual
+# over 34 routes: 0.08 m left of the model's centre, the same in every lane width and lane position, while
+# openpilot centred the car and the driver held +12 of left torque against it on 19 of 20 routes). In curves
+# the driver keeps that line on right-hand curves (0.05-0.08 m left of centre, never inside; openpilot sat
+# 0.06-0.14 m inside and was pushed outward) and cuts left-hand curves 0.11-0.18 m inside, about where
+# 23cf66e already drove them (0.08-0.14 m, driver torque neutral). Measured against the shifted centre both
+# come out as the inside allowance shrunk by the shift, so DEADBAND follows CameraOffset; the margin kept to
+# a car alongside stays in the road frame.
 LOOKAHEAD_T = 1.0           # s, point on the model plan whose lane-centre offset is corrected
 MIN_SPEED = 12.             # m/s
 CURVE_BP = [0.25, 0.6]      # m/s^2 |model lateral accel| -> fade in
-DEADBAND = 0.08             # m inside of centre left alone
-BSM_MARGIN = 0.10           # m outward of centre to aim for while a car is alongside on the inside
+DEADBAND = 0.08             # m inside of the road's centre left alone (model frame: DEADBAND - CameraOffset)
+BSM_MARGIN = 0.10           # m outward of the road's centre to aim for while a car is alongside on the inside
 GAIN = 1.2                  # (m/s^2)/m of lateral accel per metre inside (pure pursuit over 1 s = 2.0)
 MAX_LAT_ACCEL = 0.4         # m/s^2
 MAX_FRACTION = 0.5          # of the model's own lateral accel
@@ -42,17 +52,29 @@ def read_enabled(params, key: str = PARAM) -> bool:
     return True
 
 
+def read_camera_offset(params) -> float:
+  """CameraOffset (m, + shifts the model frame left) as modeld applies it; unreadable means none."""
+  try:
+    return float(params.get("CameraOffset", return_default=True))
+  except Exception:
+    return 0.0
+
+
 class CurveCentering:
-  def __init__(self, enabled: bool = True):
+  def __init__(self, enabled: bool = True, camera_offset: float = 0.0):
     self.enabled = enabled
+    self.camera_offset = float(camera_offset)
     self.lat_accel = 0.0     # filtered outward correction, signed like curvature * v^2
     self.target = 0.0
-    self.inside = 0.0        # last measured inside offset of the plan (m), for logging/tests
+    self.inside = 0.0        # last measured inside offset of the plan (m, model frame), for logging/tests
     self.alpha = DT_CTRL / (TAU + DT_CTRL)
 
   def reset(self):
     self.lat_accel = 0.0
     self.target = 0.0
+
+  def set_camera_offset(self, camera_offset: float):
+    self.camera_offset = float(camera_offset)
 
   def _target(self, model, CS) -> float:
     v = CS.vEgo
@@ -93,7 +115,11 @@ class CurveCentering:
       # routes 51-5b pushed outward 52% of that time (mean 0.07 m/s^2), against the model keeping its
       # distance from that car
       return 0.0
-    err = self.inside + BSM_MARGIN if bsm_inside else self.inside - DEADBAND
+    # in the model frame the car is camera_offset further inside on left-hand curves (direction -1) and that
+    # much less inside on right-hand curves than it is on the road, see the header
+    deadband = max(DEADBAND - self.camera_offset, 0.)
+    bsm_margin = BSM_MARGIN - direction * self.camera_offset
+    err = self.inside + bsm_margin if bsm_inside else self.inside - deadband
     if err <= 0.:
       return 0.0
     outward = min(GAIN * err * curve, MAX_LAT_ACCEL, MAX_FRACTION * abs(model_lat_accel))

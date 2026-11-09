@@ -11,7 +11,7 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_enabled as curve_centering_enabled
+from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_camera_offset, read_enabled as curve_centering_enabled
 from openpilot.selfdrive.controls.lib.curve_exit_lead import CurveExitLead
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
@@ -57,7 +57,7 @@ class Controls(ControlsExt):
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
 
-    self.curve_centering = CurveCentering(curve_centering_enabled(self.params))
+    self.curve_centering = CurveCentering(curve_centering_enabled(self.params), read_camera_offset(self.params))
     self.curve_exit_lead = CurveExitLead(curve_centering_enabled(self.params, "CurveExitLead"))
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
@@ -268,6 +268,8 @@ class Controls(ControlsExt):
       CC, lac_log = self.state_control()
       self.publish(CC, lac_log)
       self.get_params_sp(self.sm)
+      if self.sm.frame % 500 == 0:  # follow a CameraOffset change in Settings, as modeld does
+        self.curve_centering.set_camera_offset(read_camera_offset(self.params))
       self.run_ext(self.sm, self.pm)
       rk.monitor_time()
 

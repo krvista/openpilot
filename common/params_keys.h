@@ -228,7 +228,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"BlindSpot", {PERSISTENT | BACKUP, BOOL, "0"}},
 
     // sunnypilot model params
-    {"CameraOffset", {PERSISTENT | BACKUP, FLOAT, "0.0"}},
+    {"CameraOffset", {PERSISTENT | BACKUP, FLOAT, "0.07"}},  // WK2: the driver's own line is 0.08 m left of the model's lane centre, see curve_centering.py
     {"LagdToggle", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"LagdToggleDelay", {PERSISTENT | BACKUP, FLOAT, "0.2"}},
     {"LagdValueCache", {PERSISTENT, FLOAT, "0.2"}},

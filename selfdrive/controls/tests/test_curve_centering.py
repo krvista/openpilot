@@ -1,7 +1,7 @@
 import numpy as np
 
 from cereal import car, log
-from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, MAX_LAT_ACCEL, PARAM, read_enabled
+from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, MAX_LAT_ACCEL, PARAM, read_camera_offset, read_enabled
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 
@@ -108,6 +108,41 @@ class TestCurveCentering:
     assert not read_enabled(p)
     (tmp_path / PARAM).write_text("1")
     assert read_enabled(p)
+
+  def test_camera_offset_shrinks_inside_allowance(self):
+    # model frame shifted 0.07 m left: 0.05 m inside is within the 0.08 m deadband unshifted, 0.04 m past it shifted
+    md = make_model(25., 1.2, 0.05)
+    assert settle(CurveCentering(), md, make_cs(25.)) == 0.
+    assert settle(CurveCentering(camera_offset=0.07), md, make_cs(25.)) < 0.
+    assert settle(CurveCentering(camera_offset=0.07), make_model(25., -1.2, -0.05), make_cs(25.)) > 0.
+    # never pushes past the (shifted) centre, and a shift larger than the deadband does not flip the sign
+    assert settle(CurveCentering(camera_offset=0.07), make_model(25., 1.2, -0.01), make_cs(25.)) == 0.
+    assert settle(CurveCentering(camera_offset=0.12), make_model(25., 1.2, -0.01), make_cs(25.)) == 0.
+    cc = CurveCentering()
+    cc.set_camera_offset(0.07)
+    assert settle(cc, md, make_cs(25.)) < 0.
+
+  def test_camera_offset_keeps_bsm_margin_in_road_frame(self):
+    # left curve, car alongside on the inside (left): aim 0.10 m right of the road centre = 0.17 m right of the
+    # shifted one, so the push is stronger than without the shift
+    md = make_model(25., -1.0, -0.12)
+    out0 = settle(CurveCentering(), md, make_cs(25., left_bsm=True))
+    assert settle(CurveCentering(camera_offset=0.07), md, make_cs(25., left_bsm=True)) > out0 > 0.
+    # right curve, car alongside on the right: aim 0.10 m left of the road centre = 0.03 m left of the shifted one
+    assert settle(CurveCentering(camera_offset=0.07), make_model(25., 1.0, -0.05), make_cs(25., right_bsm=True)) == 0.
+    assert settle(CurveCentering(camera_offset=0.07), make_model(25., 1.0, 0.0), make_cs(25., right_bsm=True)) < 0.
+
+  def test_read_camera_offset(self):
+    class P:
+      def __init__(self, v):
+        self.v = v
+      def get(self, key, block=False, return_default=False):
+        if isinstance(self.v, Exception):
+          raise self.v
+        return self.v
+    assert read_camera_offset(P(0.07)) == 0.07
+    assert read_camera_offset(P(b"0.04")) == 0.04
+    assert read_camera_offset(P(Exception("UnknownKeyName"))) == 0.0
 
   def test_curve_entry_plan_inside_car_centred(self):
     # turn-in: the plan is already inside but the car is still centred -> leave the turn-in alone
