@@ -43,6 +43,30 @@ def test_profile_only_for_ccnc_angle_cars():
   assert lagd.lagd_profile(cp()) == {}
 
 
+def test_seed_sets_the_pre_learning_delay():
+  e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
+  assert e.initial_lag == pytest.approx(lagd.LAGD_SEED_S)           # 0.55, not steerActuatorDelay + 0.2 = 0.30
+  msg = e.get_msg(True)                                             # before any learning
+  assert str(msg.lateralDelay.status) == "unestimated"
+  assert msg.lateralDelay.lateralDelay == pytest.approx(lagd.LAGD_SEED_S)   # what modeld receives
+
+
+def test_seed_kill_switch_restores_stock_base():
+  e = lagd.LateralLagEstimator(cp(), 0.05)                          # no profile kwargs
+  assert e.initial_lag == pytest.approx(0.1 + 0.2)                  # steerActuatorDelay + 0.2
+  assert lagd.lagd_profile(cp())["initial_lag_seed"] == lagd.LAGD_SEED_S
+
+
+def test_learned_value_overrides_the_seed():
+  # once estimated, modeld gets the learned block mean, not the seed (adaptive)
+  e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
+  e.reset(0.60, lagd.BLOCK_NUM_NEEDED + 2)                          # as if learned 0.60 over >= 5 blocks
+  msg = e.get_msg(True)
+  assert str(msg.lateralDelay.status) == "estimated"
+  assert msg.lateralDelay.lateralDelay == pytest.approx(0.60, abs=1e-6)
+  assert msg.lateralDelay.lateralDelay != pytest.approx(lagd.LAGD_SEED_S)
+
+
 def test_estimator_takes_the_profile():
   e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
   assert e.min_ncc == 0.9 and e.min_confidence == 0.5 and e.min_press_sec == 0.5

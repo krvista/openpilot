@@ -52,8 +52,16 @@ VERSION = 1  # bump this to invalidate old parameter caches
 # e95 replay 7a-7f: estimated within drive 7c after ~12 min at >= 60 km/h (42-84 accepted / min), learned 0.57 s
 # (stock-accepted delays 0.59), block std 0.07 < MAX_LAG_STD. Kill: CCNC_PROFILE = False.
 CCNC_PROFILE = True
+# i6n Phase 64d (report §82): the learned lateral delay on this car is 0.56-0.60 s (e95/e111, the 7a-7f data run as one
+# stream reaches 26/5 valid blocks and 0.60 s), but until lagd is estimated modeld is told steerActuatorDelay + 0.2 =
+# 0.30 s. Seed the pre-learning (and no-cache) value to the measured LAGD_SEED_S so the model plans for the real delay
+# from the first frame; learning still runs and, once estimated, the learned block average overrides the seed (adaptive).
+# Total timing is unchanged: Phase 64b makes controlsd add 0.3 + 0.3 - model_delay, so a 0.55 s seed just moves the
+# compensation from controlsd's shift into the model's own planning (the Phase 64b intent), from boot. Kill:
+# LAGD_SEED_S = None (back to steerActuatorDelay + 0.2).
+LAGD_SEED_S: float | None = 0.55
 CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
-                       min_press_sec=0.5)
+                       min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S)
 
 
 def lagd_profile(CP) -> dict:
@@ -201,7 +209,7 @@ class LateralLagEstimator:
                window_sec: float = MOVING_WINDOW_SEC, okay_window_sec: float = MIN_OKAY_WINDOW_SEC, min_recovery_buffer_sec: float = MIN_RECOVERY_BUFFER_SEC,
                min_vego: float = MIN_VEGO, min_yr: float = MIN_ABS_YAW_RATE, min_ncc: float = MIN_NCC,
                max_lat_accel: float = MAX_LAT_ACCEL, max_lat_accel_diff: float = MAX_LAT_ACCEL_DIFF, min_confidence: float = MIN_CONFIDENCE,
-               min_press_sec: float = 0.0):
+               min_press_sec: float = 0.0, initial_lag_seed: float | None = None):
     self.dt = dt
     self.min_press_sec = min_press_sec   # i6n Phase 64a: a press shorter than this (HOD touch) is not steering
     self.press_start_t: float | None = None
@@ -209,6 +217,8 @@ class LateralLagEstimator:
     self.okay_window_sec = okay_window_sec
     self.min_recovery_buffer_sec = min_recovery_buffer_sec
     self.initial_lag = CP.steerActuatorDelay + 0.2
+    if initial_lag_seed is not None:   # Phase 64d: measured pre-learning delay for this car
+      self.initial_lag = float(initial_lag_seed)
     self.block_size = block_size
     self.block_count = block_count
     self.min_valid_block_count = min_valid_block_count
