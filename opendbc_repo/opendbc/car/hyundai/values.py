@@ -353,6 +353,14 @@ class CarControllerParams:
   CURVE_TRIM_GATE_V          = [4.0, 1.5]    # arm: |desired| >= this for CURVE_TRIM_SUSTAIN_FRAMES
   CURVE_TRIM_HOLD_V          = [3.0, 1.0]    # hold once armed
   CURVE_TRIM_DEADBAND_V      = [0.7, 0.35]   # residual deadband
+  # Phase 63c (report §86-87): with the 63a gate at 1.5° the speed cap (4.86° to 70 km/h, 2.9° at 87 km/h) let the trim
+  # wind up to 2-3.5 x a 1.6-4° request on the real 7a-7f drives (open-loop replay: 70-90 km/h request >= 2 x command on
+  # 57 % of the trim time, TX 5.9° on a 1.6° command, 10.6° on 3.9°) — the wheel there followed 60-75 % of the command,
+  # so ~0.5-1° of trim was all it could use. The trim may now not exceed CURVE_TRIM_CMD_CAP_K x |pre-trim request|
+  # (floor CURVE_TRIM_CMD_CAP_FLOOR_DEG): 1.6 x still closes the whole identified MDPS gain range (Kf 0.44-0.78 needs
+  # 0.28-1.27 x) and clips 5 / 23 / 7 % of the replayed trim time at 90+ / 70-90 / 55-70 km/h. Kill: CURVE_TRIM_CMD_CAP_K = 0.0.
+  CURVE_TRIM_CMD_CAP_K         = 1.6
+  CURVE_TRIM_CMD_CAP_FLOOR_DEG = 1.5
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a

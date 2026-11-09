@@ -35,6 +35,13 @@ if __name__ == "__main__":
       print(f"   |TX|/|cmd| when on: p50 {np.median(ratio):.2f} p90 {np.percentile(ratio, 90):.2f} max {ratio.max():.1f}; TX >= 2 x cmd on {np.mean(ratio >= 2):4.1%} of trim time")
       print(f"   trim > max(1.5, |cmd|): {over.sum() / 6000:.2f} min = {over.sum() / max(on.sum(), 1):4.1%} of trim time, {over.sum() / m.sum():5.2%} of op; hands off in {np.mean(hands_off[over]) if over.any() else 0:4.0%} of it; "
             f"excess over the bound p50 {np.median(np.abs(tr[over]) - bound[over]) if over.any() else 0:.2f} max {(np.abs(tr[over]) - bound[over]).max() if over.any() else 0:.2f} deg")
+      # how much each candidate bound k*|cmd| (floor 1.5) would clip, and the delivered-fraction the wheel actually showed
+      kf = np.abs(wh[on]) / np.maximum(np.abs(cmd[on]), 0.5)
+      print(f"   wheel/cmd (Kf) during trim: p10 {np.percentile(kf, 10):.2f} p50 {np.median(kf):.2f} -> trim needed for full tracking = cmd*(1/Kf-1): p50 {np.median(np.abs(cmd[on]) * (1 / np.clip(kf, 0.3, 1) - 1)):.2f} p90 {np.percentile(np.abs(cmd[on]) * (1 / np.clip(kf, 0.3, 1) - 1), 90):.2f} deg")
+      for kk in (1.0, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.9, 2.0):
+        bnd = np.maximum(1.5, kk * np.abs(cmd)); ov = on & (np.abs(tr) > bnd)
+        txb = np.abs(tx) - np.abs(tr) + np.minimum(np.abs(tr), bnd)
+        print(f"   bound max(1.5, {kk:.1f}x|cmd|): clips {ov.sum() / max(on.sum(), 1):4.1%} of trim time, excess p50 {np.median(np.abs(tr[ov]) - bnd[ov]) if ov.any() else 0:.2f} deg, |TX| p90 {np.percentile(np.abs(tx[on]), 90):.1f} -> {np.percentile(txb[on], 90):.1f}, max {np.abs(tx[on]).max():.1f} -> {txb[on].max():.1f}")
       # worst episodes
       idx = np.flatnonzero(over)
       if len(idx):

@@ -1676,6 +1676,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         trim_cap = float(_interp(v_ego_safe,
                                    CarControllerParams.CURVE_TRIM_CAP_SPEEDS_MS,
                                    CarControllerParams.CURVE_TRIM_CAP_DEG))
+        if CarControllerParams.CURVE_TRIM_CMD_CAP_K > 0.0:   # Phase 63c: never more than K x the request itself
+          trim_cap = min(trim_cap, max(CarControllerParams.CURVE_TRIM_CMD_CAP_FLOOR_DEG,
+                                       CarControllerParams.CURVE_TRIM_CMD_CAP_K * abs(desired_angle)))
         # Rate-limited integrator: step toward the residual's sign at up to
         # CURVE_TRIM_RATE_DPS until the residual closes (equilibrium residual=0,
         # i.e. wheel = pre-trim desired) or the cap binds. A pursuit law
