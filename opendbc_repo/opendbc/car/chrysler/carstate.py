@@ -75,7 +75,11 @@ class CarState(CarStateBase, MadsCarState, CarStateExt):
     ret.steeringRateDeg = cp.vl["STEERING"]["STEERING_RATE"]
     ret.steeringTorque = cp.vl["EPS_2"]["COLUMN_TORQUE"]
     ret.steeringTorqueEps = cp.vl["EPS_2"]["EPS_TORQUE_MOTOR"]
-    ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD
+    # Debounced like Hyundai's: a hand resting on the wheel sits just under the threshold (WK2 drivelog 5f-69:
+    # 1,780 steeringPressed onsets per hour, 81% shorter than 0.1 s, peaks ~131 against 120), and every one froze
+    # the integrator and restarted the torque controllers' release blend, weakening the error term 26% of curve
+    # time. 5 frames (50 ms) each way drops the blips (-77%), keeps every press over 0.5 s, delays them by 50 ms.
+    ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)
 
     # cruise state
     cp_cruise = cp_cam if self.CP.carFingerprint in RAM_CARS else cp
