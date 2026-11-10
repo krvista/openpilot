@@ -29,14 +29,22 @@ def cp():
 
 
 # ---------------------------------------------------------------- 67a
-def test_published_delay_is_capped_at_the_stock_range():
-  assert lagd.LAGD_PUBLISH_MAX_S == lagd.MAX_LAG == 0.65
+def test_published_delay_is_capped():
+  # Phase 68 raised the cap from the stock 0.65 to 0.80 s (the learned 0.69 s is published as is)
+  cap = lagd.LAGD_PUBLISH_MAX_S
   e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
-  e.reset(0.69, lagd.BLOCK_NUM_NEEDED + 2)                     # learned 0.69 s
+  e.reset(cap + 0.1, lagd.BLOCK_NUM_NEEDED + 2)
   m = e.get_msg(True).lateralDelay
   assert str(m.status) == "estimated"
-  assert m.lateralDelay == pytest.approx(0.65)                 # what modeld / controlsd read
-  assert m.lateralDelayEstimate == pytest.approx(0.69)         # what is learned, logged and cached
+  assert m.lateralDelay == pytest.approx(cap)                  # what modeld / controlsd read
+  assert m.lateralDelayEstimate == pytest.approx(cap + 0.1)    # what is learned, logged and cached
+
+
+def test_stock_range_cap_still_selectable():
+  kw = {**lagd.lagd_profile(cp()), "publish_max": lagd.MAX_LAG}
+  e = lagd.LateralLagEstimator(cp(), 0.05, **kw); e.reset(0.69, lagd.BLOCK_NUM_NEEDED + 2)
+  m = e.get_msg(True).lateralDelay
+  assert m.lateralDelay == pytest.approx(0.65) and m.lateralDelayEstimate == pytest.approx(0.69)
 
 
 def test_learned_value_below_the_cap_is_published_as_is():

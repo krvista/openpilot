@@ -315,6 +315,12 @@ LOOKAHEAD_DELAY_PARAM_FRAMES = 300    # LagdToggle / LagdValueCache re-read ever
 # window itself (REF -> 0.9 s + tau) keeps its length. The budget horizon no longer includes that shift, i.e. it is the
 # Phase 55 value again whatever delay the model is told. Kill: LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = False.
 LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = True
+# i6n Phase 68 (report §90): the total timing (model delay + this shift) is no longer pinned at BASE + E(v) = 0.6 s.
+# Phase 64b subtracted from the model's own delay whenever lagd told it more than 0.6 s (learned 0.69 s -> shift
+# -0.09 s), i.e. it steered later than the delay the car was measured to have. The shift now only fills what the
+# model delay lacks and is never negative: total = max(model delay, BASE + E(v)) — 0.6 s until the model is told
+# more, then the told (seed 0.65 s / learned) delay itself. Kill: LOOKAHEAD_DELAY_PIN_TOTAL = True.
+LOOKAHEAD_DELAY_PIN_TOTAL = False
 
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
@@ -610,7 +616,8 @@ class Controls(ControlsExt):
     if LOOKAHEAD_DELAY_FOLLOW_MODEL:
       model_delay = getattr(self, "_model_lat_delay", LOOKAHEAD_DELAY_BASE_S)
       ref_shift = float(_clip(model_delay - LOOKAHEAD_DELAY_BASE_S, -LOOKAHEAD_ORIENT_REF_T_S, 0.5))
-      dm_extra = float(_clip(dm_extra - ref_shift, *LOOKAHEAD_DELAY_EFF_CLIP))
+      dm_lo = LOOKAHEAD_DELAY_EFF_CLIP[0] if LOOKAHEAD_DELAY_PIN_TOTAL else max(min(dm_extra, 0.0), LOOKAHEAD_DELAY_EFF_CLIP[0])
+      dm_extra = float(_clip(dm_extra - ref_shift, dm_lo, LOOKAHEAD_DELAY_EFF_CLIP[1]))
     self._delay_extra_eff = dm_extra
     dm_plan = mf.orient_plan
     if dm_extra != 0.0 and dm_plan is not None and mf.lane_change_state == LaneChangeState.off:

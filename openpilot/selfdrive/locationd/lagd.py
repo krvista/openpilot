@@ -78,7 +78,11 @@ LAGD_PRESS_FREE_S = MOVING_WINDOW_SEC
 # 64b) keeps model delay + its own shift at 0.6 s whatever is published. So the published value is capped at
 # LAGD_PUBLISH_MAX_S while the search, the blocks, the cache and lateralDelayEstimate keep the real learned value.
 # Kill: LAGD_PUBLISH_MAX_S = None (publish up to the search end).
-LAGD_PUBLISH_MAX_S: float | None = MAX_LAG
+# i6n Phase 68 (report §90): the cap is raised from the stock MAX_LAG (0.65) to 0.80 s so the learned 0.69 s reaches
+# modeld and, with controlsd no longer pinning the total at 0.6 s, the steering timing. 0.80 = learned block mean
+# 0.69 + ~1.7 block sigma (0.064): room for the learned value to move, a bound on an outlier. Back to the stock
+# range: LAGD_PUBLISH_MAX_S = MAX_LAG.
+LAGD_PUBLISH_MAX_S: float | None = 0.80
 CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
                        min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S, max_lag=LAGD_MAX_LAG_S, press_free_sec=LAGD_PRESS_FREE_S,
                        publish_max=LAGD_PUBLISH_MAX_S)
