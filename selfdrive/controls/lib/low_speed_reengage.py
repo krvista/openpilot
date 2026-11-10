@@ -1,13 +1,13 @@
 from openpilot.common.realtime import DT_CTRL
 
-# EXPERIMENT (off by default): let lateral re-engage below minSteerSpeed on Chrysler EPS units with a high minimum
+# On by default: let lateral re-engage below minSteerSpeed on Chrysler EPS units with a high minimum
 # steer speed. Once engaged the WK2 EPS keeps tracking torque down to minSteerSpeed - 3.0 (controlsd's hold), but
 # after a dip below that floor lateral only came back above minSteerSpeed (63 km/h): WK2 drivelog 6a-7c spent 22%
 # of the time above 54 km/h (33.8 of 150 min, single stretches of 2 min) cruising with lateral off, mostly on
 # 60 km/h roads. Whether the EPS accepts a fresh LKAS request below 17.5 m/s is unknown (openpilot never asked);
 # this asks from ENTRY_MARGIN below it. If the EPS faults within FAULT_WINDOW of such an entry, stop asking until
 # the car is above minSteerSpeed again, so a refusing EPS faults once per dip, not repeatedly.
-# Turn on: echo 1 > /data/params/d/LowSpeedReengage (read every 5 s; missing or 0 = off).
+# Turn off: echo 0 > /data/params/d/LowSpeedReengage (read every 5 s; missing = on).
 PARAM = "LowSpeedReengage"
 ENTRY_MARGIN = 2.5   # m/s below minSteerSpeed where a fresh engagement is requested (hold floor stays -3.0)
 HOLD_MARGIN = 3.0    # m/s, controlsd's existing hold floor below minSteerSpeed once lateral is active
@@ -15,16 +15,16 @@ FAULT_WINDOW = 3.0   # s after a low-speed entry in which a steer fault counts a
 
 
 def read_toggle(params, key: str = PARAM) -> bool:
-  # file read like curve_centering.read_enabled (prebuilt params library does not know new keys); missing = off
+  # file read like curve_centering.read_enabled (prebuilt params library does not know new keys); missing = on
   try:
     with open(params.get_param_path(key)) as f:
-      return f.read().strip() in ("1", "true", "True")
+      return f.read().strip() not in ("0", "false", "False")
   except Exception:
-    return False
+    return True
 
 
 class LowSpeedReengage:
-  def __init__(self, CP, enabled: bool = False):
+  def __init__(self, CP, enabled: bool = True):
     self.applies = CP.brand == 'chrysler' and CP.minSteerSpeed > 10.
     self.min_steer_speed = CP.minSteerSpeed
     self.enabled = enabled

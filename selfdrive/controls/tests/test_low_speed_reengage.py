@@ -60,8 +60,12 @@ class TestLowSpeedReengage:
     class P:
       def get_param_path(self, key=""):
         return str(tmp_path / key)
-    assert not read_toggle(P())
+    assert read_toggle(P())              # missing = on
     (tmp_path / PARAM).write_text("1")
     assert read_toggle(P())
     (tmp_path / PARAM).write_text("0")
     assert not read_toggle(P())
+
+  def test_default_on(self):
+    lsr = LowSpeedReengage(WK2)
+    assert run(lsr, 15.1)
