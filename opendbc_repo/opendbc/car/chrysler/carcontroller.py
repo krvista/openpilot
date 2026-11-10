@@ -70,6 +70,10 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt, Inte
         # lateral hold (-3.0) so the wind-down below still runs while the bit is up.
         if CS.out.vEgo < (self.CP.minSteerSpeed - 3.5):
           lkas_control_bit = False
+        elif CC.latActive and CS.out.vEgo > (self.CP.minSteerSpeed - 3.0):
+          # Raise the bit below minSteerSpeed when controls asks for lateral there. With the bit down, controls
+          # only does that under its LowSpeedReengage experiment (off by default); the hold keeps the bit up anyway.
+          lkas_control_bit = True
       elif self.CP.carFingerprint in RAM_CARS:
         if CS.out.vEgo < (self.CP.minSteerSpeed - 0.5):
           lkas_control_bit = False

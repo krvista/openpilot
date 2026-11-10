@@ -13,6 +13,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_camera_offset, read_enabled as curve_centering_enabled
 from openpilot.selfdrive.controls.lib.curve_exit_lead import CurveExitLead
+from openpilot.selfdrive.controls.lib.low_speed_reengage import LowSpeedReengage, read_toggle as read_low_speed_reengage
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -59,6 +60,7 @@ class Controls(ControlsExt):
 
     self.curve_centering = CurveCentering(curve_centering_enabled(self.params), read_camera_offset(self.params))
     self.curve_exit_lead = CurveExitLead(curve_centering_enabled(self.params, "CurveExitLead"))
+    self.low_speed_reengage = LowSpeedReengage(self.CP, read_low_speed_reengage(self.params))
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
@@ -120,13 +122,12 @@ class Controls(ControlsExt):
     # minSteerSpeed, up to saturated torque). Once lateral is active, hold it down to
     # minSteerSpeed - 3.0 (stays above the carcontroller's LKAS-bit drop at -3.5 so the
     # wind-down happens while the EPS still accepts torque). Entry is unchanged.
-    min_lat_speed = max(self.CP.minSteerSpeed, 0.3)
-    if self.lat_active_prev and self.CP.brand == 'chrysler' and self.CP.minSteerSpeed > 10.:
-      # Widened from -2.5 after 21 WK2 routes on the -2.5 build: 12,121 assisted frames in
-      # [-2.5, 0) with EPS motor torque tracking the command (corr 0.82, gain 80% of
-      # >= minSteerSpeed), and 89 ramp-band frames in [-3.0, -2.5) with corr 0.93 / gain
-      # 100%; the only steer faults coincided with driver override, not low-speed torque.
-      min_lat_speed = max(self.CP.minSteerSpeed - 3.0, 0.3)
+    # Hold floor widened from -2.5 after 21 WK2 routes on the -2.5 build: 12,121 assisted frames in
+    # [-2.5, 0) with EPS motor torque tracking the command (corr 0.82, gain 80% of
+    # >= minSteerSpeed), and 89 ramp-band frames in [-3.0, -2.5) with corr 0.93 / gain
+    # 100%; the only steer faults coincided with driver override, not low-speed torque.
+    # The LowSpeedReengage experiment (off by default) also lets lateral re-engage from -2.5.
+    min_lat_speed = self.low_speed_reengage.min_lat_speed(CS.vEgo)
     standstill = abs(CS.vEgo) <= min_lat_speed or CS.standstill
 
     # Get which state to use for active lateral control
@@ -135,6 +136,7 @@ class Controls(ControlsExt):
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
     self.lat_active_prev = CC.latActive
+    self.low_speed_reengage.update(CC.latActive, CS.vEgo, CS.steerFaultTemporary)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
@@ -270,6 +272,7 @@ class Controls(ControlsExt):
       self.get_params_sp(self.sm)
       if self.sm.frame % 500 == 0:  # follow a CameraOffset change in Settings, as modeld does
         self.curve_centering.set_camera_offset(read_camera_offset(self.params))
+        self.low_speed_reengage.enabled = read_low_speed_reengage(self.params)
       self.run_ext(self.sm, self.pm)
       rk.monitor_time()
 
