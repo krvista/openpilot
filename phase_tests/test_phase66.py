@@ -75,7 +75,7 @@ def test_gate_kill_switch_and_stock():
 
 
 def test_published_value_is_capped_at_the_profile_search_end():
-  e = est()
+  e = est(publish_max=None)                                                     # Phase 67a cap off: up to the search end
   e.reset(0.90, lagd.BLOCK_NUM_NEEDED + 2)
   assert e.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.90)       # was min(0.65, ...)
   s = lagd.LateralLagEstimator(cp(), 0.05); s.reset(0.90, lagd.BLOCK_NUM_NEEDED + 2)

@@ -40,6 +40,11 @@ PROCESS_NAME = "openpilot.selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
 LAT_SMOOTH_SECONDS = 0.0
+# i6n Phase 67c (report §88-89): model.lat_delay (get_lat_delay: lagd's value with LagdToggle on, else the fixed
+# LagdValueCache) was computed and never used — this runner fed the model lagd's value whatever the toggle said, while
+# modeld_v2 and controlsd's Phase 64b follow the toggle (toggle off here = steering 0.35 s early). Use it.
+# Kill: LAT_DELAY_FOLLOWS_TOGGLE = False.
+LAT_DELAY_FOLLOWS_TOGGLE = True
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 BIG_MODEL_TIMEOUT = 60
@@ -351,7 +356,7 @@ def main(demo=False):
     frame_id = sm["narrowRoadCameraState"].frameId
     v_ego = max(sm["carState"].vEgo, 0.)
     model.lat_delay = get_lat_delay(params, sm["lateralDelay"].lateralDelay)
-    lat_delay = sm["lateralDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    lat_delay = (model.lat_delay if LAT_DELAY_FOLLOWS_TOGGLE else sm["lateralDelay"].lateralDelay) + LAT_SMOOTH_SECONDS
     if sm.updated["extrinsicsCalibration"] and sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["extrinsicsCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor))]

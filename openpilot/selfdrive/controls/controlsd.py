@@ -310,6 +310,11 @@ LOOKAHEAD_DELAY_FOLLOW_MODEL = True
 LOOKAHEAD_DELAY_BASE_S = 0.3
 LOOKAHEAD_DELAY_EFF_CLIP = (-0.3, 0.6)
 LOOKAHEAD_DELAY_PARAM_FRAMES = 300    # LagdToggle / LagdValueCache re-read every 3 s (modeld: every 3 s)
+# i6n Phase 67b (report §88-89): the orient-lead jerk budget (LOOKAHEAD_JERK_BUDGET x horizon / v^2) took its horizon
+# from t_or, which Phase 64b moves with the model delay — a 0.65 s delay made the budget 36 % looser although the lead
+# window itself (REF -> 0.9 s + tau) keeps its length. The budget horizon no longer includes that shift, i.e. it is the
+# Phase 55 value again whatever delay the model is told. Kill: LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = False.
+LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = True
 
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
@@ -677,7 +682,7 @@ class Controls(ControlsExt):
     t_or = LOOKAHEAD_ORIENT_T_S + tau_v + ref_shift   # Phase 64b: same lead horizon beyond the action
     yaw_rate, vx = plan
     k_or = lambda t: float(np.interp(t, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t, _PLAN_T_IDXS, vx)), 1.0)
-    t_budget = t_or if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
+    t_budget = (t_or - (ref_shift if LOOKAHEAD_BUDGET_EXCLUDES_SHIFT else 0.0)) if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
     dk_or = LOOKAHEAD_JERK_BUDGET * max(t_budget, 0.05) / max(v_ego, 5.0) ** 2
     k_far, k_ref = k_or(t_or), k_or(LOOKAHEAD_ORIENT_REF_T_S + ref_shift)
     delta = k_far - k_ref

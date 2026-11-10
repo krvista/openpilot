@@ -2184,3 +2184,15 @@ Phase 66(학습 지연 0.65–0.69 s)·63c 를 넣은 뒤의 상태를 다시 �
 **⑤ [기록] 63a 자체의 와인드업.** 같은 재생에서 63a 끔 대비 ≥ 70 km/h 와인드업(|TX − 명령| ≥ 3° 가 핸들 정지 상태로 1 s 이상) 0.27 → 0.49(63c 0.44) /분, |TX − 명령| p90 0.4 → 2.7°. 개루프라 핸들이 트림에 반응하지 않는 상한 추정이며 63a 의 의도된 대가(고속 커브 전달 0.52 → 0.91)지만, 다음 실차 로그에서 가장 먼저 볼 항목. Kill 은 §75.
 
 **⑥ [낮] 기타.** Phase 66 이후 64a 의 "0.5 s 미만 눌림 무시"는 수용에 영향이 없다(어떤 눌림이든 60 s 동안 수용을 막고 그 사이 창에서 빠짐) — 무해한 잔여 로직. invalid → 다음 부팅 캐시 삭제는 그대로지만 시드(0.65)가 학습값(0.69)과 가까워 영향 ≤ 0.04 s. 63b 의 S-커브 반전 점프·감속 시 상한 클립(§84)은 변동 없음.
+
+## 89. Phase 67 — §88 의 세 항목 적용 (11-10)
+
+**67a — 모델에 내보내는 지연을 순정 범위(0.65 s)로.** `LAGD_PUBLISH_MAX_S = MAX_LAG`(CCNC 프로파일 `publish_max`). `get_msg` 의 `lateralDelay.lateralDelay`(modeld 의 신경망 입력·action 시점, controlsd 64b 가 읽는 값)만 `min(0.65, 학습 평균)` 으로 묶는다. 탐색(1.0 s)·눌림 게이트·블록·LiveDelay 캐시·`lateralDelayEstimate` 는 실제 학습값 그대로. 총 조향 시점은 64b 로 0.6 s 고정이라 변화 없음(controlsd 이동분 −0.09 → −0.05 s). 재생(`e115`): 7c 블록 7 평균 0.666, 7f 블록 17 평균 0.691 — modeld 는 두 경우 모두 **0.650**, invalid 0. Kill: `LAGD_PUBLISH_MAX_S = None`.
+
+**67b — 진입 선행 저크 예산에서 지연 이동분 제외.** `t_budget = t_or − ref_shift`(`LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = True`). 모델 지연 0.30 일 때와 예산이 같아진다(0.65 에서 +36 % 이던 것 제거). 시뮬: 예산에 걸리는 큰 계획 스텝에서 지연 0.30 과 0.65 의 출력이 동일, kill 시 0.65 쪽 선행이 20 % 이상 큼. Kill: `LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = False`.
+
+**67c — 스톡 모델 러너도 라이브 학습 토글을 따름.** `selfdrive/modeld/modeld.py`: `lat_delay = model.lat_delay + LAT_SMOOTH_SECONDS`(`model.lat_delay` 는 `get_lat_delay` 결과 — 토글 on 이면 lagd 값, off 면 LagdValueCache). modeld_v2·controlsd 64b 와 같은 규칙. 토글 on(현재 설정)에서는 값이 동일해 동작 변화 없음. Kill: `LAT_DELAY_FOLLOWS_TOGGLE = False`.
+
+**테스트.** `test_phase67.py` 8 개(공개값 상한·상한 아래는 그대로·kill/순정·시드 ≤ 상한·예산 불변·예산 kill·지연 0.30 불변·스톡 러너 소스), 66 테스트 1 개 갱신. 전체 **533 통과**.
+
+**실차 확인.** `lateralDelay.lateralDelay` 는 시동부터 학습 뒤까지 0.65 로 일정, `lateralDelayEstimate` 가 0.65–0.72 로 수렴, status estimated(≥ 60 km/h·60 s 무접촉 구간 누적 약 30 분).

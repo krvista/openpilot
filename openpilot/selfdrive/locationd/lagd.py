@@ -72,8 +72,16 @@ LAGD_SEED_S: float | None = 0.65
 # LAGD_PRESS_FREE_S = 0.0.
 LAGD_MAX_LAG_S = 1.0
 LAGD_PRESS_FREE_S = MOVING_WINDOW_SEC
+# i6n Phase 67a (report §88-89): what is PUBLISHED to modeld stays inside the stock range. lateralDelay is a network
+# input of the driving model (lateral_control_params) and its action time; stock lagd never hands it more than MAX_LAG
+# (0.65 s), and Phase 66 would have handed it the learned 0.69 s. Steering timing does not need it: controlsd (Phase
+# 64b) keeps model delay + its own shift at 0.6 s whatever is published. So the published value is capped at
+# LAGD_PUBLISH_MAX_S while the search, the blocks, the cache and lateralDelayEstimate keep the real learned value.
+# Kill: LAGD_PUBLISH_MAX_S = None (publish up to the search end).
+LAGD_PUBLISH_MAX_S: float | None = MAX_LAG
 CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
-                       min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S, max_lag=LAGD_MAX_LAG_S, press_free_sec=LAGD_PRESS_FREE_S)
+                       min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S, max_lag=LAGD_MAX_LAG_S, press_free_sec=LAGD_PRESS_FREE_S,
+                       publish_max=LAGD_PUBLISH_MAX_S)
 
 
 def lagd_profile(CP) -> dict:
@@ -222,9 +230,10 @@ class LateralLagEstimator:
                min_vego: float = MIN_VEGO, min_yr: float = MIN_ABS_YAW_RATE, min_ncc: float = MIN_NCC,
                max_lat_accel: float = MAX_LAT_ACCEL, max_lat_accel_diff: float = MAX_LAT_ACCEL_DIFF, min_confidence: float = MIN_CONFIDENCE,
                min_press_sec: float = 0.0, initial_lag_seed: float | None = None,
-               max_lag: float = MAX_LAG, press_free_sec: float = 0.0):
+               max_lag: float = MAX_LAG, press_free_sec: float = 0.0, publish_max: float | None = None):
     self.dt = dt
     self.max_lag = max_lag               # i6n Phase 66: end of the lag search
+    self.publish_max = max_lag if publish_max is None else min(publish_max, max_lag)   # i6n Phase 67a: cap on what modeld is told
     self.press_free_sec = press_free_sec # i6n Phase 66: no press (any length) within this long before an estimate counts
     self.last_press_raw_t = -1e9
     self.min_press_sec = min_press_sec   # i6n Phase 64a: a press shorter than this (HOD touch) is not steering
@@ -287,7 +296,7 @@ class LateralLagEstimator:
       lateralDelay.status = log.LateralDelay.Status.unestimated
 
     if lateralDelay.status == log.LateralDelay.Status.estimated:
-      lateralDelay.lateralDelay = min(self.max_lag, max(MIN_LAG, valid_mean_lag))
+      lateralDelay.lateralDelay = min(self.publish_max, max(MIN_LAG, valid_mean_lag))
     else:
       lateralDelay.lateralDelay = self.initial_lag
 
