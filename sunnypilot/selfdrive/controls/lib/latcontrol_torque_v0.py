@@ -30,7 +30,6 @@ KP_INTERP = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]
 
 LP_FILTER_CUTOFF_HZ = 1.2
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
-RELEASE_BLEND_SECONDS = 0.4  # ramp the error term back in after the driver lets go of the wheel (see latcontrol_torque.py)
 FRICTION_THRESHOLD = 0.3
 VERSION = 0
 
@@ -48,11 +47,6 @@ class LatControlTorque(LatControl):
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len , maxlen=self.lat_accel_request_buffer_len)
     self.previous_measurement = 0.0
     self.measurement_rate_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
-
-    self.release_blend_frames = max(int(RELEASE_BLEND_SECONDS / self.dt), 1)
-    self.release_frames_left = 0
-    self.release_blend = 1.0
-    self.steering_pressed_prev = False
 
     self.extension = LatControlTorqueExt(self, CP, CP_SP, CI)
 
@@ -74,14 +68,7 @@ class LatControlTorque(LatControl):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
 
-    # Driver-release blend-in (same as latcontrol_torque.py): ramp the error term back in over
-    # RELEASE_BLEND_SECONDS after steeringPressed falls; feedforward and the logged error are untouched.
-    if self.steering_pressed_prev and not CS.steeringPressed:
-      self.release_frames_left = self.release_blend_frames
-    self.steering_pressed_prev = bool(CS.steeringPressed)
-    self.release_blend = 1.0 - self.release_frames_left / self.release_blend_frames
-    if self.release_frames_left > 0:
-      self.release_frames_left -= 1
+    self.update_release_blend(CS)  # error-term weight around driver overrides, see LatControl
 
     if not active:
       output_torque = 0.0
