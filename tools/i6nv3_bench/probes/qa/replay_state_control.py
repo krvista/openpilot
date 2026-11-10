@@ -106,6 +106,9 @@ def replay(variant, t0, t1):
   if variant == "x_noslew":
     cd.LOOKAHEAD_ORIENT_W_SLEW_S = 1e-9
   s = H.mk_controls(); s.VM = VM(); s._lookahead_orient_w = 1.0
+  # the logged plans / actions were produced with the model told 0.30 s (lagd unestimated); the test stub says 0.2 and
+  # Phase 64b would read that as a -0.1 s reference shift (= 0.1 s more advance than asked for)
+  s.sm['lateralDelay'].lateralDelay = float(__import__('os').environ.get('REPLAY_MODEL_DELAY', '0.3'))
   Tr = d['T']; a0 = np.searchsorted(Tr, t0 - 8.0); a1 = np.searchsorted(Tr, t1)
   cs = s.sm['carState']; out = []
   s.desired_curvature = float(d['k_ctrl'][a0]); s._lat_cmd_lp = s.desired_curvature
