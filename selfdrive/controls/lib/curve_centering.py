@@ -26,12 +26,21 @@ LaneChangeState = log.LaneChangeState
 # 23cf66e already drove them (0.08-0.14 m, driver torque neutral). Measured against the shifted centre both
 # come out as the inside allowance shrunk by the shift, so DEADBAND follows CameraOffset; the margin kept to
 # a car alongside stays in the road frame.
+#
+# GAIN 1.2 -> 2.0. Routes 7e-87 (77a1df4, CameraOffset 0.07) put straights on the driver's line (-0.084 m vs
+# -0.091 by hand) but right-hand curves stopped short of it: inside +0.003 / +0.049 / +0.107 m at 0.5-0.8 /
+# 0.8-1.2 / 1.2+ m/s^2 against the driver's -0.066 / -0.051 / +0.050, pressed 24-30% with 10-25 units of
+# outward torque. The correction was on 72-86% of that time and neither cap bound (0-1%): the proportional
+# gain left that much error while the plan kept pulling inside. A->B and B->G moved the car ~1 m per m/s^2
+# of correction (0.4-1.8), so closing 0.07-0.10 m needs roughly double; 2.0 is pure pursuit over the 1 s
+# lookahead. Left-hand curves (0.13-0.17 m inside vs the driver's 0.10-0.21, pressed 5-9%) get a little more
+# outward push from it too.
 LOOKAHEAD_T = 1.0           # s, point on the model plan whose lane-centre offset is corrected
 MIN_SPEED = 12.             # m/s
 CURVE_BP = [0.25, 0.6]      # m/s^2 |model lateral accel| -> fade in
 DEADBAND = 0.08             # m inside of the road's centre left alone (model frame: DEADBAND - CameraOffset)
 BSM_MARGIN = 0.10           # m outward of the road's centre to aim for while a car is alongside on the inside
-GAIN = 1.2                  # (m/s^2)/m of lateral accel per metre inside (pure pursuit over 1 s = 2.0)
+GAIN = 2.0                  # (m/s^2)/m of lateral accel per metre inside (pure pursuit over 1 s), was 1.2
 MAX_LAT_ACCEL = 0.4         # m/s^2
 MAX_FRACTION = 0.5          # of the model's own lateral accel
 MIN_LANE_PROB = 0.7

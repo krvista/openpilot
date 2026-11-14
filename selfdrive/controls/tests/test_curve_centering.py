@@ -125,7 +125,7 @@ class TestCurveCentering:
   def test_camera_offset_keeps_bsm_margin_in_road_frame(self):
     # left curve, car alongside on the inside (left): aim 0.10 m right of the road centre = 0.17 m right of the
     # shifted one, so the push is stronger than without the shift
-    md = make_model(25., -1.0, -0.12)
+    md = make_model(25., -1.0, -0.02)  # small enough that neither result reaches MAX_LAT_ACCEL
     out0 = settle(CurveCentering(), md, make_cs(25., left_bsm=True))
     assert settle(CurveCentering(camera_offset=0.07), md, make_cs(25., left_bsm=True)) > out0 > 0.
     # right curve, car alongside on the right: aim 0.10 m left of the road centre = 0.03 m left of the shifted one
