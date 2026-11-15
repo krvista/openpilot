@@ -12,6 +12,10 @@ PARAM = "LowSpeedReengage"
 ENTRY_MARGIN = 2.5   # m/s below minSteerSpeed where a fresh engagement is requested (hold floor stays -3.0)
 HOLD_MARGIN = 3.0    # m/s, controlsd's existing hold floor below minSteerSpeed once lateral is active
 FAULT_WINDOW = 3.0   # s after a low-speed entry in which a steer fault counts as the EPS refusing it
+# Torque is ramped in after a low-speed entry. Routes 7e-87 (77a1df4, 59 entries, no faults): the request reached
+# 0.39 of full scale (p90 0.76) within 0.5 s of the entry and the car moved 0.12 m in 2 s, usually with the driver
+# still holding the wheel from steering by hand (pressed within 2 s on 76%).
+RAMP_SECONDS = 1.0
 
 
 def read_toggle(params, key: str = PARAM) -> bool:
@@ -30,6 +34,7 @@ class LowSpeedReengage:
     self.enabled = enabled
     self.locked_out = False
     self.entry_timer = 0.   # s since the last low-speed entry, while inside FAULT_WINDOW
+    self.torque_scale = 1.  # multiplies the lateral torque request; ramps 0 -> 1 after a low-speed entry
     self.lat_active_prev = False
     self.fault_prev = False
 
@@ -47,8 +52,11 @@ class LowSpeedReengage:
     """Call once per controls frame after latActive is decided."""
     if lat_active and not self.lat_active_prev and v_ego < self.min_steer_speed:
       self.entry_timer = DT_CTRL  # fresh engagement below minSteerSpeed: watch for a refusal
+      self.torque_scale = 0.
     elif self.entry_timer > 0.:
       self.entry_timer = self.entry_timer + DT_CTRL if self.entry_timer < FAULT_WINDOW else 0.
+
+    self.torque_scale = min(self.torque_scale + DT_CTRL / RAMP_SECONDS, 1.) if lat_active else 1.
 
     if steer_fault and not self.fault_prev and self.entry_timer > 0.:
       self.locked_out = True

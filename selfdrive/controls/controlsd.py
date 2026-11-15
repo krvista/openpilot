@@ -172,7 +172,7 @@ class Controls(ControlsExt):
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,
                                                        self.calibrated_pose, curvature_limited, lat_delay)
-    actuators.torque = float(steer)
+    actuators.torque = float(steer) * self.low_speed_reengage.torque_scale  # 1 except just after a low-speed entry
     actuators.steeringAngleDeg = float(steeringAngleDeg)
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:

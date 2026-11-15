@@ -52,6 +52,27 @@ class TestLowSpeedReengage:
     run(lsr, 15.5, frames=10)
     assert run(lsr, 15.5)
 
+  def test_torque_ramp_after_low_entry(self):
+    lsr = LowSpeedReengage(WK2)
+    assert lsr.torque_scale == 1.
+    run(lsr, 15.5)                       # low-speed entry
+    assert lsr.torque_scale < 0.05
+    run(lsr, 15.5, frames=49)
+    assert abs(lsr.torque_scale - 0.5) < 0.02
+    run(lsr, 15.5, frames=60)
+    assert lsr.torque_scale == 1.
+    # entry above minSteerSpeed is not ramped, and the hold below it keeps full torque
+    lsr = LowSpeedReengage(WK2)
+    run(lsr, 17.6)
+    assert lsr.torque_scale == 1.
+    run(lsr, 15.0, frames=10)
+    assert lsr.torque_scale == 1.
+    # dropping out mid-ramp resets it
+    lsr = LowSpeedReengage(WK2)
+    run(lsr, 15.5, frames=20)
+    run(lsr, 14.0)
+    assert lsr.torque_scale == 1.
+
   def test_other_brands_untouched(self):
     lsr = LowSpeedReengage(SimpleNamespace(brand='toyota', minSteerSpeed=0.), enabled=True)
     assert lsr.min_lat_speed(5.) == 0.3
