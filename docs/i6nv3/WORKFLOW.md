@@ -16,3 +16,11 @@
 
 ## 푸시 후 보고
 - i6nv3 에 푸시한 뒤에는 푸시된 커밋의 짧은 해시(빌드 번호, 예: `9aae6071`)를 결과 보고에 항상 함께 적는다 — 다음 주행 로그가 어느 빌드인지 대조하는 기준.
+
+## 순정 LFA 수집 주행 (Phase 70)
+- 목적: 순정 LFA 가 이 차 MDPS 를 직접 조향할 때의 요청·권한 값·응답을 기록(평소 로그에는 대기 프레임만 있다, 보고서 §91.5).
+- 켜기: 시동을 건 뒤 **정차 상태**에서 설정 → 개발자 화면 맨 끝 `stock LFA capture`(quickboot mode 다음). openpilot 이 한 번 재시작하고
+  화면에 "Dashcam Mode" 가 뜨면 수집 중이다. 그 주행 동안 sunnypilot 은 조향·가감속을 하지 않고 기록만 한다 — 순정 LFA/HDA2 를 평소처럼 켜서 운전.
+- 끄기: 시동을 끄면 자동 해제(다음 시동은 원래의 sunnypilot). 주행 중 되돌리려면 정차 후 같은 토글을 끈다.
+- 권장 주행: 10–15 분, 고속도로 직선·완만한 커브와 40–70 km/h 커브 진입 몇 번을 순정 LFA 로.
+- 분석: 구간별 `probes/qa/e121_angle_frames_extract.py <rlog> <npz>` → `probes/qa/e135_stock_lfa_analysis.py <npz ...>`.

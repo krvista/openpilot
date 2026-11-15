@@ -224,6 +224,16 @@ class CarControllerParams:
   # tracking gap sat unchanged at |cmd-wheel| p50 = 5.45 deg because the slew
   # x curve-duration product was too small to matter (median trim +0.88 deg).
   CURVE_TRIM_RATE_DPS       = 2.0
+  # Phase 69c (report §91.4, §92): the 2 deg/s ramp is the slow regime this MDPS answers least (measured: a trim-like
+  # ramp moved the wheel 6-34 % of the request change within 1 s, 0.8-2.5 deg/s ramps transfer 0.11-0.45 at 30-70 km/h
+  # against 0.42-0.64 at 4-12 deg/s). Up to CURVE_TRIM_FAST_SPEEDS_KPH[0] the integrator runs up to
+  # CURVE_TRIM_FAST_RATE_DPS while the residual (beyond the deadband) is large — linear from the base rate at
+  # CURVE_TRIM_FAST_RESID_DEG[0] to the fast rate at [1] — and keeps 2 deg/s for small residuals (no hunting) and from
+  # CURVE_TRIM_FAST_SPEEDS_KPH[1] (chain sim: 4 deg/s everywhere cost +23 % jerk at 70-90 km/h). Same caps (speed cap,
+  # 63c command bound). Kill: CURVE_TRIM_FAST_RATE_DPS = 0.0.
+  CURVE_TRIM_FAST_RATE_DPS   = 4.0
+  CURVE_TRIM_FAST_SPEEDS_KPH = [70.0, 80.0]
+  CURVE_TRIM_FAST_RESID_DEG  = [0.5, 2.0]
   # Phase 63a: unchanged up to 70 km/h (6 -> 4.86°), then 2.5° at 90 and 1.5° from 108 km/h — with the 1.5° gate the
   # trim now runs on highway curves, where 13-21 % of a 2-6° command is all it has to add (chain sim: 90+ km/h jerk
   # +43 % with the old 4° cap, +13-29 % with this one, curve delivery 0.93 either way).
@@ -523,6 +533,29 @@ class CarControllerParams:
   ENTRY_BOOST_HANDS_OFF_NM   = 60.0
   ENTRY_BOOST_SPEEDS_KPH     = [45.0, 55.0, 90.0, 120.0]
   ENTRY_BOOST_CAP_DEG        = [0.0, 3.0, 2.5, 2.0]
+  # Phase 69b (report §92): corner EXIT, above 70 km/h. On the road the car comes out of a curve 125-205 ms after the
+  # model at 30-70 km/h and ~235 ms after it at 70-90 km/h (model action -> car curvature half-way point, on time = 375 ms:
+  # measured 500-580 / 610 ms). Up to 70 km/h Phase 69a's earlier timing covers it (chain sim: exits 395 / 310 -> 305 / 230
+  # ms, an exit term on top made them early and added intent error); from 70 km/h there is no extra advance, and the
+  # standing 63a trim makes exits later still (sim 530 -> 595 ms). EXIT LEAD: while the clean command has come back toward
+  # centre from its slow reference (tau EXIT_LEAD_REF_TAU_S) by more than EXIT_LEAD_DEADBAND_DEG, move the request
+  # EXIT_LEAD_GAIN x the excess further toward centre — but never more than the wheel is measured still out beyond the
+  # command (minus EXIT_LEAD_WHEEL_MARGIN_DEG: a wheel that has caught up gets nothing; in the logs the wheel is >= 1 deg
+  # beyond the command 1-2 s into 29-48 % of exits), than EXIT_LEAD_MAX_FRAC of the command itself (the request cannot
+  # cross centre and fades with the command) or than the speed cap (0 up to 70 km/h, half the entry boost's from 80).
+  # Bleeds at EXIT_LEAD_BLEED_DPS, under the MDPS rate floor, and is dropped (tau ENTRY_BOOST_FLIP_TAU_S) as soon as the
+  # command grows past its reference again. Same hands-off / blinker / passthrough gates as the entry boost; steerFlags
+  # bit 31 covers both. Unlike the plan-based early unwinding of Phase 55b (which ran curve ends 6-10 cm wide) it only
+  # follows a command that is ALREADY unwinding and a wheel that is measured behind it. Chain sim 70-90 km/h: exits
+  # 525 -> 480 ms, intent error and jerk unchanged. Kill: EXIT_LEAD_GAIN = 0.
+  EXIT_LEAD_GAIN             = 0.2
+  EXIT_LEAD_REF_TAU_S        = 1.0
+  EXIT_LEAD_DEADBAND_DEG     = 1.0
+  EXIT_LEAD_BLEED_DPS        = 0.5
+  EXIT_LEAD_WHEEL_MARGIN_DEG = 0.5
+  EXIT_LEAD_MAX_FRAC         = 0.5
+  EXIT_LEAD_SPEEDS_KPH       = [70.0, 80.0, 90.0, 120.0]
+  EXIT_LEAD_CAP_DEG          = [0.0, 1.5, 1.25, 1.0]
   # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
   # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
   #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel

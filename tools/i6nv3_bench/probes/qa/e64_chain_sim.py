@@ -20,9 +20,15 @@ FINAL_E = [0.2, 0.1, 0.0, 0.0, 0.0]
 TRUTH = json.load(open(f"{S}/qa/e59_params.json")); COMP = json.load(open(f"{S}/qa/e64_common_fold.json"))
 # E64_PLANT=rf: truth = E89 request-rate-floor plant (d, Kf, Kp, Kc, r0) per fold; default m1 = E59 (r0 = 0)
 PLANT = os.environ.get("E64_PLANT", "m1")
-if PLANT == "rf":
+if PLANT in ("rf", "rfw"):
   _rf = json.load(open(f"{S}/qa/e89_params.json"))
   TRUTH = {f"{fo}{i}": _rf.get(f"RF{fo}{i}", _rf.get(f"RF{i}")) for fo in "AB" for i in range(1, 6)}
+# E64_PLANT=rfw (E131, report §91.6): RF + the wake rule for a wheel at rest — the motion RF would give is held back as
+# pending until the request has pushed for T_w seconds, then released with time constant tau_r (T_w, tau_r per speed band)
+WAKE = None
+if PLANT == "rfw":
+  _w = json.load(open(f"{S}/qa/e131_params.json"))
+  WAKE = [(55.0, *_w["30-55"]), (70.0, *_w["55-70"]), (1e9, *_w["70-200"])]
 COMMITS = tuple(os.environ.get("E64_COMMITS", "a0108a47b,98e912d3d,8de98262a").split(","))
 CENT = [35.0, 47.5, 62.5, 80.0, 100.0]
 BANDS = [(30, 40), (40, 55), (55, 70), (70, 90), (90, 200)]
@@ -94,6 +100,7 @@ def run(args):
       CCP.MDPS_COMP_LEAK_TAU_S = 1e9; CCP.MDPS_COMP_FREEZE = False; CCP.MDPS_COMP_GMAX_V = [6.0] * 5
     a0 = max(a - 300, 0)
     sim = Sim(); w = float(d['ang'][a0]); hist = []; W = []
+    pend = 0.0; push = 0.0; stuck = WAKE is not None; rest_n = 0; wh = [w]      # rfw wake-rule state
     for k in range(a0, b):
       vk = float(d['v'][k]); closed = k >= a
       wheel = w if closed else float(d['ang'][k])
@@ -116,7 +123,25 @@ def run(args):
           du = 0.5 * (dz(r1) + dz(r2)) * 0.01   # increment of the rate-floored target over this 10 ms step
         else:
           du = u1 - u2
-        w = w + 0.01 * (g * (pt[1] * du / 0.01 + pt[2] * (u1 - w)) - pt[3] * w)
+        inc = 0.01 * g * (pt[1] * du / 0.01 + pt[2] * (u1 - w)); cen = -0.01 * pt[3] * w
+        if WAKE is None:
+          w = w + inc + cen
+        else:
+          tw, taur = next((x[1], x[2]) for x in WAKE if vk < x[0])
+          if tw > 0.0 and stuck:
+            if pend * inc < 0.0:
+              push = 0.0
+            pend += inc
+            push = push + 0.01 if abs(pend) >= 0.05 else max(push - 0.01, 0.0)
+            w += cen
+            if push >= tw:
+              stuck = False; push = 0.0
+          else:
+            rel = pend * min(0.01 / max(taur, 0.01), 1.0); pend -= rel; w += inc + rel + cen
+          wh.append(w); rest = abs(w - wh[-31]) < 0.15 if len(wh) > 31 else True
+          rest_n = rest_n + 1 if rest else 0
+          if tw > 0.0 and not stuck and rest_n >= 50 and abs(pend) < 0.1:
+            stuck = True; push = 0.0
         W.append(w)
       else:
         w = float(d['ang'][k])

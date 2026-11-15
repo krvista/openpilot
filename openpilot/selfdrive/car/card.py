@@ -9,6 +9,7 @@ from openpilot.cereal import log, custom
 from opendbc.car.structs import car
 
 from openpilot.common.params import Params
+from openpilot.common import stock_lfa_capture
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
@@ -145,7 +146,13 @@ class Car:
     self.dynamic_experimental_control = self.params.get_bool("DynamicExperimentalControl")
 
     openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
-    controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
+    # i6n Phase 70: stock-LFA capture — this drive runs passive (panda noOutput, the factory camera stays connected,
+    # logging as usual); see common/stock_lfa_capture.py
+    self.stock_lfa_capture = stock_lfa_capture.capture_requested(self.params)
+    if self.stock_lfa_capture:
+      cloudlog.warning("stock LFA capture: this drive runs passive")
+    controller_available = stock_lfa_capture.controller_allowed(self.CI.CC is not None, openpilot_enabled_toggle,
+                                                                self.stock_lfa_capture, self.CP.dashcamOnly)
     self.CP.passive = not controller_available or self.CP.dashcamOnly
     if self.CP.passive:
       safety_config = structs.CarParams.SafetyConfig()

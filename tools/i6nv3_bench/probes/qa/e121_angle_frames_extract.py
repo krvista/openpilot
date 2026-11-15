@@ -1,7 +1,8 @@
 """E121 (report §91): the angle signals on the bus, per rlog segment file -> npz at 100 Hz (MDPS 0xEA timestamps):
 STEERING_SENSORS.STEERING_ANGLE (what carState / control use), MDPS.STEERING_ANGLE, MDPS.STEERING_ANGLE_2, MDPS column and
 output torque, MDPS angle-mode active; the op request (sendcan 0x110 angle / gain / active) and the stock camera's own
-0x110 (bus 2: angle / gain / active); vEgo, steeringPressed, latActive. argv: rlog out.npz"""
+0x110 (bus 2: angle / gain / active, bytes 7, 8, 13 and the low nibble of byte 9); vEgo, steeringPressed, latActive.
+n_tx = number of op 0x110 frames in the segment (0 in a stock-LFA capture drive, Phase 70). argv: rlog out.npz"""
 import sys
 import numpy as np
 from openpilot.tools.lib.logreader import LogReader
@@ -27,7 +28,7 @@ for m in LogReader(f):
         bus[1] = c.src
         dd = bytes(c.dat); sas.append((t, s16(dd[3], dd[4]) * 0.1, dd[5] * 4.0))
       elif c.src == 2 and c.address == 272 and len(c.dat) >= 13:
-        cam.append((t, *lk(bytes(c.dat)), c.dat[7]))
+        cam.append((t, *lk(bytes(c.dat)), c.dat[7], c.dat[8], c.dat[13], c.dat[9] & 0xF))
   elif w == "sendcan":
     for c in m.sendcan:
       if c.address == 272 and len(c.dat) >= 13:
@@ -46,5 +47,6 @@ def res(a, col, hold=False):
 np.savez_compressed(out, T=T, mdps1=M[:, 1], mdps2=M[:, 2], out_tq=M[:, 3], col_tq=M[:, 4], mdps_act=M[:, 5],
                     sas=res(sas, 1, True), sas_rate=res(sas, 2, True), tx=res(tx, 1, True), gain=res(tx, 2, True), tx_act=res(tx, 3, True),
                     cam=res(cam, 1, True), cam_gain=res(cam, 2, True), cam_act=res(cam, 3, True), cam_b7=res(cam, 4, True),
+                    cam_b8=res(cam, 5, True), cam_b13=res(cam, 6, True), cam_b9lo=res(cam, 7, True), n_tx=np.array(len(tx)),
                     v=res(cs, 1), pressed=res(cs, 2, True), cs_ang=res(cs, 3, True), blinker=res(cs, 4, True), lat=res(cc, 1, True))
 print(out, len(T), "buses mdps/sas", bus)

@@ -11,6 +11,7 @@ import openpilot.cereal.messaging as messaging
 import openpilot.system.sentry as sentry
 from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag
+from openpilot.common import stock_lfa_capture
 from openpilot.common.text_window import TextWindow
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.system.manager.helpers import unblock_stdout, save_bootlog
@@ -158,6 +159,9 @@ def manager_thread() -> None:
     ignition = any(ps.ignitionLine or ps.ignitionCan for ps in sm['pandaStates'] if ps.pandaType != log.PandaState.PandaType.unknown)
     if ignition and not ignition_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+    # i6n Phase 70: the stock-LFA capture mode is for one drive — the ignition going off ends it
+    if stock_lfa_capture.on_ignition(params, ignition, ignition_prev):
+      cloudlog.warning("stock LFA capture: ended with the ignition")
 
     # update offroad state for services that don't subscribe to deviceState
     if started != started_prev:

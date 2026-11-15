@@ -291,12 +291,18 @@ _PLAN_T_IDXS = np.array(ModelConstants.T_IDXS, dtype=np.float64)
 # (k_plan = plan yaw rate / speed, REF = LOOKAHEAD_ORIENT_REF_T_S, the plan time closest to the action). extra(v) may be
 # negative (a chain faster than the model assumes). Faded in with the orient path (25-30 km/h), off in lane changes.
 # The 55c entry lead and everything downstream act on top of this base. Kill: LOOKAHEAD_DELAY_EXTRA_S all 0.
-LOOKAHEAD_DELAY_SPEEDS_MS = [35.0 / 3.6, 47.5 / 3.6, 62.5 / 3.6, 80.0 / 3.6, 100.0 / 3.6]
+# i6n Phase 69a (report §91.2, §92): the third breakpoint moved 62.5 -> 70 km/h and the first three steps raised 0.3 -> 0.5 s
+# (below). A wheel at rest needs ~0.9 s to start once the request moves, whatever the request rate, the gap or the
+# speed (71 hands-off entries) — a bigger or faster request does not shorten it, only an earlier one does; and corner
+# entries are 46-63 % of the driver's non-lane-change grabs. Total timing (Phase 68: max(model delay, 0.3 + E(v))) is
+# therefore 0.8 s up to 70 km/h and falls back to the learned delay (0.65-0.69 s) by 80 km/h, where the chain sim's
+# plant is right and more advance only costs intent error. Kill: speeds [.., 62.5 / 3.6, ..], EXTRA_S [0.3] * 5.
+LOOKAHEAD_DELAY_SPEEDS_MS = [35.0 / 3.6, 47.5 / 3.6, 70.0 / 3.6, 80.0 / 3.6, 100.0 / 3.6]
 # §67 picked 0.2 / 0.1 / 0 / 0 / 0 s with Phase 59 on. Phase 61 (§69): Phase 59 is off again (trim / kick layers), whose
 # chain is slower: full-chain sim E 0 / 0.1 / 0.2 / 0.3 s at all speeds -> intent error 0.854 / 0.836 / 0.828 / 0.827e-3,
 # model -> car delay 500 / 420 / 360 / 300 ms, lateral jerk p95 0.34 / 0.34 / 0.34 / 0.35 (31520b9 corners on the road:
 # car 639 ms behind the model at >= 55 km/h).
-LOOKAHEAD_DELAY_EXTRA_S = [0.3, 0.3, 0.3, 0.3, 0.3]
+LOOKAHEAD_DELAY_EXTRA_S = [0.5, 0.5, 0.5, 0.3, 0.3]
 LOOKAHEAD_DELAY_JERK = 2.5            # m/s^3 envelope for the delay-match shift
 # i6n Phase 64b (report §76): LOOKAHEAD_DELAY_EXTRA_S was tuned while the model was told a 0.3 s lateral delay (lagd
 # unestimated -> CP.steerActuatorDelay 0.1 + 0.2). Once lagd is estimated (Phase 64a: ~0.57 s on this car) modeld

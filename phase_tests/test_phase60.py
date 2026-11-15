@@ -77,4 +77,4 @@ def test_off_in_lane_change_and_below_the_orient_ramp():
 
 def test_shipped_table_shape():
   assert len(cd.LOOKAHEAD_DELAY_EXTRA_S) == len(cd.LOOKAHEAD_DELAY_SPEEDS_MS)
-  assert all(-0.3 <= e <= 0.3 for e in cd.LOOKAHEAD_DELAY_EXTRA_S)
+  assert all(cd.LOOKAHEAD_DELAY_EFF_CLIP[0] <= e <= cd.LOOKAHEAD_DELAY_EFF_CLIP[1] for e in cd.LOOKAHEAD_DELAY_EXTRA_S)   # Phase 69a: up to 0.5

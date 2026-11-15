@@ -38,6 +38,11 @@ class AlphaLongConfirmPage(NavScroller):
 # Same path/semantics as the comma 3X layout (sunnypilot/layouts/settings/developer.py), which is not used on comma 4.
 PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/openpilot/prebuilt"
 
+# i6n Phase 70: stock-LFA capture toggle (common/stock_lfa_capture.py holds the mode itself)
+STOCK_LFA_CAPTURE_PARAM = "StockLfaCapture"
+STOCK_LFA_CAPTURE_MAX_SPEED_MS = 0.3      # the toggle only switches while the car is stopped
+STOCK_LFA_CAPTURE_REFRESH_FRAMES = 20     # ~1 s at the comma 4 UI rate
+
 
 class DeveloperLayoutMici(NavScroller):
   def __init__(self):
@@ -98,6 +103,12 @@ class DeveloperLayoutMici(NavScroller):
     self._quickboot_toggle = BigToggle("quickboot mode", "skip the boot-time build check",
                                        initial_state=os.path.exists(PREBUILT_PATH),
                                        toggle_callback=self._on_quickboot_toggled)
+    # i6n Phase 70: one drive with openpilot passive so the factory LFA steers and is recorded (common/stock_lfa_capture.py).
+    # Ends by itself when the ignition goes off; switching restarts openpilot, so only while the car is stopped.
+    self._stock_capture_toggle = BigToggle("stock LFA capture", "this drive only: factory LFA steers, logs kept",
+                                           initial_state=ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM),
+                                           toggle_callback=self._on_stock_capture_toggled)
+    self._stock_capture_refresh_n = 0
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -109,6 +120,7 @@ class DeveloperLayoutMici(NavScroller):
       self._alpha_long_toggle,
       self._debug_mode_toggle,
       self._quickboot_toggle,
+      self._stock_capture_toggle,
     ])
 
     # Toggle lists
@@ -137,6 +149,9 @@ class DeveloperLayoutMici(NavScroller):
     for item in engaged_blocked_toggles:
       item.set_enabled(lambda: not ui_state.engaged)
 
+    # stock LFA capture: switching restarts openpilot (the relay hands the car over), so only when stopped
+    self._stock_capture_toggle.set_enabled(self._stock_capture_switchable)
+
     # Set initial state
     if ui_state.params.get_bool("ShowDebugInfo"):
       gui_app.set_show_touches(True)
@@ -147,6 +162,14 @@ class DeveloperLayoutMici(NavScroller):
   def _update_state(self):
     super()._update_state()
     self._ssh_fetcher.update()
+    self._refresh_stock_capture()
+
+  def _refresh_stock_capture(self):
+    """The capture mode ends outside this screen (ignition off): mirror the param about once a second."""
+    self._stock_capture_refresh_n += 1
+    if self._stock_capture_refresh_n >= STOCK_LFA_CAPTURE_REFRESH_FRAMES:
+      self._stock_capture_refresh_n = 0
+      self._stock_capture_toggle.set_checked(ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM))
 
   def show_event(self):
     super().show_event()
@@ -180,6 +203,19 @@ class DeveloperLayoutMici(NavScroller):
     if prebuilt_file != ui_state.params.get_bool("QuickBootToggle"):
       ui_state.params.put_bool("QuickBootToggle", prebuilt_file)
     self._quickboot_toggle.set_checked(prebuilt_file)
+    self._stock_capture_toggle.set_checked(ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM))
+
+  @staticmethod
+  def _stock_capture_switchable() -> bool:
+    """Offroad, or onroad with the car stopped and openpilot not engaged."""
+    if ui_state.is_offroad():
+      return True
+    cs = ui_state.sm["carState"]
+    return bool(not ui_state.engaged and (cs.standstill or cs.vEgo < STOCK_LFA_CAPTURE_MAX_SPEED_MS))
+
+  def _on_stock_capture_toggled(self, state: bool):
+    ui_state.params.put_bool(STOCK_LFA_CAPTURE_PARAM, state, block=True)
+    restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session right away
 
   def _on_quickboot_toggled(self, state: bool):
     try:
