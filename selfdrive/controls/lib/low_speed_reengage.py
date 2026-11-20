@@ -19,6 +19,10 @@ HOLD_MARGIN = 3.9    # m/s below minSteerSpeed that lateral holds to once active
 # Entry margin to fall back to when the EPS refuses a lower entry: 54.5 km/h on the WK2, where 103 entries on
 # routes 7e-8e went without a fault. Only a refusal at or above that speed falls back to minSteerSpeed itself.
 PROVEN_ENTRY_MARGIN = 2.5
+# Hold floor to fall back to when the EPS faults while holding below it: 52 km/h on the WK2, the floor since dbb1463
+# (no fault at it on any route since). The entry falls back with it, or lateral would engage below its own floor.
+PROVEN_HOLD_MARGIN = 3.0
+HOLD_FAULT_WINDOW = 1.0  # s after lateral was last active in which a fault below the proven floor still counts
 FAULT_WINDOW = 3.0   # s after a low-speed entry in which a steer fault counts as the EPS refusing it
 # Torque is ramped in after a low-speed entry. Routes 7e-87 (77a1df4, 59 entries, no faults): the request reached
 # 0.39 of full scale (p90 0.76) within 0.5 s of the entry and the car moved 0.12 m in 2 s, usually with the driver
@@ -41,7 +45,9 @@ class LowSpeedReengage:
     self.min_steer_speed = CP.minSteerSpeed
     self.enabled = enabled
     self.entry_margin = ENTRY_MARGIN  # shrinks after a refused entry, restored above minSteerSpeed
+    self.hold_margin = HOLD_MARGIN    # likewise after a fault while holding below the proven floor
     self.entry_speed = 0.
+    self.since_active = 1e3           # s since lateral was last active
     self.entry_timer = 0.   # s since the last low-speed entry, while inside FAULT_WINDOW
     self.torque_scale = 1.  # multiplies the lateral torque request; ramps 0 -> 1 after a low-speed entry
     self.lat_active_prev = False
@@ -52,7 +58,7 @@ class LowSpeedReengage:
     if not self.applies:
       return max(self.min_steer_speed, 0.3)
     if self.lat_active_prev:
-      return max(self.min_steer_speed - HOLD_MARGIN, 0.3)
+      return max(self.min_steer_speed - self.hold_margin, 0.3)
     if self.enabled:
       return max(self.min_steer_speed - self.entry_margin, 0.3)
     return max(self.min_steer_speed, 0.3)
@@ -73,8 +79,15 @@ class LowSpeedReengage:
       below_proven = self.entry_speed < self.min_steer_speed - PROVEN_ENTRY_MARGIN
       self.entry_margin = min(self.entry_margin, PROVEN_ENTRY_MARGIN) if below_proven else 0.
       self.entry_timer = 0.
+    # fault while holding (or just after dropping out) below the proven hold floor: hold only to that floor
+    self.since_active = 0. if (lat_active or self.lat_active_prev) else self.since_active + DT_CTRL
+    if steer_fault and not self.fault_prev and self.since_active < HOLD_FAULT_WINDOW \
+       and v_ego < self.min_steer_speed - PROVEN_HOLD_MARGIN:
+      self.hold_margin = PROVEN_HOLD_MARGIN
+      self.entry_margin = min(self.entry_margin, PROVEN_ENTRY_MARGIN)
     if v_ego > self.min_steer_speed:
       self.entry_margin = ENTRY_MARGIN
+      self.hold_margin = HOLD_MARGIN
 
     self.lat_active_prev = lat_active
     self.fault_prev = steer_fault

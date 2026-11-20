@@ -49,6 +49,35 @@ class TestLowSpeedReengage:
     run(lsr, 13.0)                       # dip below the hold floor
     assert run(lsr, 14.5)
 
+  def test_fault_while_holding_low_falls_back_to_proven_hold_floor(self):
+    lsr = LowSpeedReengage(WK2)
+    assert run(lsr, 17.6)
+    assert run(lsr, 14.0, frames=50)     # holding below the proven floor (14.5)
+    assert not run(lsr, 14.0, fault=True)
+    run(lsr, 14.0, frames=300)           # fault clears
+    assert not run(lsr, 14.6)            # entry fell back with it (15.0), not below its own hold floor
+    assert run(lsr, 15.1)
+    assert run(lsr, 14.6)                # holds to the proven floor
+    assert not run(lsr, 14.4)            # but no further
+    assert run(lsr, 17.6)                # above minSteerSpeed restores both
+    assert run(lsr, 13.7)
+    # a fault in the proven part of the hold band changes nothing
+    lsr = LowSpeedReengage(WK2)
+    run(lsr, 17.6)
+    run(lsr, 15.5, frames=50)
+    run(lsr, 15.5, fault=True)
+    run(lsr, 15.5, frames=300)
+    assert run(lsr, 14.3)                # low entry still allowed
+    assert run(lsr, 13.7)                # and the low hold
+    # a fault in the wind-down just after dropping below the floor counts too
+    lsr = LowSpeedReengage(WK2)
+    run(lsr, 17.6)
+    run(lsr, 13.7, frames=20)
+    assert not run(lsr, 13.4, frames=30)
+    run(lsr, 13.4, fault=True)
+    run(lsr, 13.4, frames=300)
+    assert not run(lsr, 14.6)
+
   def test_late_fault_does_not_lock_out(self):
     lsr = LowSpeedReengage(WK2, enabled=True)
     assert run(lsr, 15.5)
