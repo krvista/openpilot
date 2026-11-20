@@ -32,17 +32,22 @@ class TestLowSpeedReengage:
     assert run(lsr, 13.7)                # then the -3.9 hold applies
     assert not run(lsr, 13.5)
 
-  def test_fault_after_low_entry_locks_out_until_min_steer_speed(self):
+  def test_refused_entry_falls_back_to_proven_speed_then_min_steer_speed(self):
     lsr = LowSpeedReengage(WK2, enabled=True)
-    assert run(lsr, 15.5)                # low-speed entry
-    run(lsr, 15.5, frames=50)
-    assert not run(lsr, 15.5, fault=True)  # EPS refuses within the window
-    run(lsr, 15.5, frames=300)           # fault clears
-    assert not run(lsr, 15.5)            # locked out
-    assert not run(lsr, 17.0)
-    assert run(lsr, 17.6)                # above minSteerSpeed: normal entry, lockout cleared
+    assert run(lsr, 14.5)                # entry below the proven speed (15.0)
+    run(lsr, 14.5, frames=50)
+    assert not run(lsr, 14.5, fault=True)  # EPS refuses within the window
+    run(lsr, 14.5, frames=300)           # fault clears
+    assert not run(lsr, 14.5)            # no retry down here
+    assert not run(lsr, 14.9)
+    assert run(lsr, 15.1)                # but from the proven speed, not only above minSteerSpeed
+    run(lsr, 15.1, frames=50)
+    assert not run(lsr, 15.1, fault=True)  # refused there too
+    run(lsr, 15.1, frames=300)
+    assert not run(lsr, 17.0)            # now only above minSteerSpeed
+    assert run(lsr, 17.6)                # which also restores the low entry
     run(lsr, 13.0)                       # dip below the hold floor
-    assert run(lsr, 15.5)                # allowed to try low again
+    assert run(lsr, 14.5)
 
   def test_late_fault_does_not_lock_out(self):
     lsr = LowSpeedReengage(WK2, enabled=True)
