@@ -38,10 +38,18 @@ class AlphaLongConfirmPage(NavScroller):
 # Same path/semantics as the comma 3X layout (sunnypilot/layouts/settings/developer.py), which is not used on comma 4.
 PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/openpilot/prebuilt"
 
-# i6n Phase 70: stock-LFA capture toggle (common/stock_lfa_capture.py holds the mode itself)
-STOCK_LFA_CAPTURE_PARAM = "StockLfaCapture"
-STOCK_LFA_CAPTURE_MAX_SPEED_MS = 0.3      # the toggle only switches while the car is stopped
-STOCK_LFA_CAPTURE_REFRESH_FRAMES = 20     # ~1 s at the comma 4 UI rate
+# i6n Phase 70 / 70b: stock-LFA capture (common/stock_lfa_capture.py holds the mode itself). Two toggles after quickboot:
+#   "stock LFA capture"    switches NOW (car stopped, openpilot not engaged): openpilot restarts passive and the factory LFA
+#                          steers until the ignition goes off. manager releases the harness relay before openpilot stops
+#                          sending (common/relay_first_stop.py) - the order a pulled comma cable has.
+#   "stock LFA next start" arms the NEXT ignition on instead: that drive is passive from its first second and nothing is
+#                          switched while driving - the fallback if switching now still brings ADAS warnings.
+STOCK_LFA_CAPTURE_PARAM = "StockLfaCapture"            # this drive
+STOCK_LFA_CAPTURE_NEXT_PARAM = "StockLfaCaptureNext"   # armed: the next drive
+STOCK_LFA_CAPTURE_MAX_SPEED_MS = 0.3                   # "capture" only switches while the car is stopped
+STOCK_LFA_CAPTURE_REFRESH_FRAMES = 20                  # ~1 s at the comma 4 UI rate
+STOCK_LFA_CAPTURE_TEXT = {False: "this drive only: factory LFA steers, logs kept", True: "on: ends when the ignition goes off"}
+STOCK_LFA_NEXT_TEXT = {False: "next start only: nothing switches mid-drive", True: "armed: the next ignition on starts it"}
 
 
 class DeveloperLayoutMici(NavScroller):
@@ -103,11 +111,15 @@ class DeveloperLayoutMici(NavScroller):
     self._quickboot_toggle = BigToggle("quickboot mode", "skip the boot-time build check",
                                        initial_state=os.path.exists(PREBUILT_PATH),
                                        toggle_callback=self._on_quickboot_toggled)
-    # i6n Phase 70: one drive with openpilot passive so the factory LFA steers and is recorded (common/stock_lfa_capture.py).
-    # Ends by itself when the ignition goes off; switching restarts openpilot, so only while the car is stopped.
-    self._stock_capture_toggle = BigToggle("stock LFA capture", "this drive only: factory LFA steers, logs kept",
-                                           initial_state=ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM),
+    # i6n Phase 70 / 70b: one drive with openpilot passive so the factory LFA steers and is recorded
+    # (common/stock_lfa_capture.py). "capture" switches now and restarts openpilot, so only while the car is stopped;
+    # "next start" arms the next ignition on. Either way the mode ends by itself when the ignition goes off.
+    _sc_on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM)
+    _sn_on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_NEXT_PARAM)
+    self._stock_capture_toggle = BigToggle("stock LFA capture", STOCK_LFA_CAPTURE_TEXT[_sc_on], initial_state=_sc_on,
                                            toggle_callback=self._on_stock_capture_toggled)
+    self._stock_next_toggle = BigToggle("stock LFA next start", STOCK_LFA_NEXT_TEXT[_sn_on], initial_state=_sn_on,
+                                        toggle_callback=self._on_stock_next_toggled)
     self._stock_capture_refresh_n = 0
 
     self._scroller.add_widgets([
@@ -121,6 +133,7 @@ class DeveloperLayoutMici(NavScroller):
       self._debug_mode_toggle,
       self._quickboot_toggle,
       self._stock_capture_toggle,
+      self._stock_next_toggle,
     ])
 
     # Toggle lists
@@ -165,11 +178,20 @@ class DeveloperLayoutMici(NavScroller):
     self._refresh_stock_capture()
 
   def _refresh_stock_capture(self):
-    """The capture mode ends outside this screen (ignition off): mirror the param about once a second."""
+    """The capture mode starts and ends outside this screen (with the ignition): mirror the params about once a second."""
     self._stock_capture_refresh_n += 1
     if self._stock_capture_refresh_n >= STOCK_LFA_CAPTURE_REFRESH_FRAMES:
       self._stock_capture_refresh_n = 0
-      self._stock_capture_toggle.set_checked(ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM))
+      self._show_stock_capture()
+
+  def _show_stock_capture(self):
+    on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM)
+    armed = ui_state.params.get_bool(STOCK_LFA_CAPTURE_NEXT_PARAM)
+    for tog, checked, text in ((self._stock_capture_toggle, on, STOCK_LFA_CAPTURE_TEXT[on]),
+                               (self._stock_next_toggle, armed, STOCK_LFA_NEXT_TEXT[armed])):
+      tog.set_checked(checked)
+      if tog.get_value() != text:   # the label is laid out again on every change of the text only
+        tog.set_value(text)
 
   def show_event(self):
     super().show_event()
@@ -203,7 +225,7 @@ class DeveloperLayoutMici(NavScroller):
     if prebuilt_file != ui_state.params.get_bool("QuickBootToggle"):
       ui_state.params.put_bool("QuickBootToggle", prebuilt_file)
     self._quickboot_toggle.set_checked(prebuilt_file)
-    self._stock_capture_toggle.set_checked(ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM))
+    self._show_stock_capture()
 
   @staticmethod
   def _stock_capture_switchable() -> bool:
@@ -215,7 +237,12 @@ class DeveloperLayoutMici(NavScroller):
 
   def _on_stock_capture_toggled(self, state: bool):
     ui_state.params.put_bool(STOCK_LFA_CAPTURE_PARAM, state, block=True)
-    restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session right away
+    restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session; manager lets the relay go first
+    self._show_stock_capture()
+
+  def _on_stock_next_toggled(self, state: bool):
+    ui_state.params.put_bool(STOCK_LFA_CAPTURE_NEXT_PARAM, state, block=True)   # the next ignition on; nothing changes now
+    self._show_stock_capture()
 
   def _on_quickboot_toggled(self, state: bool):
     try:

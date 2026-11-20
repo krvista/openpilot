@@ -178,7 +178,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"OnroadUploads", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"QuickBootToggle", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"QuickBootAuto", {PERSISTENT | BACKUP, BOOL, "1"}},  // i6n: re-create the prebuilt marker after every boot -> the scons check runs once per update only
-    {"StockLfaCapture", {CLEAR_ON_MANAGER_START, BOOL}},  // i6n Phase 70: this drive runs passive (factory LFA steers, logging on); manager removes it when the ignition goes off
+    {"StockLfaCapture", {CLEAR_ON_MANAGER_START, BOOL}},  // i6n Phase 70: this drive runs passive (factory LFA steers, logging on); manager sets it at ignition on when armed and removes it when the ignition goes off
+    {"StockLfaCaptureNext", {PERSISTENT, BOOL, "0"}},  // i6n Phase 70b: armed from the Developer screen - the NEXT ignition cycle is a stock-LFA capture drive
     {"QuietMode", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RainbowMode", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"RoadEdgeLaneChangeEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},

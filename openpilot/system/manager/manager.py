@@ -11,7 +11,7 @@ import openpilot.cereal.messaging as messaging
 import openpilot.system.sentry as sentry
 from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag
-from openpilot.common import stock_lfa_capture
+from openpilot.common import relay_first_stop, stock_lfa_capture
 from openpilot.common.text_window import TextWindow
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.system.manager.helpers import unblock_stdout, save_bootlog
@@ -145,23 +145,38 @@ def manager_thread() -> None:
 
   started_prev = False
   ignition_prev = False
+  relay_first = relay_first_stop.RelayFirstStop()
 
   while True:
     sm.update(1000)
 
-    started = sm['deviceState'].started
+    ignition = any(ps.ignitionLine or ps.ignitionCan for ps in sm['pandaStates'] if ps.pandaType != log.PandaState.PandaType.unknown)
+
+    # i6n Phase 70b: leaving onroad with the ignition on (onroad cycle, forced offroad) is acted on one step later, once
+    # the panda has released the harness relay - openpilot's frames must not end before the camera's are back on the car
+    started = relay_first.update(sm['deviceState'].started, ignition, relay_first_stop.relay_released(sm['pandaStates']),
+                                 time.monotonic())
+    if relay_first.event is not None:
+      cloudlog.warning(f"relay-first stop: {relay_first.event}")
+    if relay_first.retry:
+      params.put_bool("OnroadCycleRequested", True)
 
     if started and not started_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
     elif not started and started_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
+      # i6n Phase 70b: pandad reads deviceState by itself and can see the next onroad edge before the clear above has run
+      # for it; with the ended session's gates still set it would arm that session's safety mode (relay in intercept)
+      for gate in relay_first_stop.SESSION_GATES:
+        params.remove(gate)
 
-    ignition = any(ps.ignitionLine or ps.ignitionCan for ps in sm['pandaStates'] if ps.pandaType != log.PandaState.PandaType.unknown)
     if ignition and not ignition_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
-    # i6n Phase 70: the stock-LFA capture mode is for one drive — the ignition going off ends it
-    if stock_lfa_capture.on_ignition(params, ignition, ignition_prev):
-      cloudlog.warning("stock LFA capture: ended with the ignition")
+    # i6n Phase 70 / 70b: the stock-LFA capture mode starts and ends with the ignition (an armed capture becomes this
+    # drive's mode here, before ensure_running starts card; the ignition going off ends it)
+    _slc = stock_lfa_capture.on_ignition(params, ignition, ignition_prev)
+    if _slc is not None:
+      cloudlog.warning(f"stock LFA capture: {_slc} with the ignition")
 
     # update offroad state for services that don't subscribe to deviceState
     if started != started_prev:

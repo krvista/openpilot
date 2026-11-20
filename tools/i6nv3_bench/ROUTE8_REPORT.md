@@ -2380,3 +2380,59 @@ EPS press 시작(직전 1.5 s 무접촉, op 조향 중, ≥ 30 km/h)을 차로 �
 - `test_phase69.py` 25 개(총 시점 11 개: 출하값·속도별 9 점·kill, 탈출 리드 9 개: 뒤처진 핸들에만·핸들 여유 상한·중심 불침범·진입에 없음·블리드·재진입 시 제거·속도표·손/깜빡이/저속/70 km/h/kill, 트림 속도 5 개), `test_phase70.py` 18 개(판정·kill, 시동 하강 에지 해제, 파라미터 플래그, 토글 → 파라미터 + 재시작, 정차 중에만, 파라미터 미러, quickboot 다음 위치). 전체 **589 통과**.
 - **위험.** ① 63–69 가 한 번도 실차를 달리지 않은 채 쌓였다 — 첫 주행에서 이상하면 69 → 68 → 63 순으로 kill. ② 30–55 km/h 탈출이 조금 이를 수 있다(시뮬 RF 270 ms, RFW 360 ms, 목표 375) — 시내 커브 끝에서 바깥으로 밀리면 `LOOKAHEAD_DELAY_EXTRA_S` 앞 두 구간을 0.4 로. ③ 69c 는 저장 간격(TX − 핸들)을 더 빨리 키운다(개루프 트림 중앙값 +1°) — 손이 닿을 때의 "휙"은 Phase 58 상한(6°)이 막지만 빈도를 볼 것. ④ 수집 모드 전환 순간 0x110 송신자가 바뀌어 계기판 경고가 한 번 뜰 수 있다(시동 직후 정차 상태에서 전환 권장).
 - **실차 확인.** `e125`–`e128`(진입 개입·핸들/명령·출발 지연), `e136`(진입·탈출 시점: 진입 705 / 615 / 550 → 375 근처로, 탈출 500 / 580 → 375 근처로), `e134` 와 같은 지표의 실측(트림 크기·와인드업·급변), 60 km/h 이상 직선 흔들림.
+
+
+## 93. Phase 70b — 순정 LFA 수집 전환의 ADAS 경고: 원인 후보와 대책 (11-21, 이 차의 새 로그 없음)
+
+### 93.1 무슨 일이 있었나 · 가진 데이터
+
+- **보고.** b62f36a0 에서 `stock LFA capture` 를 켜자 계기판에 하이빔 보조·전방/측방 안전·차로 안전·속도 제한·부주의 운전 경고 "점검"이 함께 떴다. 같은 차에서 **주행 중 comma 배선을 뽑으면 경고 없이 순정 ADAS 로 돌아간다**.
+- **로그.** 그 주행의 로그는 없다. `ccnc-drivelog` 의 마지막 커밋은 11-10 21:25 KST 이고 가장 새 루트는 7f(bf36aa2) 그대로다. 11-20 17:31–17:49 KST 에 올라온 5 루트(88·89·8a·8d·8e)는 `wk2-drivelog` — dongle 99b215d21bbf8735, JEEP_GRAND_CHEROKEE_2019, 브랜치 wk2-fixes-release-mici — 로 다른 차다(첫 구간을 받아 확인). 따라서 아래 원인은 코드와 기존 로그로 좁힌 **추정**이다.
+- 경고 묶음은 §74.1(7e, 시동 직후)과 같은 계열(전방 카메라 기능 전체)이다. 그때는 openpilot 이 한 프레임도 보내기 전이었다.
+
+### 93.2 배선 분리와 토글 경로의 차이는 순서
+
+"주행 중 넘겨주기 자체가 ADAS 제어기를 건드린다"는 처음 설명(§92.8 위험 ④)은 배선 분리 관찰로 기각된다 — 같은 넘겨주기인데 경고가 없다. 두 경로를 코드로 따라가면 다른 것은 순서다.
+
+| 경로 | openpilot 의 0x110 / 0x362 가 끝나는 때 | 릴레이가 풀리는 때 | 차가 둘 다 못 받는 시간 |
+|---|---|---|---|
+| 배선 분리 | 분리 순간 | 같은 순간(릴레이 코일 전원 소실) | 릴레이 전환 시간(수 ms) |
+| 시동 off | manager 가 offroad 를 본 뒤 | 그보다 먼저 — pandad 가 시동 off 를 직접 보고 해제 | 없음(TX 는 panda 가 거부) |
+| 토글, Phase 70(onroad cycle) | manager 가 `deviceState.started = false` 를 받는 즉시 card 종료(10–20 ms) | pandad 가 같은 메시지를 10 Hz 상태 루프에서 읽은 뒤(0–0.1 s) | **최대 약 0.1 s — 0x110 최대 10 프레임, 0x362 최대 2 프레임** |
+| 토글, Phase 70b | 릴레이가 풀리고 0.1–0.6 s 뒤(해제 보고를 본 다음). 그동안 card 프레임은 panda 가 거부 | 0–0.1 s | 릴레이 전환 시간 |
+| `stock LFA next start` | 해당 없음 | 해당 없음(시동부터 통과) | 없음 |
+
+근거: `pandad.cc`(`is_onroad = deviceState.started`, `should_close_relay = !ignition_local || !is_onroad` → NO_OUTPUT, 상태 루프 10 Hz), panda `main.c`(SILENT / NOOUTPUT / ELM327 에서 `set_intercept_relay(false)`, 그 밖은 true, 모드가 바뀔 때마다 `can_init_all()`), `manager.py`(`ensure_running` 이 SIGINT 를 보내고 기다리지 않음), `hardwared.py`(`OnroadCycleRequested` → `ONROAD_CYCLE_TIME` 동안 started false).
+
+### 93.3 기존 로그로 확인한 것
+
+1. **시동이 켜진 채 재시작한 사례가 로그에 없다.** 로컬에 있는 15 루트의 첫 구간은 모두 콜드 부팅(시작 `logMonoTime` 22.2–27.5 s, 첫 안전 모드 elm327). 이 차가 "송신이 먼저 끊기고 릴레이가 나중에 풀리는" 순서를 겪은 기록은 이번 토글이 처음이다.
+2. **매 시동의 반대 방향 전환(카메라 → openpilot)에서 차가 견디는 공백**(`e138`, elm327 → hyundaiCanfd): 차 쪽 스트림의 최대 간격이 0x110 36–40 ms, 0x362 63–81 ms(7a·7c·7d·7f, 0x362 의 평상시 간격 55–66 ms). 모드가 바뀌는 동안 panda 자신도 CAN 컨트롤러를 다시 초기화하느라 수신을 못 하므로 이 값은 상한이다. Phase 70 토글의 공백은 pandad 의 틱 위상에 따라 0–100 ms 에 고르게 퍼지므로 절반 가량이 이보다 길다.
+3. **통과 모드에서 panda 가 버스를 방해한다는 근거는 없다**(`e137`). 7e(경고가 떠 있던 5 s, elm327): 송신 0, 오류 증가 0 / 0 / 0(수신 9163 / 16580 / 9156 프레임), REC·TEC 0, bus-off 0. 7d: elm327 10.7 s·hyundaiCanfd 16.4 s 모두 오류 증가 0.
+4. 7e 의 고장 신호(`e138`): FAULT_FCA / LSS / DAW / FSS / SLA = 1, ELK_SysFlrSta 3, LKA_SysWrn 15, DAW_SysSta 15 가 로그 첫 프레임부터 — 새 로그에서 같은 신호가 언제 서는지 볼 기준.
+
+### 93.4 두 번째 문제 — 재시작 때 릴레이가 다시 가로챌 수 있는 경합
+
+pandad 는 `FirmwareQueryDone` 과 `ControlsReady` 가 서 있으면 `CarParams` 의 안전 모드를 건다(`panda_safety.cc`). 두 파라미터는 `CLEAR_ON_ONROAD_TRANSITION` 이라 **끝난 세션의 값이 다음 onroad 에지에서 manager 가 지울 때까지 남는다.** 이 트리의 pandad 는 `deviceState` 를 직접 읽으므로, 에지 직후 pandad 의 10 Hz 틱이 manager 의 초기화보다 먼저 돌면 이전 세션의 `CarParams` 로 hyundaiCanfd 를 걸어 릴레이가 다시 가로챈다. 일반 재시작이면 card 가 뜰 때까지 몇 초, **passive 세션이면 주행 내내** 차에 0x110 / 0x362 가 없다 — passive card 는 `ControlsReady` 를 쓰지 않아(`controls_update` 안에서만 쓴다) pandad 가 다시 설정되지 않는다. manager 는 메시지에 바로 깨고 pandad 는 0–100 ms 뒤에 읽으므로 창은 수 ms 로 좁지만, 일어나면 증상이 이번 보고와 같다.
+
+같은 이유로 passive 세션의 panda 는 noOutput 이 아니라 **elm327** 에 머문다(§92.7 의 "panda noOutput" 정정). 릴레이 해제·송신 없음은 같다.
+
+### 93.5 구현
+
+- **릴레이 먼저**(`common/relay_first_stop.py`, `manager.py`). manager 가 `deviceState.started` 를 그대로 쓰지 않고 `RelayFirstStop.update(started, ignition, released, now)` 가 돌려준 값으로 움직인다. onroad 였고 시동이 켜져 있고 panda 가 아직 차 안전 모드면 offroad 전환을 한 루프 미룬다(프로세스 유지, 파라미터 초기화·`IsOffroad` 도 함께). 다음 루프에서 panda 가 silent / noOutput / elm327 을 보고하면 평소대로 offroad 처리. 대기 상한 0.8 s. 시동 off·panda 없음·이미 해제된 경우는 미루지 않는다. 미루는 동안 `deviceState` 가 다시 onroad 가 되면(멈춘 루프) 세션을 그대로 두고 onroad cycle 을 다시 요청한다(연속 2 회까지) — 그 시점엔 pandad 가 이미 그 세션을 다시 무장했으므로 종료하면 가로챈 채 송신이 끊긴다.
+- **세션 게이트 삭제**(`manager.py`). offroad 전환 때 `ControlsReady`·`FirmwareQueryDone` 을 지운다(§93.4).
+- **onroad cycle 2 s**(`hardwared.py`). 프로세스 종료가 최대 0.8 s 늦어지므로 재시작까지 1 s 이상 남도록 1 → 2 s. 부팅 직후 이 조건이 onroad 를 막는 시간은 1 s 그대로(카운터 초기값 −10 프레임).
+- **메뉴**(`mici/layouts/settings/developer.py`). `stock LFA capture`(지금, 정차·미인게이지에서만) 뒤에 `stock LFA next start`(다음 시동, 아무 때나). 둘 다 1 s 마다 파라미터를 다시 읽어 상태 문구를 바꾼다.
+- **다음 시동 예약**(`common/stock_lfa_capture.py`, `params_keys.h`). `StockLfaCaptureNext`(PERSISTENT) 를 manager 가 시동 상승 에지에서 `StockLfaCapture` 로 바꾸고 예약을 지운다 — `ensure_running` 보다 앞이라 card 가 처음부터 passive 로 뜬다. 장치가 시동마다 콜드 부팅해도 manager 의 첫 루프가 상승 에지다(`ignition_prev` 초기값 false). 하강 에지 해제는 그대로.
+
+토글(70b)의 시간 순서(`test_timeline_of_an_onroad_cycle` 과 같은 모델을 pandad 위상 34 × deviceState 위상 25 로 계산 — pandad 는 상태를 읽은 뒤에 모드를 바꾸므로 해제가 `pandaStates` 에 보이는 것은 다음 틱): T 에 started false → T + 0–0.10 s 릴레이 해제 → T + 0.11–0.69 s 프로세스 종료(해제 0.10–0.60 s 뒤, 항상 뒤) → T + 2.0 s 재시작(종료 뒤 1.31–1.89 s).
+
+### 93.6 테스트
+
+`test_phase70b.py` 31 개(해제 판정 7, panda 펌웨어·pandad 전제 2, 대기 로직 8: 통과·해제 뒤 종료·상한·놓친 창과 재요청·재요청 한도·시동 off·이미 해제·kill, 시간 순서 모델, 부팅 대기 불변, manager 배선, 게이트 삭제, **manager 루프 본문을 그대로 실행** 2: 넘겨주기 순서·예약이 card 보다 먼저, 예약 5: 상승 에지 활성화·그 주행 불변·콜드 부팅·kill·card 보다 앞, 메뉴 3), `test_phase70.py` 18 개(반환값·화면 갱신에 맞춰 수정). 전체 **620 통과**. `params_keys.h` 는 `params.h` 의 실제 타입 정의와 함께 clang++(-std=c++20)로 컴파일해 두 키와 플래그를 확인했다.
+
+### 93.7 한계 · 실차 확인
+
+- **추정이다.** 공백(§93.2)과 경합(§93.4) 가운데 어느 쪽이었는지, 둘 다 아닌지는 그 주행의 로그 없이는 가릴 수 없다. 배선 분리와 남는 차이는 panda 가 버스에 붙어 있고 모드 변경마다(noOutput → elm327) CAN 컨트롤러를 다시 초기화한다는 것 — 이것은 매 시동에도 있는 일이라 원인으로 보지 않았지만 배제된 것은 아니다.
+- **확인 순서.** ① 정차 → `stock LFA capture` → 경고 없이 "Dashcam Mode" 면 순정 LFA 로 주행. ② 경고가 또 뜨면 시동을 껐다 켜고 `stock LFA next start` → 시동 off / on 으로 수집. ③ 어느 쪽이든 `--profile ccnc` 로 업로드.
+- **새 로그에서 볼 것.** 전환한 루트의 마지막 0.5 s 에 넘겨주기가 들어 있다(loggerd 가 대기 동안 살아 있음): `e138` 로 차 쪽 0x110 / 0x362 공백(40 ms 이하인지), 우리 프레임이 "거부"로 바뀐 시각과 카메라 프레임이 차 쪽에 나타난 시각, CAN 오류 증가, 고장 신호가 서는 시각. 다음 루트 첫 구간에서 안전 모드가 elm327 로 유지되는지와 고장 신호. manager 로그 `relay-first stop: ...` 에 대기 시간이 남는다.

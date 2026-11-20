@@ -1,6 +1,7 @@
 """Phase 70 (report §92): stock-LFA capture mode. One drive with openpilot passive (panda noOutput, the factory camera
 stays connected, logging on) so the factory LFA steering this MDPS can be recorded; set from the comma 4 Developer
-screen (the toggle right after "quickboot mode"); ends by itself when the ignition goes off or the device boots."""
+screen (the toggle right after "quickboot mode"); ends by itself when the ignition goes off or the device boots.
+Phase 70b (the relay-first handover and the "next start" arming) is in test_phase70b.py."""
 import importlib
 import re
 import sys
@@ -20,6 +21,21 @@ class _Params:
   def get_bool(self, k): return bool(self.d.get(k, False))
   def put_bool(self, k, v, block=False): self.d[k] = bool(v)
   def remove(self, k): self.removed.append(k); self.d.pop(k, None)
+
+
+class _Tog:
+  """a toggle widget: what the screen shows"""
+  def __init__(self): self.checked = None; self.value = ""; self.layouts = 0
+  def set_checked(self, c): self.checked = c
+  def set_value(self, v): self.value = v; self.layouts += 1
+  def get_value(self): return self.value
+
+
+def _screen(dev, **kw):
+  """a Developer screen reduced to the two capture toggles"""
+  me = types.SimpleNamespace(_stock_capture_toggle=_Tog(), _stock_next_toggle=_Tog(), _stock_capture_refresh_n=0, **kw)
+  me._show_stock_capture = lambda: dev.DeveloperLayoutMici._show_stock_capture(me)
+  return me
 
 
 @pytest.fixture(autouse=True)
@@ -61,16 +77,16 @@ def test_card_uses_the_helper_for_the_passive_decision():
 # ---------------------------------------------------------------- one drive only
 def test_ignition_off_ends_the_mode():
   p = _Params({"StockLfaCapture": True})
-  assert slc.on_ignition(p, True, True) is False and p.get_bool("StockLfaCapture")       # ignition stays on
-  assert slc.on_ignition(p, True, False) is False and p.get_bool("StockLfaCapture")      # ignition coming on
-  assert slc.on_ignition(p, False, True) is True and not p.get_bool("StockLfaCapture")   # ignition going off
+  assert slc.on_ignition(p, True, True) is None and p.get_bool("StockLfaCapture")        # ignition stays on
+  assert slc.on_ignition(p, True, False) is None and p.get_bool("StockLfaCapture")       # ignition coming on
+  assert slc.on_ignition(p, False, True) == "ended" and not p.get_bool("StockLfaCapture")   # ignition going off
   assert p.removed == ["StockLfaCapture"]
-  assert slc.on_ignition(p, False, False) is False and p.removed == ["StockLfaCapture"]  # nothing left to clear
+  assert slc.on_ignition(p, False, False) is None and p.removed == ["StockLfaCapture"]   # nothing left to clear
 
 
 def test_ignition_off_without_the_mode_touches_nothing():
   p = _Params()
-  assert slc.on_ignition(p, False, True) is False and p.removed == []
+  assert slc.on_ignition(p, False, True) is None and p.removed == []
 
 
 def test_manager_calls_it_every_loop_and_boot_clears_the_param():
@@ -117,12 +133,15 @@ def dev(monkeypatch):
 def test_toggle_sets_the_param_and_restarts_openpilot(dev):
   dev.ui_state.params = _Params()
   dev.restart_needed_callback.reset_mock()
-  dev.DeveloperLayoutMici._on_stock_capture_toggled(types.SimpleNamespace(), True)
+  me = _screen(dev)
+  dev.DeveloperLayoutMici._on_stock_capture_toggled(me, True)
   assert dev.ui_state.params.get_bool("StockLfaCapture") is True
   dev.restart_needed_callback.assert_called_once()                # onroad cycle: takes effect on this drive
-  dev.DeveloperLayoutMici._on_stock_capture_toggled(types.SimpleNamespace(), False)
+  assert me._stock_capture_toggle.checked is True and me._stock_capture_toggle.value == dev.STOCK_LFA_CAPTURE_TEXT[True]
+  dev.DeveloperLayoutMici._on_stock_capture_toggled(me, False)
   assert dev.ui_state.params.get_bool("StockLfaCapture") is False
   assert dev.restart_needed_callback.call_count == 2              # and back to sunnypilot the same way
+  assert me._stock_capture_toggle.checked is False and me._stock_capture_toggle.value == dev.STOCK_LFA_CAPTURE_TEXT[False]
 
 
 @pytest.mark.parametrize("offroad, engaged, standstill, v, want", [
@@ -141,19 +160,19 @@ def test_toggle_only_switches_while_stopped(dev, offroad, engaged, standstill, v
 
 def test_toggle_mirrors_a_param_cleared_elsewhere(dev):
   dev.ui_state.params = _Params({"StockLfaCapture": False})
-  tog = MagicMock()
-  me = types.SimpleNamespace(_stock_capture_toggle=tog, _stock_capture_refresh_n=dev.STOCK_LFA_CAPTURE_REFRESH_FRAMES - 2)
+  me = _screen(dev); me._stock_capture_refresh_n = dev.STOCK_LFA_CAPTURE_REFRESH_FRAMES - 2
+  me._stock_capture_toggle.checked = True                         # the screen still shows the mode on
   dev.DeveloperLayoutMici._refresh_stock_capture(me)
-  tog.set_checked.assert_not_called()                             # not every frame
+  assert me._stock_capture_toggle.checked is True                 # not every frame
   dev.DeveloperLayoutMici._refresh_stock_capture(me)
-  tog.set_checked.assert_called_once_with(False)
+  assert me._stock_capture_toggle.checked is False                # the ignition went off: the param is gone
   assert me._stock_capture_refresh_n == 0
   assert "self._refresh_stock_capture()" in open(dev.__file__).read()
 
 
 def test_toggle_sits_right_after_quickboot(dev):
   src = open(dev.__file__).read()
-  assert re.search(r"self\._quickboot_toggle,\n\s+self\._stock_capture_toggle,\n\s+\]\)", src)
+  assert re.search(r"self\._quickboot_toggle,\n\s+self\._stock_capture_toggle,\n\s+self\._stock_next_toggle,\n\s+\]\)", src)
   assert 'BigToggle("stock LFA capture"' in src
   assert "self._stock_capture_toggle.set_enabled(self._stock_capture_switchable)" in src
   assert dev.STOCK_LFA_CAPTURE_PARAM == slc.PARAM
