@@ -126,7 +126,7 @@ class Controls(ControlsExt):
     # [-2.5, 0) with EPS motor torque tracking the command (corr 0.82, gain 80% of
     # >= minSteerSpeed), and 89 ramp-band frames in [-3.0, -2.5) with corr 0.93 / gain
     # 100%; the only steer faults coincided with driver override, not low-speed torque.
-    # LowSpeedReengage (on by default) also lets lateral re-engage from -2.5.
+    # Since then LowSpeedReengage owns both margins: hold to -3.9, fresh entry from -3.3 (see low_speed_reengage.py).
     min_lat_speed = self.low_speed_reengage.min_lat_speed(CS.vEgo)
     standstill = abs(CS.vEgo) <= min_lat_speed or CS.standstill
 

@@ -20,17 +20,17 @@ class TestLowSpeedReengage:
     lsr = LowSpeedReengage(WK2, enabled=False)
     assert not run(lsr, 16.0)            # no fresh entry below minSteerSpeed
     assert run(lsr, 17.6)                # entry above it
-    assert run(lsr, 14.6)                # hold down to -3.0
-    assert not run(lsr, 14.4)            # dropped below the hold floor
+    assert run(lsr, 13.7)                # hold down to -3.9
+    assert not run(lsr, 13.5)            # dropped below the hold floor
     assert not run(lsr, 16.0)            # and stays off until minSteerSpeed again
     assert run(lsr, 17.6)
 
   def test_on_reengages_from_entry_margin(self):
     lsr = LowSpeedReengage(WK2, enabled=True)
-    assert not run(lsr, 14.9)            # below -2.5: still off
-    assert run(lsr, 15.1)                # above -2.5: fresh engagement
-    assert run(lsr, 14.6)                # then the -3.0 hold applies
-    assert not run(lsr, 14.4)
+    assert not run(lsr, 14.1)            # below -3.3: still off
+    assert run(lsr, 14.3)                # above -3.3: fresh engagement
+    assert run(lsr, 13.7)                # then the -3.9 hold applies
+    assert not run(lsr, 13.5)
 
   def test_fault_after_low_entry_locks_out_until_min_steer_speed(self):
     lsr = LowSpeedReengage(WK2, enabled=True)
@@ -41,7 +41,7 @@ class TestLowSpeedReengage:
     assert not run(lsr, 15.5)            # locked out
     assert not run(lsr, 17.0)
     assert run(lsr, 17.6)                # above minSteerSpeed: normal entry, lockout cleared
-    run(lsr, 14.0)                       # dip below the hold floor
+    run(lsr, 13.0)                       # dip below the hold floor
     assert run(lsr, 15.5)                # allowed to try low again
 
   def test_late_fault_does_not_lock_out(self):
@@ -70,7 +70,7 @@ class TestLowSpeedReengage:
     # dropping out mid-ramp resets it
     lsr = LowSpeedReengage(WK2)
     run(lsr, 15.5, frames=20)
-    run(lsr, 14.0)
+    run(lsr, 13.0)
     assert lsr.torque_scale == 1.
 
   def test_other_brands_untouched(self):
@@ -89,4 +89,4 @@ class TestLowSpeedReengage:
 
   def test_default_on(self):
     lsr = LowSpeedReengage(WK2)
-    assert run(lsr, 15.1)
+    assert run(lsr, 14.3)

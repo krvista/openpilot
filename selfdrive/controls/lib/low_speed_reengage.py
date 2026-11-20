@@ -1,7 +1,7 @@
 from openpilot.common.realtime import DT_CTRL
 
 # On by default: let lateral re-engage below minSteerSpeed on Chrysler EPS units with a high minimum
-# steer speed. Once engaged the WK2 EPS keeps tracking torque down to minSteerSpeed - 3.0 (controlsd's hold), but
+# steer speed. Once engaged the WK2 EPS keeps tracking torque below minSteerSpeed (the hold, HOLD_MARGIN), but
 # after a dip below that floor lateral only came back above minSteerSpeed (63 km/h): WK2 drivelog 6a-7c spent 22%
 # of the time above 54 km/h (33.8 of 150 min, single stretches of 2 min) cruising with lateral off, mostly on
 # 60 km/h roads. Whether the EPS accepts a fresh LKAS request below 17.5 m/s is unknown (openpilot never asked);
@@ -9,8 +9,13 @@ from openpilot.common.realtime import DT_CTRL
 # the car is above minSteerSpeed again, so a refusing EPS faults once per dip, not repeatedly.
 # Turn off: echo 0 > /data/params/d/LowSpeedReengage (read every 5 s; missing = on).
 PARAM = "LowSpeedReengage"
-ENTRY_MARGIN = 2.5   # m/s below minSteerSpeed where a fresh engagement is requested (hold floor stays -3.0)
-HOLD_MARGIN = 3.0    # m/s, controlsd's existing hold floor below minSteerSpeed once lateral is active
+# Step 1 of lowering both (was entry -2.5 / hold -3.0 = 54.5 / 52 km/h on the WK2). Routes 7e-8e (77a1df4, 2a9aafd):
+# 103 entries at 54-58 km/h and 13 drops at the hold floor without a steer fault, and EPS motor torque follows the
+# applied torque the same at 50-54.5 km/h as above 63 (corr 0.97-0.98, gain ~255). opendbc documents assist down to
+# 13 m/s (46.8 km/h) once engaged; the carcontroller's LKAS bit floor (-4.3 = 47.5 km/h) stays above that.
+# UNVERIFIED: a fresh entry below 54 km/h and torque below 50 km/h have no data yet; the fault lockout covers a refusal.
+ENTRY_MARGIN = 3.3   # m/s below minSteerSpeed where a fresh engagement is requested (WK2: 51 km/h)
+HOLD_MARGIN = 3.9    # m/s below minSteerSpeed that lateral holds to once active (WK2: 49 km/h)
 FAULT_WINDOW = 3.0   # s after a low-speed entry in which a steer fault counts as the EPS refusing it
 # Torque is ramped in after a low-speed entry. Routes 7e-87 (77a1df4, 59 entries, no faults): the request reached
 # 0.39 of full scale (p90 0.76) within 0.5 s of the entry and the car moved 0.12 m in 2 s, usually with the driver
