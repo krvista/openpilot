@@ -1,4 +1,4 @@
-"""i6n Phase 70 / 70b (report §92-93): stock-LFA capture mode.
+"""i6n Phase 70 / 70b (report §92-94): stock-LFA capture mode.
 
 The drive logs hold no frame of the factory LFA actually steering this MDPS (§91.5: every camera 0x110 frame in them is
 a standby echo of the wheel angle). To record one, a drive is run with openpilot passive: card marks the car passive and
@@ -9,14 +9,13 @@ drive (the "Dashcam Mode" alert is shown).
 Two ways in, both from the comma 4 Developer screen (the two toggles after "quickboot mode"):
 
   "stock LFA capture" - now. Sets StockLfaCapture and asks for an onroad cycle: openpilot restarts into the passive session
-    on this drive. The first version of this switch left the car's camera features in "check system"; the cycle used to cut
-    openpilot's 0x110 / 0x362 up to 0.1 s before the relay gave the camera's back. 70b: manager waits for the relay to be
-    released before it stops openpilot (common/relay_first_stop.py) - the order a pulled comma cable has, which the car
-    takes without a warning - and drops the ended session's gates so pandad cannot re-arm the relay for the passive one.
+    on this drive. In the first version every such restart left the car's camera features in "check system": pandad armed
+    the ENDED session's safety mode again (relay in intercept) off params that outlived it, and the passive session sent
+    nothing. 70b: manager drops those params when a session ends (common/session_gates.py).
 
   "stock LFA next start" - armed. Sets StockLfaCaptureNext (persistent); manager turns it into StockLfaCapture on the rising
-    edge of the ignition, before card starts. That drive is passive from its first second: the relay is never switched and
-    openpilot never sends a frame. The fallback if switching now still brings warnings.
+    edge of the ignition, before card starts. That drive is passive from its first second: no restart, the relay is never
+    switched and openpilot never sends a frame. The fallback if switching now still brings warnings.
 
 Either way the mode is for ONE drive: StockLfaCapture is CLEAR_ON_MANAGER_START and manager removes it when the ignition
 goes off; the arming is used up when its drive starts.

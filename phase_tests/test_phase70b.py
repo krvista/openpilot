@@ -1,16 +1,17 @@
-"""Phase 70b (report §93): the stock-LFA capture switch without ADAS warnings.
- - leaving onroad with the ignition on, manager acts one step later: the panda releases the harness relay first and only
-   then are the onroad processes stopped (openpilot's 0x110 / 0x362 must not end before the camera's are back) - the
-   order a pulled comma cable has
+"""Phase 70b (report §93-94): the stock-LFA capture switch without ADAS warnings.
+ - the cause, measured on routes 8b-91: on every restart into the capture mode pandad armed the ENDED session's safety
+   mode again (harness relay in intercept) off ControlsReady / FirmwareQueryDone / CarParams that outlived it; the passive
+   session sent nothing, so the car had no LKAS_ALT / CAM_0x362 at all. manager now drops the two gates when a session ends
  - "stock LFA next start": the arming becomes the drive's mode on the rising edge of the ignition, so that drive never
-   switches the relay at all"""
+   restarts and never switches the relay"""
 import re
+import textwrap
 import types
 
 import pytest
 
 from phase_tests.harness import make_cp  # noqa: F401 (path setup side effect)
-import openpilot.common.relay_first_stop as rfs
+import openpilot.common.session_gates as sg
 import openpilot.common.stock_lfa_capture as slc
 from phase_tests import test_phase70 as t70
 from phase_tests.test_phase70 import _Params, _screen
@@ -22,210 +23,145 @@ REPO = __import__("os").path.dirname(__import__("os").path.dirname(__import__("o
 
 @pytest.fixture(autouse=True)
 def _restore():
-  old = (rfs.RELAY_FIRST_STOP, slc.STOCK_LFA_CAPTURE)
+  old = (sg.DROP_SESSION_GATES, slc.STOCK_LFA_CAPTURE)
   yield
-  rfs.RELAY_FIRST_STOP, slc.STOCK_LFA_CAPTURE = old
+  sg.DROP_SESSION_GATES, slc.STOCK_LFA_CAPTURE = old
 
 
-def _ps(mode, panda_type="cuatro"):
-  return types.SimpleNamespace(safetyModel=mode, pandaType=panda_type)
+# ---------------------------------------------------------------- pandad's safety setter, as panda_safety.cc has it
+class _PandaSafety:
+  """PandaSafety::configureSafetyMode / fetchCarParams (panda_safety.cc), line for line; the panda is a list of the
+  safety modes it was given."""
+
+  def __init__(self, params):
+    self.params = params; self.initialized = False; self.safety_configured = False; self.modes = ["noOutput"]
+
+  def configure(self, is_onroad):
+    if is_onroad and not self.safety_configured:
+      if not self.initialized:                       # updateMultiplexingMode(): elm327 for the fingerprinting
+        self.modes.append("elm327"); self.initialized = True
+      if self.params.get_bool("FirmwareQueryDone") and self.params.get_bool("ControlsReady"):   # fetchCarParams()
+        self.modes.append(self.params.d["CarParams"])                                            # setSafetyMode()
+        self.safety_configured = True
+    elif not is_onroad:
+      self.initialized = False; self.safety_configured = False
+
+  def offroad(self):                                 # send_panda_states(): should_close_relay
+    self.modes.append("noOutput")
+
+  @property
+  def relay_intercepts(self):
+    return self.modes[-1] not in ("silent", "noOutput", "elm327")
 
 
-# ---------------------------------------------------------------- is the relay out?
-@pytest.mark.parametrize("states, want", [
-  ([], True),                                             # no panda: nothing to wait for
-  ([_ps("hyundaiCanfd")], False),                         # car mode: the relay intercepts
-  ([_ps("noOutput")], True),
-  ([_ps("elm327")], True),
-  ([_ps("silent")], True),
-  ([_ps("hyundaiCanfd", "unknown")], True),               # a panda that is not there does not count
-  ([_ps("noOutput"), _ps("hyundaiCanfd")], False),        # every connected panda must have let go
-])
-def test_relay_released(states, want):
-  assert rfs.relay_released(states) is want
-
-
-def test_released_modes_are_the_ones_panda_releases_the_relay_in():
-  src = open(f"{REPO}/panda/board/main.c").read()
-  body = src[src.index("void set_safety_mode("):src.index("bool is_car_safety_mode(")]
+def test_the_model_is_what_pandad_does():
+  src = open(f"{REPO}/openpilot/selfdrive/pandad/panda_safety.cc").read()
+  body = src[src.index("void PandaSafety::configureSafetyMode(bool is_onroad) {"):src.index("// TODO-SP: Use structs instead of vector\nvoid PandaSafety::setSafetyMode")]
+  assert re.search(r"if \(is_onroad && !safety_configured_\) \{\s+updateMultiplexingMode\(\);\s+auto car_params = fetchCarParams\(\);\s+if \(!car_params\.empty\(\)\) \{", body)
+  assert re.search(r"setSafetyMode\(car_params\);\s+safety_configured_ = true;", body)
+  assert re.search(r"\} else if \(!is_onroad\) \{\s+initialized_ = false;\s+safety_configured_ = false;", body)
+  assert re.search(r"if \(!initialized_\) \{\s+prev_obd_multiplexing_ = false;\s+panda_->set_safety_model\(cereal::CarParams::SafetyModel::ELM327, 1U\);\s+initialized_ = true;", body)
+  assert re.search(r'if \(!params_\.getBool\("FirmwareQueryDone"\)\) \{\s+return \{\};', body)
+  assert re.search(r'if \(!params_\.getBool\("ControlsReady"\)\) \{\s+return \{\};', body)
+  assert 'return {params_.get("CarParams"), params_.get("CarParamsSP")};' in body
+  assert set(sg.SESSION_GATES) == {"ControlsReady", "FirmwareQueryDone"}
+  # pandad follows deviceState by itself (not a param manager writes after its own clear), at 10 Hz
+  pandad = open(f"{REPO}/openpilot/selfdrive/pandad/pandad.cc").read()
+  assert 'is_onroad = sm["deviceState"].getDeviceState().getStarted();' in pandad
+  assert "bool should_close_relay = !ignition_local || !is_onroad;" in pandad
+  # the modes the panda releases the relay in
+  main = open(f"{REPO}/panda/board/main.c").read()
+  fw = main[main.index("void set_safety_mode("):main.index("bool is_car_safety_mode(")]
   for case in ("SAFETY_SILENT", "SAFETY_NOOUTPUT", "SAFETY_ELM327"):
-    assert re.search(rf"case {case}:\s+set_intercept_relay\(false, false\);", body), case
-  assert re.search(r"default:\s+set_intercept_relay\(true, false\);", body)
-  assert set(rfs.RELAY_RELEASED_MODES) == {"silent", "noOutput", "elm327"}
-
-
-def test_pandad_releases_the_relay_off_devicestate_within_its_10hz_loop():
-  """what the hold waits for: pandad drops to noOutput when deviceState.started goes false, in its 10 Hz state loop"""
-  src = open(f"{REPO}/openpilot/selfdrive/pandad/pandad.cc").read()
-  assert 'is_onroad = sm["deviceState"].getDeviceState().getStarted();' in src
-  assert "bool should_close_relay = !ignition_local || !is_onroad;" in src
-  assert re.search(r"if \(should_close_relay && .*NO_OUTPUT\)\)\) \{\s+panda->set_safety_model\(cereal::CarParams::SafetyModel::NO_OUTPUT\);", src)
-  assert "if (rk.frame() % 10 == 0) {" in src and 'RateKeeper rk("pandad", 100);' in src
-
-
-# ---------------------------------------------------------------- the hold
-def test_started_passes_through_when_nothing_is_to_be_handed_over():
-  r = rfs.RelayFirstStop()
-  assert r.update(False, False, True, 0.0) is False and r.event is None      # boot, car off
-  assert r.update(False, True, True, 1.0) is False                           # ignition on, not onroad yet
-  assert r.update(True, True, True, 2.0) is True                             # onroad (elm327: still released)
-  assert r.update(True, True, False, 3.0) is True and r.hold_t0 is None      # openpilot has the relay
-  assert r.event is None
-
-
-def test_onroad_cycle_stops_the_processes_only_after_the_relay_is_out():
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 10.0)
-  # deviceState says offroad (onroad cycle), the panda still intercepts: openpilot keeps running
-  assert r.update(False, True, False, 10.5) is True and r.hold_t0 == 10.5
-  assert "holding" in r.event
-  # pandad has switched to noOutput: now manager may stop the processes
-  assert r.update(False, True, True, 11.0) is False and r.hold_t0 is None
-  assert "relay released" in r.event and "0.50 s" in r.event
-  assert r.update(False, True, True, 11.5) is False and r.event is None
-  assert r.update(True, True, True, 12.5) is True                             # the cycle is over: onroad again
-
-
-def test_hold_waits_no_longer_than_the_limit():
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 0.0)
-  assert r.update(False, True, False, 1.0) is True
-  assert r.update(False, True, False, 1.0 + rfs.RELAY_FIRST_HOLD_MAX_S - 0.01) is True
-  assert r.update(False, True, False, 1.0 + rfs.RELAY_FIRST_HOLD_MAX_S) is False and "timeout" in r.event
-  assert 0.3 <= rfs.RELAY_FIRST_HOLD_MAX_S <= 1.0     # pandad needs ~0.1 s; manager's loop is 2 Hz
-
-
-def test_missed_offroad_window_keeps_the_session_and_asks_again():
-  """a stalled loop: deviceState is onroad again while manager still holds. pandad has re-armed the running session by
-  then (relay in intercept), so stopping it now would cut its frames - it keeps running and a new cycle is asked for"""
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 0.0)
-  assert r.update(False, True, False, 1.0) is True and r.retry is False
-  assert r.update(True, True, False, 3.5) is True and r.retry is True and r.hold_t0 is None
-  assert "missed" in r.event and "new onroad cycle" in r.event
-  assert r.update(True, True, False, 4.0) is True and r.retry is False       # asked once
-  # the new cycle goes the normal way
-  assert r.update(False, True, False, 4.5) is True
-  assert r.update(False, True, True, 5.0) is False and r.retries == 0
-
-
-def test_missed_windows_do_not_ask_forever():
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 0.0)
-  asked = 0
-  for k in range(6):
-    assert r.update(False, True, False, 10.0 * k + 1.0) is True
-    assert r.update(True, True, False, 10.0 * k + 5.0) is True
-    asked += r.retry
-  assert asked == rfs.RELAY_FIRST_MAX_RETRIES == 2
-
-
-def test_session_gates_are_dropped_when_the_session_ends():
-  """pandad arms the safety mode on FirmwareQueryDone + ControlsReady and reads deviceState by itself: left set until the
-  clear at the next onroad edge, a pandad tick just before that clear would arm the ended session's CarParams"""
-  assert set(rfs.SESSION_GATES) == {"ControlsReady", "FirmwareQueryDone"}
-  pandad = open(f"{REPO}/openpilot/selfdrive/pandad/panda_safety.cc").read()
-  for gate in rfs.SESSION_GATES:
-    assert f'params_.getBool("{gate}")' in pandad
-  src = open(f"{REPO}/openpilot/system/manager/manager.py").read()
-  assert re.search(r"elif not started and started_prev:\n\s+params\.clear_all\(ParamKeyFlag\.CLEAR_ON_OFFROAD_TRANSITION\)\n(\s+#.*\n)+"
-                   r"\s+for gate in relay_first_stop\.SESSION_GATES:\n\s+params\.remove\(gate\)", src)
-  # a passive card never sets ControlsReady again, so nothing would correct a wrongly armed panda
+    assert re.search(rf"case {case}:\s+set_intercept_relay\(false, false\);", fw), case
+  assert re.search(r"default:\s+set_intercept_relay\(true, false\);", fw)
+  # the keys really live until the next onroad edge, and a passive card never sets ControlsReady again
+  keys = open(f"{REPO}/openpilot/common/params_keys.h").read()
+  for k in ("ControlsReady", "FirmwareQueryDone", "CarParams"):
+    m = re.search(r'\{"%s", \{([^}]*)\}\}' % k, keys)
+    assert m and "CLEAR_ON_ONROAD_TRANSITION" in m.group(1) and "CLEAR_ON_OFFROAD_TRANSITION" not in m.group(1), k
   card = open(f"{REPO}/openpilot/selfdrive/car/card.py").read()
   assert "if not self.CP.passive and initialized:\n      self.controls_update(" in card
   assert card.count('put_bool("ControlsReady", True)') == 1
   assert card.index("def controls_update") < card.index('put_bool("ControlsReady", True)') < card.index("  def step(self):")
 
 
-def test_ignition_off_is_not_held():
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 0.0)
-  assert r.update(False, False, False, 1.0) is False and r.hold_t0 is None    # pandad releases the relay by itself
-  r.update(True, True, False, 2.0)
-  assert r.update(False, True, False, 3.0) is True                            # an onroad cycle ...
-  assert r.update(False, False, False, 3.2) is False and "ignition off" in r.event   # ... and the key is turned
+def _restart(drop_gates, new_session_passive, old_session_passive=False, pandad_first=True):
+  """One onroad cycle with the ignition on. Returns the pandad model after the new session has come up."""
+  sg.DROP_SESSION_GATES = drop_gates
+  p = _Params({"CarParams": "hyundaiCanfd"})
+  ps = _PandaSafety(p)
+  # the session that is about to end
+  ps.configure(True)
+  p.put_bool("FirmwareQueryDone", True)
+  if not old_session_passive:
+    p.put_bool("ControlsReady", True)
+  ps.configure(True)
+  assert ps.relay_intercepts is (not old_session_passive)
+  # deviceState: offroad. manager's offroad transition, pandad's 10 Hz tick
+  sg.drop(p)
+  ps.offroad(); ps.configure(False)
+  assert not ps.relay_intercepts
+  # deviceState: onroad again. Who is first: pandad's tick, or manager's CLEAR_ON_ONROAD_TRANSITION?
+  def manager_clear():
+    for k in ("CarParams", "ControlsReady", "FirmwareQueryDone"):
+      p.remove(k)
+  if pandad_first:
+    ps.configure(True); manager_clear()
+  else:
+    manager_clear(); ps.configure(True)
+  early = ps.relay_intercepts                        # before the new card has sent a single frame
+  # the new card: fingerprint, CarParams; a passive one never reaches ControlsReady
+  p.d["CarParams"] = "noOutput" if new_session_passive else "hyundaiCanfd"
+  p.put_bool("FirmwareQueryDone", True); ps.configure(True)
+  if not new_session_passive:
+    p.put_bool("ControlsReady", True)
+  ps.configure(True)
+  return ps, early
 
 
-def test_no_hold_when_the_relay_is_already_out():
-  r = rfs.RelayFirstStop()
-  r.update(True, True, True, 0.0)            # a passive (capture) session: noOutput
-  assert r.update(False, True, True, 1.0) is False and r.hold_t0 is None and r.event is None
+def test_the_bug_pandad_rearms_the_ended_session():
+  """b62f36a0, routes 8c / 8e / 90: restart into the capture mode, pandad at the onroad edge before manager"""
+  ps, early = _restart(drop_gates=False, new_session_passive=True)
+  assert early and ps.relay_intercepts               # relay in intercept, and the passive session sends nothing: for good
+  assert ps.modes[-2:] == ["elm327", "hyundaiCanfd"]
+  # the same hole in a restart into a normal session, until its card is up
+  ps, early = _restart(drop_gates=False, new_session_passive=False)
+  assert early
 
 
-def test_kill_switch_restores_the_immediate_stop():
-  rfs.RELAY_FIRST_STOP = False
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 0.0)
-  assert r.update(False, True, False, 1.0) is False and r.hold_t0 is None
-  rfs.RELAY_FIRST_STOP = True
-  r = rfs.RelayFirstStop()
-  r.update(True, True, False, 0.0)
-  assert r.update(False, True, False, 1.0) is True              # holding ...
-  rfs.RELAY_FIRST_STOP = False
-  assert r.update(False, True, False, 1.1) is False and "disabled" in r.event   # ... and switched off meanwhile
+def test_the_bug_needs_pandad_to_win_the_race_and_a_session_that_set_controlsready():
+  ps, early = _restart(drop_gates=False, new_session_passive=True, pandad_first=False)
+  assert not early and not ps.relay_intercepts
+  # routes 8f / 91: the restarts OUT of the capture mode did not arm early - the passive session had not set ControlsReady
+  ps, early = _restart(drop_gates=False, new_session_passive=False, old_session_passive=True)
+  assert not early and ps.relay_intercepts and ps.modes[-2:] == ["elm327", "hyundaiCanfd"]
 
 
-def test_timeline_of_an_onroad_cycle():
-  """the whole handover on the real clocks: hardwared reports offroad at T for the cycle time; pandad releases the relay
-  at its next 10 Hz tick and the pandaStates of that tick still carries the old mode (the health is read before the
-  switch), so manager sees the release one tick later; manager's loop runs on deviceState (the edges plus 2 Hz). card
-  must be alive when the relay goes out, and the processes must keep a second to exit before they are started again."""
-  src = open(f"{REPO}/openpilot/system/hardware/hardwared.py").read()
-  cycle = float(re.search(r"^ONROAD_CYCLE_TIME = ([0-9.]+)", src, re.M).group(1))
-  assert cycle >= rfs.RELAY_FIRST_HOLD_MAX_S + 1.0
-  pandad = open(f"{REPO}/openpilot/selfdrive/pandad/pandad.cc").read()
-  body = pandad[pandad.index("std::optional<bool> send_panda_states("):pandad.index("void process_panda_state(")]
-  assert body.index("panda->get_state()") < body.index("should_close_relay") < body.index("fill_panda_state(ps, panda->hw_type, health)")
-  after = []; margin = []
-  for pandad_phase in (0.001, 0.02, 0.05, 0.08, 0.10):          # where pandad's 10 Hz tick falls after the edge
-    for ds_phase in (0.01, 0.1, 0.2, 0.3, 0.4, 0.5):            # where the 2 Hz deviceState falls after the edge
-      r = rfs.RelayFirstStop()
-      r.update(True, True, False, 0.0)
-      t_off = 1.0; t_release = t_off + pandad_phase; t_seen = t_release + 0.1; t_on = t_off + cycle
-      ticks = sorted({t_off, t_on} | {round(t_off + ds_phase + 0.5 * k, 3) for k in range(8)})
-      card_alive = True; t_stop = t_start = None
-      for t in ticks:
-        started = not (t_off <= t < t_on)
-        eff = r.update(started, True, t >= t_seen, t)
-        assert not r.retry
-        if card_alive and not eff:
-          card_alive = False; t_stop = t
-        elif not card_alive and eff and t_start is None:
-          t_start = t
-      assert t_stop is not None and t_start is not None, (pandad_phase, ds_phase)
-      after.append(t_stop - t_release); margin.append(t_start - t_stop)
-  assert min(after) >= 0.1                 # openpilot is still sending when the relay goes out, every time
-  assert max(after) <= 0.7                 # and is stopped soon after
-  assert min(margin) >= 1.0                # time for the processes to exit before the restart
+@pytest.mark.parametrize("pandad_first", [True, False])
+@pytest.mark.parametrize("old_passive", [False, True])
+def test_with_the_gates_dropped_pandad_waits_for_the_new_card(pandad_first, old_passive):
+  ps, early = _restart(drop_gates=True, new_session_passive=True, old_session_passive=old_passive, pandad_first=pandad_first)
+  assert not early and not ps.relay_intercepts       # capture session: elm327, the factory camera drives the car
+  assert ps.modes[-1] == "elm327"
+  ps, early = _restart(drop_gates=True, new_session_passive=False, old_session_passive=old_passive, pandad_first=pandad_first)
+  assert not early and ps.relay_intercepts           # normal session: armed by ITS card, not before
+  assert ps.modes[-2:] == ["elm327", "hyundaiCanfd"]
 
 
-def test_longer_onroad_cycle_does_not_delay_the_start_after_boot():
-  src = open(f"{REPO}/openpilot/system/hardware/hardwared.py").read()
-  cycle = float(re.search(r"^ONROAD_CYCLE_TIME = ([0-9.]+)", src, re.M).group(1))
-  assert "offroad_cycle_count = -int((ONROAD_CYCLE_TIME - 1) * SERVICE_LIST['pandaStates'].frequency)" in src
-  assert 'onroad_conditions["not_onroad_cycle"] = (sm.frame - offroad_cycle_count) >= ONROAD_CYCLE_TIME * SERVICE_LIST[\'pandaStates\'].frequency' in src
-  hz = 10
-  start = -int((cycle - 1) * hz)
-  assert next(f for f in range(100) if (f - start) >= cycle * hz) == 1 * hz          # boot: one second, as with the 1 s cycle
-  assert sum(1 for f in range(500, 600) if (f - 500) < cycle * hz) == cycle * hz     # a requested cycle: the full time
+def test_drop_removes_both_gates_and_nothing_else():
+  p = _Params({"ControlsReady": True, "FirmwareQueryDone": True, "CarParams": "x", "StockLfaCapture": True})
+  assert sg.drop(p) == ("ControlsReady", "FirmwareQueryDone")
+  assert p.removed == ["ControlsReady", "FirmwareQueryDone"] and set(p.d) == {"CarParams", "StockLfaCapture"}
+  sg.DROP_SESSION_GATES = False
+  p = _Params({"ControlsReady": True, "FirmwareQueryDone": True})
+  assert sg.drop(p) == () and p.removed == []
 
 
-def test_manager_acts_on_the_held_value_everywhere():
-  src = open(f"{REPO}/openpilot/system/manager/manager.py").read()
-  loop = src[src.index("  while True:\n    sm.update(1000)"):src.index("    # send managerState")]
-  assert "relay_first = relay_first_stop.RelayFirstStop()" in src
-  assert re.search(r"started = relay_first\.update\(sm\['deviceState'\]\.started, ignition, relay_first_stop\.relay_released\(sm\['pandaStates'\]\),\s+time\.monotonic\(\)\)", loop)
-  assert loop.count("sm['deviceState'].started") == 1                       # nothing in the loop reads the raw value
-  assert loop.index("ignition = any(") < loop.index("relay_first.update(") < loop.index("CLEAR_ON_OFFROAD_TRANSITION")
-  assert "ensure_running(managed_processes.values(), started, params=params" in loop
-  assert 'cloudlog.warning(f"relay-first stop: {relay_first.event}")' in loop
-  assert re.search(r"if relay_first\.retry:\n\s+params\.put_bool\(\"OnroadCycleRequested\", True\)", loop)
-
-
+# ---------------------------------------------------------------- manager's own loop body, run step by step
 def _run_manager_loop(steps, params):
-  """manager.py's own loop body (from sm.update to ensure_running), run step by step against a scripted deviceState /
-  pandaStates. Returns what was done in each step."""
-  import textwrap
+  """manager.py's loop body (from sm.update to ensure_running) against a scripted deviceState / pandaStates.
+  Returns what was done in each step."""
   src = open(f"{REPO}/openpilot/system/manager/manager.py").read()
   body = src[src.index("    sm.update(1000)\n"):src.index("    running = ' '.join(")]
   code = compile(textwrap.dedent(body), "manager_loop", "exec")
@@ -241,52 +177,54 @@ def _run_manager_loop(steps, params):
 
   p = _P(params)
   ns = dict(sm=_SM(), log=types.SimpleNamespace(PandaState=types.SimpleNamespace(PandaType=types.SimpleNamespace(unknown=unknown))),
-            relay_first=rfs.RelayFirstStop(), relay_first_stop=rfs, stock_lfa_capture=slc, params=p,
+            session_gates=sg, stock_lfa_capture=slc, params=p,
             ParamKeyFlag=types.SimpleNamespace(CLEAR_ON_ONROAD_TRANSITION="onroad", CLEAR_ON_OFFROAD_TRANSITION="offroad",
                                                CLEAR_ON_IGNITION_ON="ignition"),
             cloudlog=types.SimpleNamespace(warning=lambda m: done[-1].append(f"log {m}")),
-            time=types.SimpleNamespace(monotonic=lambda: ns["now"]), managed_processes={}, ignore=[],
+            managed_processes={}, ignore=[],
             ensure_running=lambda procs, started, **kw: done[-1].append(f"run {started} capture={slc.capture_requested(p)}"),
             started_prev=False, ignition_prev=False)
-  for now, started, ignition, mode in steps:
+  for started, ignition in steps:
     done.append([])
-    ns["now"] = now
     ns["sm"]["deviceState"] = types.SimpleNamespace(started=started)
     ns["sm"]["carParams"] = None
-    ns["sm"]["pandaStates"] = [types.SimpleNamespace(safetyModel=mode, pandaType="cuatro", ignitionLine=ignition, ignitionCan=False)]
+    ns["sm"]["pandaStates"] = [types.SimpleNamespace(pandaType="cuatro", ignitionLine=ignition, ignitionCan=False)]
     exec(code, ns)
   return done, p
 
 
-def test_manager_loop_hands_the_car_over_relay_first():
+def test_manager_loop_drops_the_gates_as_the_session_ends():
   done, p = _run_manager_loop([
-    (0.0, False, False, "noOutput"),        # 0 device up, car off
-    (0.5, False, True, "noOutput"),         # 1 ignition on
-    (1.0, True, True, "elm327"),            # 2 onroad
-    (9.0, True, True, "hyundaiCanfd"),      # 3 openpilot has the relay
-    (20.0, False, True, "hyundaiCanfd"),    # 4 onroad cycle asked: deviceState offroad, the relay still in intercept
-    (20.5, False, True, "noOutput"),        # 5 pandad has let it go
-    (21.0, False, True, "noOutput"),        # 6
-    (22.0, True, True, "elm327"),           # 7 the cycle is over
+    (False, False),     # 0 device up, car off
+    (False, True),      # 1 ignition on
+    (True, True),       # 2 onroad
+    (True, True),       # 3
+    (False, True),      # 4 onroad cycle: offroad with the ignition on
+    (False, True),      # 5
+    (True, True),       # 6 the cycle is over
   ], {"ControlsReady": True, "FirmwareQueryDone": True})
   assert done[2] == ["clear onroad", "run True capture=False"]
   assert done[3] == ["run True capture=False"]
-  # the step the old code stopped everything in: nothing is cleared, nothing is stopped
-  assert done[4] == ["log relay-first stop: holding the onroad processes until the panda releases the relay", "run True capture=False"]
-  # the relay is out: the offroad transition, with the session's gates dropped before pandad can read them again
-  assert done[5] == ["log relay-first stop: acting on offroad after 0.50 s (relay released)", "clear offroad",
-                     "remove ControlsReady", "remove FirmwareQueryDone", "run False capture=False"]
+  # the gates go in the very step the processes are stopped in - before manager can be held up collecting them
+  assert done[4] == ["clear offroad", "remove ControlsReady", "remove FirmwareQueryDone", "run False capture=False"]
   assert not p.get_bool("ControlsReady") and not p.get_bool("FirmwareQueryDone")
-  assert done[6] == ["run False capture=False"]
-  assert done[7] == ["clear onroad", "run True capture=False"]
+  assert done[5] == ["run False capture=False"]
+  assert done[6] == ["clear onroad", "run True capture=False"]
+  src = open(f"{REPO}/openpilot/system/manager/manager.py").read()
+  loop = src[src.index("  while True:\n    sm.update(1000)"):src.index("    # send managerState")]
+  assert loop.index("session_gates.drop(params)") < loop.index("ensure_running(managed_processes.values(), started, params=params")
+  # the restart timing itself is the one the car has always had
+  hw = open(f"{REPO}/openpilot/system/hardware/hardwared.py").read()
+  assert re.search(r"^ONROAD_CYCLE_TIME = 1\b", hw, re.M) and "  offroad_cycle_count = 0\n" in hw
+  assert "started = sm['deviceState'].started\n" in loop
 
 
 def test_manager_loop_starts_an_armed_capture_before_card():
   done, p = _run_manager_loop([
-    (0.0, False, False, "noOutput"),
-    (0.5, True, True, "elm327"),            # the device booted with the car already on: ignition and onroad in one step
-    (1.0, True, True, "elm327"),
-    (60.0, False, False, "noOutput"),       # ignition off
+    (False, False),
+    (True, True),       # the device booted with the car already on: ignition and onroad in one step
+    (True, True),
+    (False, False),     # ignition off
   ], {"StockLfaCaptureNext": True})
   assert done[1] == ["clear onroad", "clear ignition", "log stock LFA capture: started with the ignition", "run True capture=True"]
   assert done[2] == ["run True capture=True"]

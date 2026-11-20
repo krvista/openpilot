@@ -21,12 +21,12 @@
 - 목적: 순정 LFA 가 이 차 MDPS 를 직접 조향할 때의 요청·권한 값·응답을 기록(평소 로그에는 대기 프레임만 있다, 보고서 §91.5).
 - 켜기(지금): 시동을 건 뒤 **정차 상태·미인게이지**에서 설정 → 개발자 화면 끝의 `stock LFA capture`(quickboot mode 다음). openpilot 이 한 번
   재시작하고(수 초) 화면에 "Dashcam Mode" 가 뜨면 수집 중이다. 그 주행 동안 sunnypilot 은 조향·가감속을 하지 않고 기록만 한다 — 순정 LFA/HDA2 를
-  평소처럼 켜서 운전. 70b 부터 전환 순서가 "릴레이 먼저 해제 → 그다음 openpilot 종료"(배선을 뽑을 때와 같은 순서)다.
-- 켜기(예비 — 지금 전환에서 계기판 ADAS 경고가 뜰 때): 시동을 껐다 켜서 경고를 지우고, `stock LFA next start` 를 켠 다음(주행 중 아무 때나 —
-  그 주행은 달라지지 않는다) 시동을 껐다 켠다. 그 시동은 **처음부터** 수집 주행이고 릴레이를 한 번도 바꾸지 않는다. 예약은 1 회용.
+  평소처럼 켜서 운전. (b62f36a0 에서는 켤 때마다 계기판 ADAS 경고가 떴다 — 릴레이가 가로챈 채 무송신, 보고서 §94.1. 70b 에서 수정.)
+- 켜기(예비 — 지금 전환에서 계기판 ADAS 경고가 뜰 때): `stock LFA capture` 를 다시 끄면 경고는 1–2 s 안에 풀린다. `stock LFA next start` 를
+  켠 다음(주행 중 아무 때나 — 그 주행은 달라지지 않는다) 시동을 껐다 켠다. 그 시동은 **처음부터** 수집 주행이고 재시작도 릴레이 전환도 없다. 예약은 1 회용.
 - 끄기: 시동을 끄면 자동 해제(다음 시동은 원래의 sunnypilot). 주행 중 되돌리려면 정차 후 `stock LFA capture` 를 끈다.
 - 권장 주행: 10–15 분, 고속도로 직선·완만한 커브와 40–70 km/h 커브 진입 몇 번을 순정 LFA 로.
 - 분석: 구간별 `probes/qa/e121_angle_frames_extract.py <rlog> <npz>` → `probes/qa/e135_stock_lfa_analysis.py <npz ...>`.
-  전환 순간은 `probes/qa/e138_handover_gap.py <전환한 루트의 마지막 구간 rlog> <다음 루트 첫 구간 rlog>`(차 쪽 0x110 / 0x362 공백, CAN 오류 증가,
-  카메라 고장 신호), 통과 모드의 버스 상태는 `probes/qa/e137_can_state_by_mode.py <rlog>`.
+  수집이 제대로 됐는지는 `probes/qa/e139_capture_session_scan.py <rlog ...>` — 안전 모드가 elm327 로 유지되고 "reaches the car from the camera"
+  가 0 이 아니며 camera faults 가 없어야 한다. 안전 모드 전환 순간은 `e138_handover_gap.py`, 통과 모드의 버스 상태는 `e137_can_state_by_mode.py`.
 - 업로드: 이 차 로그는 `bash drivelog.sh upload --profile ccnc`(`ccnc-drivelog`). `wk2` 프로파일은 다른 차다.

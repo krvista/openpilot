@@ -1,4 +1,4 @@
-"""E81: steering-quality scorecard by speed band and build (98e912d / 31520b9 / bf36aa2). Op active (lat), no blinker / LC
+"""E81: steering-quality scorecard by speed band and build (argv 2: builds csv, default 98e912d / 31520b9 / bf36aa2). Op active (lat), no blinker / LC
 within 3 s. 'off' = hands off (hold-compensated driver torque < 40 and not pressed).
   time, hand-on share | weave: wheel 0.2-1 Hz RMS (deg, off), lateral-accel 0.2-1 Hz RMS (m/s2, off) | lateral jerk p95
   (m/s3, all) | intent error RMS(yaw curvature(t) - model action(t - 0.375)) (1e-3/m, off) | lag model -> yaw (ms, xcorr
@@ -12,7 +12,9 @@ import numpy as np
 sys.path.insert(0, "."); sys.path.insert(0, "opendbc_repo")
 from opendbc.car.hyundai.carcontroller import compute_hold_torque  # noqa: E402
 S = sys.argv[1]
-BUILDS = ["98e912d", "31520b9", "bf36aa2"]
+# builds as the first 7 characters of the commit; "a+b" pools builds that differ in documentation only
+BUILDS = sys.argv[2].split(",") if len(sys.argv) > 2 else ["98e912d", "31520b9", "bf36aa2"]
+POOL = {x: g for g in BUILDS for x in g.split("+")}
 BANDS = [(15, 30), (30, 40), (40, 55), (55, 70), (70, 90), (90, 200)]
 
 
@@ -29,8 +31,8 @@ def starts(m):
 A = {b: [defaultdict(list) for _ in BANDS] for b in BUILDS}
 for f in sorted(glob.glob(f"{S}/r50/0*.npz")):
   r = f[-12:-4]
-  d = dict(np.load(f, allow_pickle=True)); b = str(d['commit'])[:7]
-  if b not in BUILDS or len(d['T']) < 6000:
+  d = dict(np.load(f, allow_pickle=True)); b = POOL.get(str(d['commit'])[:7])
+  if b is None or len(d['T']) < 6000:
     continue
   try:
     V = dict(np.load(f"{S}/vm/{r}.npz", allow_pickle=True)); P = dict(np.load(f"{S}/la/plan_{r}.npz"))
@@ -127,7 +129,7 @@ rows = [("op min", lambda R: f"{sum(R['min']):6.1f}"), ("hand-on share", lambda 
         ("governor sat share", lambda R: f"{np.nanmean(cat(R['sat'])):6.1%}"),
         ("|TX-cmd| p90 deg", lambda R: f"{np.nanpercentile(cat(R['txg']), 90):6.2f}")]
 for bi, (lo, hi) in enumerate(BANDS):
-  print(f"\n[{lo}-{hi} km/h]          " + "".join(f"{b:>10}" for b in BUILDS))
+  print(f"\n[{lo}-{hi} km/h]          " + "".join(f"{b[:9]:>10}" for b in BUILDS))
   for nm, fn in rows:
     vals = []
     for b in BUILDS:

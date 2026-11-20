@@ -1,7 +1,7 @@
 """Phase 70 (report §92): stock-LFA capture mode. One drive with openpilot passive (panda noOutput, the factory camera
 stays connected, logging on) so the factory LFA steering this MDPS can be recorded; set from the comma 4 Developer
 screen (the toggle right after "quickboot mode"); ends by itself when the ignition goes off or the device boots.
-Phase 70b (the relay-first handover and the "next start" arming) is in test_phase70b.py."""
+Phase 70b (the restart race that left the relay in intercept, and the "next start" arming) is in test_phase70b.py."""
 import importlib
 import re
 import sys

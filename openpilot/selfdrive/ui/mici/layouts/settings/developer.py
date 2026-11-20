@@ -40,10 +40,9 @@ PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/o
 
 # i6n Phase 70 / 70b: stock-LFA capture (common/stock_lfa_capture.py holds the mode itself). Two toggles after quickboot:
 #   "stock LFA capture"    switches NOW (car stopped, openpilot not engaged): openpilot restarts passive and the factory LFA
-#                          steers until the ignition goes off. manager releases the harness relay before openpilot stops
-#                          sending (common/relay_first_stop.py) - the order a pulled comma cable has.
-#   "stock LFA next start" arms the NEXT ignition on instead: that drive is passive from its first second and nothing is
-#                          switched while driving - the fallback if switching now still brings ADAS warnings.
+#                          steers until the ignition goes off.
+#   "stock LFA next start" arms the NEXT ignition on instead: that drive is passive from its first second, with no restart
+#                          - the fallback if switching now still brings ADAS warnings.
 STOCK_LFA_CAPTURE_PARAM = "StockLfaCapture"            # this drive
 STOCK_LFA_CAPTURE_NEXT_PARAM = "StockLfaCaptureNext"   # armed: the next drive
 STOCK_LFA_CAPTURE_MAX_SPEED_MS = 0.3                   # "capture" only switches while the car is stopped
@@ -237,7 +236,7 @@ class DeveloperLayoutMici(NavScroller):
 
   def _on_stock_capture_toggled(self, state: bool):
     ui_state.params.put_bool(STOCK_LFA_CAPTURE_PARAM, state, block=True)
-    restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session; manager lets the relay go first
+    restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session right away
     self._show_stock_capture()
 
   def _on_stock_next_toggled(self, state: bool):
