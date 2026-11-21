@@ -16,15 +16,21 @@ from openpilot.cereal import log
 
 P: dict = {}
 d: dict = {}
+LD = None   # lagd's published lateralDelay over the route (vm npz 'ld': t, lateralDelay, ...) for REPLAY_MODEL_DELAY=log
 
 
 DRIVEN = {"8de98262a": "logged", "a0108a47b": "new", "98e912d3d": "p57"}   # other (older) builds drove the cubic lookahead
 
 
 def load(S, r):
-  global P, d
+  global P, d, LD
   import glob
   P = dict(np.load(f"{S}/la/plan_{r}.npz"))
+  try:
+    LD = np.load(f"{S}/vm/{r}.npz", allow_pickle=True)['ld']
+    LD = LD if len(LD) > 10 else None
+  except Exception:  # noqa: BLE001
+    LD = None
   rf = (glob.glob(f"{S}/r46/{r}.npz") + glob.glob(f"{S}/r43/{r}.npz") + glob.glob(f"{S}/r3d/{r}.npz")
         + glob.glob(f"{S}/ropm/{r}.npz") + glob.glob(f"{S}/rx/{r}.npz") + glob.glob(f"{S}/r50/{r}.npz"))
   d = dict(np.load(rf[0], allow_pickle=True))
@@ -42,13 +48,34 @@ class VM:
     return math.radians(curv * 1e3 * float(np.interp(v * 3.6, *DEG_PER)))
 
 
+_TI = np.array([10.0 * (k / 32) ** 2 for k in range(33)])
+
+
+def told_at(t):
+  """lagd's published delay at route time t (0.3 when the route has no liveDelay series)"""
+  return float(LD[max(np.searchsorted(LD[:, 0], t, side='right') - 1, 0), 1]) if LD is not None else 0.3
+
+
+def action_at(i):
+  """the logged action; with REPLAY_FORCE_TOLD=<s> re-timed to that told delay by modeld's own formula
+  (K + (2 / v) (psi(T') / T' - psi(T) / T), T = logged told delay + 0.075) - what modeld would have published for it"""
+  k = float(P['K'][i])
+  force = __import__('os').environ.get('REPLAY_FORCE_TOLD')
+  if force and 'PSI' in P:
+    t = told_at(P['T'][i]) + 0.075; t2 = float(force) + 0.075
+    v = max(float(d['v'][min(np.searchsorted(d['T'], P['T'][i]), len(d['T']) - 1)]) / 3.6, 1.0)
+    k += (2.0 / v) * (float(np.interp(t2, _TI, P['PSI'][i])) / t2 - float(np.interp(t, _TI, P['PSI'][i])) / t)
+  return k
+
+
 def model_at(i):
   ln = lambda y: types.SimpleNamespace(x=P['LX'][i].tolist(), y=y)  # noqa: E731
   lcs = log.LaneChangeState.preLaneChange if (d['lb'] | d['rb'] | (d['lcs'] > 0))[np.searchsorted(d['T'], P['T'][i])] else log.LaneChangeState.off
   return types.SimpleNamespace(
-    action=types.SimpleNamespace(desiredCurvature=float(P['K'][i])),
+    action=types.SimpleNamespace(desiredCurvature=action_at(i)),
     position=types.SimpleNamespace(x=P['PX'][i].tolist(), y=P['PY'][i].tolist(), yStd=[0.01] * 33),
     orientationRate=types.SimpleNamespace(z=P['OR'][i].tolist()), velocity=types.SimpleNamespace(x=P['VX'][i].tolist()),
+    orientation=types.SimpleNamespace(z=P['PSI'][i].tolist() if 'PSI' in P else []),   # plan heading (Phase 71)
     laneLines=[ln((P['L1'][i] - 3.5).tolist()), ln(P['L1'][i].tolist()), ln(P['L2'][i].tolist()), ln((P['L2'][i] + 3.5).tolist())],
     laneLineProbs=P['PR'][i].tolist(),
     meta=types.SimpleNamespace(laneChangeState=lcs, laneChangeDirection=log.LaneChangeDirection.none))
@@ -108,7 +135,12 @@ def replay(variant, t0, t1):
   s = H.mk_controls(); s.VM = VM(); s._lookahead_orient_w = 1.0
   # the logged plans / actions were produced with the model told 0.30 s (lagd unestimated); the test stub says 0.2 and
   # Phase 64b would read that as a -0.1 s reference shift (= 0.1 s more advance than asked for)
-  s.sm['lateralDelay'].lateralDelay = float(__import__('os').environ.get('REPLAY_MODEL_DELAY', '0.3'))
+  # REPLAY_MODEL_DELAY=log: what lagd published on that drive (builds from Phase 64d on: the seed 0.65 s, then the learned
+  # value) - the logged action was computed for exactly that delay
+  md = __import__('os').environ.get('REPLAY_MODEL_DELAY', '0.3')
+  force = __import__('os').environ.get('REPLAY_FORCE_TOLD')
+  md_log = md == "log" and LD is not None and not force
+  s.sm['lateralDelay'].lateralDelay = float(force) if force else (0.3 if md == "log" else float(md))
   Tr = d['T']; a0 = np.searchsorted(Tr, t0 - 8.0); a1 = np.searchsorted(Tr, t1)
   cs = s.sm['carState']; out = []
   s.desired_curvature = float(d['k_ctrl'][a0]); s._lat_cmd_lp = s.desired_curvature
@@ -116,6 +148,8 @@ def replay(variant, t0, t1):
     cs.vEgo = float(d['v'][j]) / 3.6; cs.steeringAngleDeg = float(d['ang'][j]); cs.steeringPressed = bool(d['pressed'][j])
     cs.steeringTorque = float(d['tq_s'][j]); cs.leftBlinker = bool(d['lb'][j]); cs.rightBlinker = bool(d['rb'][j])
     lat = bool(d['lat'][j]); s.get_lat_active = (lambda sm, a=lat: a)
+    if md_log:
+      s.sm['lateralDelay'].lateralDelay = float(LD[max(np.searchsorted(LD[:, 0], Tr[j], side='right') - 1, 0), 1])
     i = max(np.searchsorted(P['T'], Tr[j], side='right') - 1, 0)
     if getattr(s, "_cur_i", None) != i:
       s._cur_m = model_at(i); s._cur_i = i; s.sm.logMonoTime['modelV2'] = i

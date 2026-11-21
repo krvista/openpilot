@@ -5,7 +5,14 @@ fit) -> wheel -> vehicle curvature (+50 ms, measured wheel -> yaw). Windows: op 
 compensated driver torque < 40, not pressed), no blinker, 10-60 s.
 Metric: INTENT error = k_car(t) - K(t - 0.375) (the model's action is the curvature it wants 0.375 s later), RMS and lag;
 command 20 Hz change RMS; vehicle lateral jerk p95.
-Variants: base (E 0, Phase 59 off) | p59 (E 0, Phase 59, preview on) | P0e<e> (Phase 59 preview off, E = e) | P1e<e> (preview on, E = e)."""
+Variants: base (E 0, Phase 59 off) | p59 (E 0, Phase 59, preview on) | P0e<e> (Phase 59 preview off, E = e) | P1e<e> (preview on, E = e).
+Phase 71 (report §95) additions for the 'Ce' variants, all by environment:
+  E64_CD="NAME=value;NAME=a,b,c"  controlsd constants for the replay (as E64_CCP does for CarControllerParams)
+  REPLAY_MODEL_DELAY=log          the model's told delay as lagd published it on that drive (builds from Phase 64d on)
+  E64_REF=a0                      the reference 'K' returned in the rows is the action RE-TIMED to T = 0.375 s
+                                  (K + (2 / v) (psi(0.375) / 0.375 - psi(T) / T), T = told delay + 0.075; needs PSI in the
+                                  plan npz), so the intent error / entry / exit tools keep their 0.375 s yardstick on drives
+                                  whose logged action was computed for a longer delay."""
 import glob
 import json
 import multiprocessing as mp
@@ -82,7 +89,14 @@ def run(args):
       eh = float(var[2:]); cd.LOOKAHEAD_DELAY_EXTRA_S = ([float(x) for x in os.environ["E64_ETAB"].split(",")] if os.environ.get("E64_ETAB") else [0.2, 0.1, eh, eh, eh])
     else:
       cd.LOOKAHEAD_DELAY_EXTRA_S = list(FINAL_E) if var == "final" else [e] * 5
+    cd_saved = {}
+    for kv in [x for x in os.environ.get("E64_CD", "").split(";") if x] if var.startswith("Ce") else []:
+      k_, v_ = kv.split("=")
+      cur = getattr(cd, k_); cd_saved[k_] = cur
+      setattr(cd, k_, [float(x) for x in v_.split(",")] if isinstance(cur, (list, tuple)) else (v_ in ("1", "True") if isinstance(cur, bool) else float(v_)))
     out = R.replay("p57", T[a], T[b - 1])
+    for k_, v_ in cd_saved.items():
+      setattr(cd, k_, v_)
     cd.LOOKAHEAD_DELAY_EXTRA_S = [0.0] * 5
     kcmd = np.interp(T[a:b], [o[0] for o in out], [o[1] for o in out])
     cmd = sc * kcmd + off
@@ -149,6 +163,13 @@ def run(args):
     kcar = (np.concatenate([np.full(5, W[0]), W[:-5]]) - off) / sc          # + 50 ms wheel -> yaw
     res[var] = (kcmd, kcar)
   K = d['k_model'][a:b]; v = d['v'][a:b]
+  if os.environ.get("E64_REF") == "a0":
+    P = R.P; TI = np.array([10.0 * (i / 32) ** 2 for i in range(33)])
+    j = np.clip(np.searchsorted(P['T'], T[a:b], side="right") - 1, 0, len(P['T']) - 1)
+    told = np.array([float(R.LD[max(np.searchsorted(R.LD[:, 0], t, side='right') - 1, 0), 1]) for t in P['T'][j]]) if R.LD is not None else np.full(b - a, 0.3)
+    tt = told + 0.075; vv = np.maximum(v / 3.6, 1.0)
+    psi_t = np.array([np.interp(t_, TI, P['PSI'][i_]) for t_, i_ in zip(tt, j)]); psi_0 = np.array([np.interp(0.375, TI, P['PSI'][i_]) for i_ in j])
+    K = P['K'][j] + (2.0 / vv) * (psi_0 / 0.375 - psi_t / tt)
   return r, a, fold, K, v, res
 
 
