@@ -665,6 +665,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.gw_relay = False
     self.gw_follow = False
     self.gw_flags = 0
+    self.road_context = False         # Phase 73a: the car has been driving on the road since the last parking signature
     # Lateral-alert hysteresis (kept-feature #18) — N-frame counters that
     # card.py reads via CarOutput to push onroadEvents.
     self.alert_vm_limit_frames = 0
@@ -1594,6 +1595,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           # drop-off, the moments around parking itself).
           or ((CS.out.doorOpen or CS.out.seatbeltUnlatched) and CS.out.standstill)):
         self.parking_signature_seen = True
+        self.road_context = False     # Phase 73a: a real parking signature
     else:
       self.parking_low_speed_frames = 0
     # Phase 14-4 S3': lead-less lot-crawl pattern. A parking-lot drive is
@@ -1612,7 +1614,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # an unknown signal (0.0, old logs) leaves the pre-45 behaviour.
     lane_p_creep = float(getattr(self._cc_sp, 'laneLineProbMin', 0.0) or 0.0)
     road_lanes_clear = math.isfinite(lane_p_creep) and lane_p_creep >= PARKING_RELEASE_LANE_PROB
-    if v_ego_safe < PARKING_CREEP_MAX_MS and not lead_near and self.parking_creep_holdoff == 0 and not road_lanes_clear:
+    # Phase 73a: a stop on the road (first car at a light) is not a lot crawl - no creep arming while road_context
+    road_stop = solo and CarControllerParams.ROAD_STOP_NO_PARKING and self.road_context
+    if (v_ego_safe < PARKING_CREEP_MAX_MS and not lead_near and self.parking_creep_holdoff == 0 and not road_lanes_clear
+        and not road_stop):
       self.creep_frames += 1
       self.creep_min = min(self.creep_min, v_ego_safe)
       self.creep_sum += v_ego_safe
@@ -1632,6 +1637,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                      PARKING_MODE_EXIT_SUSTAIN_FRAMES)
     else:
       self.parking_exit_frames = 0
+    if self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
+      self.road_context = True        # Phase 73a: above the latch's exit speed for its sustain time = on the road
     if self.parking_mode_active and self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
       self.parking_mode_active = False
       self.parking_signature_seen = False
@@ -1646,6 +1653,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       self.parking_road_frames = 0
     if PARKING_RELEASE_FRAMES > 0 and self.parking_road_frames >= PARKING_RELEASE_FRAMES:
+      self.road_context = True        # Phase 73a: the marked-road release counts as well
       self.parking_mode_active = False
       self.parking_signature_seen = False
       # parking_low_speed_frames is kept: a tight turn / R / P / door right after the release re-arms at once
@@ -1907,6 +1915,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                        math.degrees(self.BASELINE_VM.get_steer_from_curvature(_j / (_vs ** 2), _vs, 0))) * DT_CTRL
             apply_angle = float(_clip(apply_angle, self.apply_angle_last - _cap,
                                                      self.apply_angle_last + _cap))
+        # Phase 73b: engage taper - right after the request was anchored to the wheel (a passive state just ended) its
+        # rate is capped, so the MDPS - which now follows at once - does not jump to the command
+        if solo and self.frames_since_apply_anchor < CarControllerParams.ENGAGE_TAPER_FRAMES:
+          _er = float(_interp(self.frames_since_apply_anchor, [0, CarControllerParams.ENGAGE_TAPER_FRAMES],
+                              CarControllerParams.ENGAGE_TAPER_RATE_DPS)) * DT_CTRL
+          apply_angle = float(_clip(apply_angle, self.apply_angle_last - _er, self.apply_angle_last + _er))
         self.apply_angle_last = apply_angle
         self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
 

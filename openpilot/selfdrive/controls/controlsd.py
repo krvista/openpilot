@@ -66,7 +66,7 @@ class _ModelFrame:
   disengaged frame — which never reads them — pays nothing (review: eager computation made
   disengaged frames slower than before)."""
   __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
-               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient")
+               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient", "_lanes")
   _UNSET = object()
 
   def __init__(self, model_v2, key):
@@ -74,7 +74,7 @@ class _ModelFrame:
     self.fallback = model_v2.action.desiredCurvature
     self.n = len(model_v2.position.x)
     self._pos = None
-    self._fit12 = self._fit24 = self._klane = self._bsm = self._orient = _ModelFrame._UNSET
+    self._fit12 = self._fit24 = self._klane = self._bsm = self._orient = self._lanes = _ModelFrame._UNSET
     probs = getattr(model_v2, "laneLineProbs", [])
     self.lane_min = min(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0
     self.lane_max = max(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0   # Phase 49
@@ -143,6 +143,27 @@ class _ModelFrame:
       except (IndexError, ValueError):
         self._klane = None
     return self._klane
+
+  def lane_preview(self, dist):
+    """Phase 73c: (lane-centre y at the car, lane-centre y at dist, plan y at dist, lane width at the car, lane width at
+    dist) from the two inner lane lines and the plan position; None = unreadable / non-finite / plan too short."""
+    if self._lanes is _ModelFrame._UNSET:
+      self._lanes = None
+      try:
+        lls = getattr(self.ref, "laneLines", [])
+        arr = [np.fromiter(a, dtype=np.float64) for a in (lls[1].x, lls[1].y, lls[2].x, lls[2].y, self.ref.position.x, self.ref.position.y)]
+        if all(len(a) >= 5 and np.all(np.isfinite(a)) for a in arr):
+          self._lanes = arr
+      except (IndexError, AttributeError, TypeError, ValueError):
+        self._lanes = None
+    if self._lanes is None:
+      return None
+    xl, yl, xr, yr, px, py = self._lanes
+    if not (px[-1] >= dist and xl[-1] >= dist and xr[-1] >= dist):
+      return None
+    l0, r0 = float(np.interp(0.0, xl, yl)), float(np.interp(0.0, xr, yr))
+    ld, rd = float(np.interp(dist, xl, yl)), float(np.interp(dist, xr, yr))
+    return 0.5 * (l0 + r0), 0.5 * (ld + rd), float(np.interp(dist, px, py)), r0 - l0, rd - ld
 
   @property
   def bsm_lane(self):
@@ -353,6 +374,41 @@ STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added cur
 STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55b lead taken (fully or partly) from the plan yaw-rate change
 STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55b orient lead clipped by the jerk budget
 STEER_FLAG_DIRECT = 1 << 11           # Phase 72 direct path in use (solo profile) while lateral is active
+STEER_FLAG_LANE_CENTER = 1 << 12      # Phase 73c lane-centre term is adding curvature
+
+# i6n Phase 73c (report §101, first solo drive a1): LANE-CENTRE term on the direct path. Steering alone, the model keeps
+# the car parallel to the lane but hardly pulls it to the middle: its action fits  K = 0.77 k_lane + 0.048 psi +
+# 0.55e-3 e  (psi = lane heading relative to the car, e = lane centre relative to the car in m) - a lateral "spring" of
+# 0.24 1/s^2 at 76 km/h (period 13 s) with no integral action. A curvature bias of 0.05e-3 (road crown, model bias)
+# therefore parks the car 10-25 cm off centre: a1 sat 19 cm LEFT of the centre by the factory camera (the factory LFA:
+# +0.4 cm), 12-27 cm by the model's own lines with the plan staying parallel out to 60 m, and ran 10-30 cm to the inside
+# of curves (factory 0-8 cm). The model's lane lines themselves agree with the factory camera to 3.4 cm (r 0.94).
+#   proportional: the plan is steered through the lane centre at the preview distance L = v * LANE_CENTER_T_S -
+#     LANE_CENTER_WEIGHT * 2 (centre(L) - plan(L)) / L^2 - which acts before the car has left the centre (the plan
+#     cutting inside at a corner entry is corrected as it is made); capped at LANE_CENTER_ACC / v^2, low-passed.
+#   integral: LANE_CENTER_KI x the lane-centre error at the car, on near-straight road only (|action| below
+#     LANE_CENTER_I_MAX_K; held in curves), capped at LANE_CENTER_I_CAP - removes what a steady bias leaves.
+# Loop simulation with the fitted model law, the measured delay (0.32 s) and 0.05e-3 of bias: steady error 17.6 cm ->
+# 1-2 cm, <= 3 swings, robust to +0.2 s of delay and to half the model's own gains; the inside error in a curve 22 ->
+# 7 / 12 / 15 cm at 50 / 76 / 100 km/h. Used only with both inner lines confident (LANE_CENTER_PROB), a plausible lane
+# width at the car and at L that does not open or close (split / merge), no blinker / lane change / driver press /
+# dropout hold, from LANE_CENTER_SPEED_MS up. Otherwise the proportional part fades with its low-pass and the integral
+# decays (LANE_CENTER_I_BLEED_S). LANE_CENTER_BIAS_M: the model's lane centre sits 3.4 cm to the right of the factory
+# camera's at CameraOffset 0 (report §99). Kill: LANE_CENTER_WEIGHT = 0.0 (and LANE_CENTER_KI = 0.0).
+LANE_CENTER_WEIGHT = 0.5
+LANE_CENTER_T_S = 2.0
+LANE_CENTER_L_M = (12.0, 80.0)
+LANE_CENTER_ACC = 0.4
+LANE_CENTER_TAU_S = 0.3
+LANE_CENTER_KI = 0.03e-3
+LANE_CENTER_I_CAP = 0.15e-3
+LANE_CENTER_I_MAX_K = 1.0e-3
+LANE_CENTER_I_BLEED_S = 20.0
+LANE_CENTER_PROB = [0.5, 0.8]
+LANE_CENTER_SPEED_MS = [30.0 / 3.6, 45.0 / 3.6]
+LANE_CENTER_WIDTH_M = (2.5, 4.6)
+LANE_CENTER_WIDTH_RATIO = 0.25
+LANE_CENTER_BIAS_M = -0.034
 
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
@@ -502,6 +558,8 @@ class Controls(ControlsExt):
     ControlsExt.__init__(self, self.CP, self.params)
     self._steer_profile = ProfileLatch(self.params)   # Phase 72: solo (default) / legacy steering profile
     self._steer_legacy = self._steer_profile.legacy
+    self._lc_p = 0.0   # Phase 73c lane-centre term: low-passed proportional part
+    self._lc_i = 0.0   #                             integral part
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.CP_SP)
 
@@ -605,6 +663,34 @@ class Controls(ControlsExt):
     else:
       d = getattr(self, "_lagd_value_cache", LOOKAHEAD_DELAY_BASE_S)
     self._model_lat_delay = d if math.isfinite(d) and d > 0.0 else LOOKAHEAD_DELAY_BASE_S
+
+  def _lane_center(self, mf, CS, k_action, usable_ctx):
+    """Phase 73c: curvature added on the direct path to bring the plan (and the car) to the lane centre."""
+    v = max(float(CS.vEgo), 1.0)
+    p = getattr(self, "_lc_p", 0.0); integ = getattr(self, "_lc_i", 0.0)
+    w = 0.0; raw = 0.0; e0 = 0.0
+    if usable_ctx and LANE_CENTER_WEIGHT > 0.0 and math.isfinite(v):
+      dist = float(_clip(v * LANE_CENTER_T_S, LANE_CENTER_L_M[0], LANE_CENTER_L_M[1]))
+      pv = mf.lane_preview(dist)
+      if pv is not None:
+        c0, cd_, pd, w0, wd = pv
+        if (LANE_CENTER_WIDTH_M[0] <= w0 <= LANE_CENTER_WIDTH_M[1] and LANE_CENTER_WIDTH_M[0] <= wd <= LANE_CENTER_WIDTH_M[1]
+            and abs(wd / w0 - 1.0) <= LANE_CENTER_WIDTH_RATIO):
+          w = (float(_interp(mf.lane_min_p, LANE_CENTER_PROB, [0.0, 1.0]))
+               * float(_interp(v, LANE_CENTER_SPEED_MS, [0.0, 1.0])))
+          cap = LANE_CENTER_ACC / v ** 2
+          raw = float(_clip(LANE_CENTER_WEIGHT * w * 2.0 * ((cd_ + LANE_CENTER_BIAS_M) - pd) / dist ** 2, -cap, cap))
+          e0 = c0 + LANE_CENTER_BIAS_M
+    p += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw - p)
+    if w > 0.0:
+      if abs(k_action) < LANE_CENTER_I_MAX_K and LANE_CENTER_KI > 0.0:
+        integ = float(_clip(integ + LANE_CENTER_KI * w * e0 * DT_CTRL, -LANE_CENTER_I_CAP, LANE_CENTER_I_CAP))
+    else:
+      integ *= max(1.0 - DT_CTRL / LANE_CENTER_I_BLEED_S, 0.0)
+    if not (math.isfinite(p) and math.isfinite(integ)):
+      p = integ = 0.0
+    self._lc_p, self._lc_i = p, integ
+    return p + integ
 
   def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
@@ -867,6 +953,18 @@ class Controls(ControlsExt):
     self._lookahead_flags = 0
     new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
     steer_flags = (STEER_FLAG_LOOKAHEAD_CAP if self._lookahead_capped else 0) | self._lookahead_flags   # Phase 46 / 55
+
+    # Phase 73c: lane-centre term (direct path only)
+    if steer_direct and CC.latActive:
+      lc_ok = (mf.lane_change_state == LaneChangeState.off and not (CS.leftBlinker or CS.rightBlinker)
+               and not CS.steeringPressed and not self.lane_dropout)
+      lc_add = self._lane_center(mf, CS, new_desired_curvature, lc_ok)
+      new_desired_curvature = new_desired_curvature + lc_add
+      if abs(lc_add) > 2e-5:
+        steer_flags |= STEER_FLAG_LANE_CENTER
+    else:
+      self._lc_p = 0.0
+      self._lc_i = 0.0
 
     # Phase 7c geometry entry assist (constants above).
     if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None and not steer_direct:   # (lane-line read failed -> skip, as before; Phase 72: not on the direct path)

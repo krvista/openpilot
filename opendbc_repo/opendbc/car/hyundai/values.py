@@ -589,6 +589,21 @@ class CarControllerParams:
   GW_RELAY_TOL_DEG            = 0.5                     # |ADAS request - one of our last GW_RELAY_HIST angles| = relayed
   GW_RELAY_HIST               = 8
   GW_STALE_NS                 = int(0.5e9)              # LFAHDA_CLUSTER (20 Hz) / ADAS_CMD_35_10ms older than this = unknown
+  # Phase 73 (report §101, first solo drive a1). Both apply in the solo profile only.
+  # 73a  ROAD STOP IS NOT A PARKING LOT: the lead-less creep signature (10 s under 25 km/h with a dip under 8 km/h) armed
+  #      the parking latch at EVERY traffic-light stop as first car, and the latch then held the request passive until
+  #      33 km/h for 2 s (the marked-road release needs lane lines, and there are none across the junction): 7 of the 9
+  #      latch episodes of a1, 4-6 s unsteered above 15 km/h each, releasing at 33-46 km/h. Up to Phase 71 the factory
+  #      LFA covered those launches. Once the car has been on the road (above the latch's exit speed for its sustain
+  #      time) the creep signature no longer arms the latch; a real parking signature (wheel >= 270 deg at low speed,
+  #      reverse, park, door / belt at standstill) clears that again. Kill: ROAD_STOP_NO_PARKING = False.
+  # 73b  ENGAGE TAPER: when a passive state ends the request starts at the wheel and ran to the command at the VM rate -
+  #      and the MDPS now follows it at once: a1 had 6.3 / 3.6 / 3.4 deg of wheel in 0.2 s at 42 / 33 / 55 km/h, hands
+  #      off. For ENGAGE_TAPER_FRAMES after the request was last anchored to the wheel its rate is capped, from
+  #      ENGAGE_TAPER_RATE_DPS[0] rising linearly to [1]. Kill: ENGAGE_TAPER_FRAMES = 0.
+  ROAD_STOP_NO_PARKING        = True
+  ENGAGE_TAPER_FRAMES         = 150                     # 1.5 s
+  ENGAGE_TAPER_RATE_DPS       = [4.0, 30.0]
   # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
   # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
   #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel
