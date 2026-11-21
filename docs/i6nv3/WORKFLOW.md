@@ -17,6 +17,12 @@
 ## 푸시 후 보고
 - i6nv3 에 푸시한 뒤에는 푸시된 커밋의 짧은 해시(빌드 번호, 예: `9aae6071`)를 결과 보고에 항상 함께 적는다 — 다음 주행 로그가 어느 빌드인지 대조하는 기준.
 
+## 조향 평가는 '누가 조향했나'로 먼저 나눈다 (보고서 §96)
+- MDPS 는 우리 LKAS_ALT 가 아니라 ADAS 제어기의 0xCB 를 따른다. 순정 LFA 가 활성(`HDA_LFA_SymSta` = 2)이면 제어기는 자기 명령을 내고 우리
+  요청은 닿지 않는다. op 조향이 켜져 있어도 그 구간(혼합)의 차는 순정 LFA 가 몬 것이다.
+- 점수표·코너·지연 등 모든 조향 지표는 `e156`–`e160` 처럼 순정 / op(전달) / 혼합으로 나눠서 본다. 빌드 간 비교는 op(전달) 구간끼리만 의미가 있다.
+- 순정 LFA 가 언제 켜지고 꺼졌는지는 `probes/qa/e161_lfa_toggle_trace.py <rlog>`(버튼 비트·우리 펄스·순정 상태·MADS·크루즈).
+
 ## 순정 LFA 수집 주행 (Phase 70 / 70b)
 - 목적: 순정 LFA 가 이 차 MDPS 를 직접 조향할 때의 요청·권한 값·응답을 기록(평소 로그에는 대기 프레임만 있다, 보고서 §91.5).
 - 켜기(지금): 시동을 건 뒤 **정차 상태·미인게이지**에서 설정 → 개발자 화면 끝의 `stock LFA capture`(quickboot mode 다음). openpilot 이 한 번
@@ -26,7 +32,9 @@
   켠 다음(주행 중 아무 때나 — 그 주행은 달라지지 않는다) 시동을 껐다 켠다. 그 시동은 **처음부터** 수집 주행이고 재시작도 릴레이 전환도 없다. 예약은 1 회용.
 - 끄기: 시동을 끄면 자동 해제(다음 시동은 원래의 sunnypilot). 주행 중 되돌리려면 정차 후 `stock LFA capture` 를 끈다.
 - 권장 주행: 10–15 분, 고속도로 직선·완만한 커브와 40–70 km/h 커브 진입 몇 번을 순정 LFA 로.
-- 분석: 구간별 `probes/qa/e121_angle_frames_extract.py <rlog> <npz>` → `probes/qa/e135_stock_lfa_analysis.py <npz ...>`.
+- 분석: `route_extract.py <route> <npz>`(v4) → `probes/qa/e156_who_steers.py`(순정 / op / 혼합 점수표)·`e157`(MDPS 가 받는 요청)·`e159`(코너).
+  순정의 조향 명령은 카메라의 0x110(항상 대기 모양)이 아니라 ADAS 제어기가 bus 1 에 내는 `ADAS_CMD_35_10ms`(0xCB)에 있다(보고서 §96.1) —
+  `e121` / `e135` 는 카메라 프레임만 보므로 순정 조향을 가리지 못한다.
   수집이 제대로 됐는지는 `probes/qa/e139_capture_session_scan.py <rlog ...>` — 안전 모드가 elm327 로 유지되고 "reaches the car from the camera"
   가 0 이 아니며 camera faults 가 없어야 한다. 안전 모드 전환 순간은 `e138_handover_gap.py`, 통과 모드의 버스 상태는 `e137_can_state_by_mode.py`.
 - 업로드: 이 차 로그는 `bash drivelog.sh upload --profile ccnc`(`ccnc-drivelog`). `wk2` 프로파일은 다른 차다.

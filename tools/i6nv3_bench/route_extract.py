@@ -9,6 +9,16 @@ Saved (carState-rate grid, T relative to the first log message):
   sf_cc (carStateSP.steerFlags, CarController SF_* bits) / sf_ctl (controlsState.steerFlags, STEER_FLAG_* bits) — Phase 46,
   0 on older builds
   events: list of (t, name) for onroadEvents transitions; commit
+  v3 (11-21, stock-LFA capture drives): cam_ang / cam_gain / cam_active = the factory camera's OWN LKAS_ALT (bus 2: request
+  angle, ACI gain, LKAS_ANGLE_ACTIVE) and cam_b7 / cam_b8 / cam_b13 / cam_b9lo (its other bytes) - in a capture drive this is
+  what steers the car; mdps_ang (MDPS STEERING_ANGLE), mdps_col (column torque), cruise (cruiseState.enabled), passive
+  (CarParams.passive)
+  v4 (11-21): cb_req / cb_gain / cb_lvl2 / cb_aci = ADAS_CMD_35_10ms (0xCB, bus 1) - the angle request, ACI gain and state the
+  MDPS actually RECEIVES from the vehicle's ADAS controller (op's LKAS_ALT on the camera bus is only an input to that
+  controller); lfa_sym / hda_icon = ADAS_CMD_31_50ms (0x1E0, bus 1) HDA_LFA_SymSta (0 off, 1 standby, 2 active, 3) and HDA_ICON
+  - the factory LFA / HDA state; lane_l / lane_r = LEFT / RIGHT_LANE_LINE of the camera's CAM_0x362 (bus 2), lane_tx_l /
+  lane_tx_r = the same two fields in the copy op sends to the ADAS controller (-1 when op sends none); tx_b7 = byte 7 of
+  the LKAS_ALT op transmits (bit 0 = LFA button bit: op's 'MADS <-> cluster sync pulse'; cam_b7 bit 0 = the camera's)
 Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz>
 """
 import glob
@@ -20,7 +30,8 @@ from openpilot.tools.lib.logreader import LogReader
 
 r, out = sys.argv[1], sys.argv[2]
 files = sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--rlog.zst"), key=lambda f: int(f.split("--")[-2]))
-cs, cc, wr, ct, md, lp, gp, mp, rj, sd, sp = [], [], [], [], [], [], [], [], [], [], []
+cs, cc, wr, ct, md, lp, gp, mp, rj, sd, sp, cam, cbm, e0m, lnc, lnt = [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
+passive = False
 events = []; prev_ev = set()
 t0 = None; commit = ""
 for f in files:
@@ -33,7 +44,7 @@ for f in files:
         s = m.carState
         cs.append((t, s.vEgo * 3.6, s.aEgo, s.steeringAngleDeg, s.steeringRateDeg, s.steeringPressed, s.steeringTorque,
                    s.steeringTorqueEps, s.leftBlinker, s.rightBlinker, s.gasPressed, s.brakePressed, s.leftBlindspot,
-                   s.rightBlindspot))
+                   s.rightBlindspot, s.cruiseState.enabled))
       elif w == "carControl":
         c = m.carControl
         cc.append((t, c.latActive, c.actuators.steeringAngleDeg, c.actuators.accel))
@@ -61,14 +72,33 @@ for f in files:
           gp.append((t, g.latitude, g.longitude))
       elif w == "initData" and not commit:
         commit = m.initData.gitCommit[:9]
+      elif w == "carParams":
+        passive = bool(m.carParams.passive)
       elif w == "can":
         nrej = 0
         for c in m.can:
           if c.address == 234 and c.src < 128 and len(c.dat) >= 24:
             dd = bytes(c.dat)
-            mp.append((t, dd[18] & 0x3, (dd[18] >> 5) & 1, ((dd[8] | (dd[9] << 8)) & 0xFFF) * 0.1 - 204.8))
+            a16 = dd[12] | (dd[13] << 8)
+            mp.append((t, dd[18] & 0x3, (dd[18] >> 5) & 1, ((dd[8] | (dd[9] << 8)) & 0xFFF) * 0.1 - 204.8,
+                       (a16 - 0x10000 if a16 & 0x8000 else a16) * 0.1, ((dd[10] | (dd[11] << 8)) & 0x1FFF) - 4095))
           elif c.address == 272 and c.src >= 192:
             nrej += 1
+          elif c.address == 203 and c.src == 1 and len(c.dat) >= 9:
+            dd = bytes(c.dat); raw = (dd[4] | (dd[5] << 8)) & 0x3FFF
+            if raw & 0x2000:
+              raw -= 0x4000
+            cbm.append((t, raw * 0.1, dd[6] * 0.004, dd[3] >> 4, dd[3] & 0xF))
+          elif c.address == 480 and c.src == 1 and len(c.dat) >= 8:
+            bits = int.from_bytes(bytes(c.dat)[:8], "little")
+            e0m.append((t, (bits >> 47) & 3, (bits >> 31) & 1))
+          elif c.address == 272 and c.src == 2 and len(c.dat) >= 14:
+            dd = bytes(c.dat); raw = ((dd[10] >> 2) | (dd[11] << 6)) & 0x3FFF
+            if raw & 0x2000:
+              raw -= 0x4000
+            cam.append((t, raw * 0.1, dd[12] * 0.004, (dd[9] >> 4) & 0x3, dd[7], dd[8], dd[13], dd[9] & 0xF))
+          elif c.address == 866 and c.src == 2 and len(c.dat) >= 8:
+            lnc.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
         if nrej:
           rj.append((t, nrej))
       elif w == "sendcan":
@@ -77,7 +107,9 @@ for f in files:
             dd = bytes(c.dat); raw = ((dd[10] >> 2) | (dd[11] << 6)) & 0x3FFF
             if raw & 0x2000:
               raw -= 0x4000
-            wr.append((t, raw * 0.1, dd[12] * 0.004, (dd[9] >> 4) & 0x3))
+            wr.append((t, raw * 0.1, dd[12] * 0.004, (dd[9] >> 4) & 0x3, dd[7]))
+          elif c.address == 866 and len(c.dat) >= 8:
+            lnt.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
   except Exception as e:  # noqa: BLE001 - a truncated last segment must not lose the route
     print(f"  {f.split('/')[-1]}: {type(e).__name__}: {e}")
 CS = np.array(cs, float)
@@ -106,6 +138,15 @@ np.savez_compressed(out, T=T - t0, v=CS[:, 1], a_ego=CS[:, 2], ang=CS[:, 3], rat
                     tx_reject=rej, sd_active=res(sd, 1, kind="hold") > 0.5,
                     gps_lat=res(gp, 1), gps_lon=res(gp, 2), commit=np.array(commit),
                     sf_cc=res(sp, 1, kind="hold").astype(np.int64), sf_ctl=res(ct, 4, kind="hold").astype(np.int64),
+                    cam_ang=res(cam, 1), cam_gain=res(cam, 2, kind="hold"), cam_active=res(cam, 3, kind="hold"),
+                    cam_b7=res(cam, 4, kind="hold"), cam_b8=res(cam, 5, kind="hold"), cam_b13=res(cam, 6, kind="hold"),
+                    cam_b9lo=res(cam, 7, kind="hold"), mdps_ang=res(mp, 4), mdps_col=res(mp, 5),
+                    cb_req=res(cbm, 1), cb_gain=res(cbm, 2), cb_lvl2=res(cbm, 3, kind="hold"), cb_aci=res(cbm, 4, kind="hold"),
+                    lfa_sym=res(e0m, 1, -1.0, kind="hold"), hda_icon=res(e0m, 2, -1.0, kind="hold"),
+                    lane_l=res(lnc, 1, -1.0, kind="hold"), lane_r=res(lnc, 2, -1.0, kind="hold"),
+                    lane_tx_l=res(lnt, 1, -1.0, kind="hold"), lane_tx_r=res(lnt, 2, -1.0, kind="hold"),
+                    tx_b7=res(wr, 4, kind="hold"),
+                    cruise=CS[:, 14] > 0.5, passive=np.array(passive),
                     events=np.array(events, dtype=object))
 print(f"== {r}: {len(T) / 6000:.1f} min, commit {commit}, lat active {np.mean(res(cc, 1, kind='hold') > 0.5) * 100:.0f}%, "
       f"events {len(events)}")
