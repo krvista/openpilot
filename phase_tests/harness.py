@@ -56,7 +56,10 @@ PRESS_DEBOUNCE_FRAMES = 5
 
 
 class Sim:
-  def __init__(self):
+  def __init__(self, solo=False):
+    """solo=False: the pre-72 behaviour (CarControlSP.stockLfaWithOp True) that the Phase 5..70 suites exercise;
+    solo=True: the Phase 72 profile (factory LFA held off, direct request, follow band)."""
+    self._solo = bool(solo)
     self._mdps_can_prev = None   # Phase 38-3
     self._orig_packer = ccmod.CANPacker
     ccmod.CANPacker = FakePacker
@@ -66,7 +69,7 @@ class Sim:
       self.cc = ccmod.CarController({Bus.pt: 'hyundai_canfd_generated'}, CP, CP_SP)
     finally:
       ccmod.CANPacker = self._orig_packer
-    self.cc._cc_sp = types.SimpleNamespace(mads=types.SimpleNamespace(enabled=False))
+    self.cc._cc_sp = types.SimpleNamespace(mads=types.SimpleNamespace(enabled=False), stockLfaWithOp=not self._solo)
     self.cam_counter = 0
     self._press_frames = 0
     self.last_msgs = []
@@ -96,7 +99,8 @@ class Sim:
            pressed=None, blinker=False, lead_dist=None, gear='drive',
            door=False, belt=False, standstill=None, cruise_available=True,
            v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
-           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None, tx_rejected=False, mdps_step_can=None, a_ego=0.0, gas=False, lane_prob_min=0.0):
+           wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None, tx_rejected=False, mdps_step_can=None, a_ego=0.0, gas=False, lane_prob_min=0.0,
+           lfa_state=-1, gw_req_angle=None, gw_req_lvl2=2, cam_lfa_button=0):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -127,6 +131,7 @@ class Sim:
     out.steeringPressed = bool(pressed)
 
     cam = dict(CAM_MSG_TEMPLATE)
+    cam["LFA_BUTTON"] = int(cam_lfa_button)   # Phase 72: the steering-wheel LFA button as the camera reports it
     cam["COUNTER"] = self.cam_counter
     self.cam_counter = (self.cam_counter + 1) % 256
 
@@ -140,6 +145,12 @@ class Sim:
     _m_can = int(round(CS.mdps_angle_2 * 10.0))
     CS.mdps_angle_2_step_can = int(mdps_step_can) if mdps_step_can is not None else (abs(_m_can - self._mdps_can_prev) if self._mdps_can_prev is not None else 0)
     self._mdps_can_prev = _m_can
+
+    # Phase 72: factory LFA state (LFAHDA_CLUSTER.LFA_ICON, -1 = unknown) and the request the MDPS receives
+    CS.lfa_state = int(lfa_state)
+    CS.gw_req_valid = gw_req_angle is not None
+    CS.gw_req_angle = float(gw_req_angle) if gw_req_angle is not None else 0.0
+    CS.gw_req_lvl2 = int(gw_req_lvl2)
 
     CC = structs.CarControl()
     CC.latActive = bool(lat_active)

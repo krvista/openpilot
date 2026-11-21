@@ -49,6 +49,12 @@ STOCK_LFA_CAPTURE_MAX_SPEED_MS = 0.3                   # "capture" only switches
 STOCK_LFA_CAPTURE_REFRESH_FRAMES = 20                  # ~1 s at the comma 4 UI rate
 STOCK_LFA_CAPTURE_TEXT = {False: "this drive only: factory LFA steers, logs kept", True: "on: ends when the ignition goes off"}
 STOCK_LFA_NEXT_TEXT = {False: "next start only: nothing switches mid-drive", True: "armed: the next ignition on starts it"}
+# i6n Phase 72 (common/steer_profile.py): openpilot steers alone by default - the factory LFA is kept switched off while
+# openpilot is in charge. "stock LFA with op (old)" brings back the pre-72 steering (the factory LFA is switched on with
+# openpilot's lateral and steers while it is active). It takes effect within a few seconds, while steering is off.
+STOCK_LFA_WITH_OP_PARAM = "StockLfaWithOp"
+STOCK_LFA_WITH_OP_TEXT = {False: "off: openpilot steers alone (factory LFA kept off)",
+                          True: "on: factory LFA steers with openpilot, as before"}
 
 
 class DeveloperLayoutMici(NavScroller):
@@ -120,6 +126,9 @@ class DeveloperLayoutMici(NavScroller):
     self._stock_next_toggle = BigToggle("stock LFA next start", STOCK_LFA_NEXT_TEXT[_sn_on], initial_state=_sn_on,
                                         toggle_callback=self._on_stock_next_toggled)
     self._stock_capture_refresh_n = 0
+    _sw_on = ui_state.params.get_bool(STOCK_LFA_WITH_OP_PARAM)
+    self._stock_with_op_toggle = BigToggle("stock LFA with op (old)", STOCK_LFA_WITH_OP_TEXT[_sw_on], initial_state=_sw_on,
+                                           toggle_callback=self._on_stock_with_op_toggled)
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -133,6 +142,7 @@ class DeveloperLayoutMici(NavScroller):
       self._quickboot_toggle,
       self._stock_capture_toggle,
       self._stock_next_toggle,
+      self._stock_with_op_toggle,
     ])
 
     # Toggle lists
@@ -186,8 +196,10 @@ class DeveloperLayoutMici(NavScroller):
   def _show_stock_capture(self):
     on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM)
     armed = ui_state.params.get_bool(STOCK_LFA_CAPTURE_NEXT_PARAM)
+    with_op = ui_state.params.get_bool(STOCK_LFA_WITH_OP_PARAM)
     for tog, checked, text in ((self._stock_capture_toggle, on, STOCK_LFA_CAPTURE_TEXT[on]),
-                               (self._stock_next_toggle, armed, STOCK_LFA_NEXT_TEXT[armed])):
+                               (self._stock_next_toggle, armed, STOCK_LFA_NEXT_TEXT[armed]),
+                               (self._stock_with_op_toggle, with_op, STOCK_LFA_WITH_OP_TEXT[with_op])):
       tog.set_checked(checked)
       if tog.get_value() != text:   # the label is laid out again on every change of the text only
         tog.set_value(text)
@@ -237,6 +249,11 @@ class DeveloperLayoutMici(NavScroller):
   def _on_stock_capture_toggled(self, state: bool):
     ui_state.params.put_bool(STOCK_LFA_CAPTURE_PARAM, state, block=True)
     restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session right away
+    self._show_stock_capture()
+
+  def _on_stock_with_op_toggled(self, state: bool):
+    # read by controlsd (every 3 s, applied while steering is off), the car controller through it, and lagd
+    ui_state.params.put_bool(STOCK_LFA_WITH_OP_PARAM, state, block=True)
     self._show_stock_capture()
 
   def _on_stock_next_toggled(self, state: bool):

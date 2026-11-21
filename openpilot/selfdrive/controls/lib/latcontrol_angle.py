@@ -135,6 +135,10 @@ class LatControlAngle(LatControl):
     self._des_slow = 0.0  # Phase 7b rising-entry detector (EMA 0.5 s)
     self._fb_err_lp = 0.0  # Phase 7a-4: 0.3 s LP of fb_err for the sustained-error gate
     self._trim_7a6 = True   # Phase 7a-6 (Params LatFbTrim7a6, default on for the on-road validation), read once at start
+    # i6n Phase 72 (controlsd sets it every frame): solo profile -> pure feed-forward. The 7a trim closed the "delivery
+    # deficit" of a wheel that did not follow the request, which was the factory LFA holding it (report §96); a
+    # relayed request is followed at 0.95, and an integrator reaching its cap in ~0.5 s on top of that only overshoots.
+    self.direct = False
     try:
       self._trim_7a6 = bool(Params().get_bool("LatFbTrim7a6"))
     except Exception:
@@ -178,7 +182,7 @@ class LatControlAngle(LatControl):
       # deficit, not transient spikes (see constants block).
       err_lp_a = self.dt / (LAT_FB_ERR_LP_TAU + self.dt) if LAT_FB_ERR_LP_TAU > 0.0 else 1.0
       self._fb_err_lp += err_lp_a * (fb_err - self._fb_err_lp)
-      if not active or CS.vEgo < LAT_FB_MIN_SPEED or not math.isfinite(CS.vEgo):
+      if not active or self.direct or CS.vEgo < LAT_FB_MIN_SPEED or not math.isfinite(CS.vEgo):
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_INACTIVE, 0.0)
       elif (CS.steeringPressed or steer_limited_by_safety or curvature_limited
             or abs(self._fb_err_lp) > LAT_FB_ERR_MAX or abs(fb_err) > LAT_FB_ERR_MAX_HARD):

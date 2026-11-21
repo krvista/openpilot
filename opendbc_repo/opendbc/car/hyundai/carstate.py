@@ -77,6 +77,15 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.msg_161, self.msg_162, self.msg_1b5 = {}, {}, {}
     self.fault_lfa = 0
     self.fault_das = 0
+    # Phase 72 (report §96): the vehicle's ADAS controller, read from the ECAN. lfa_state = LFAHDA_CLUSTER.LFA_ICON
+    # (0 off, 1 on / standby, 2 active, 3 releasing; -1 = not received lately), gw_req_* = ADAS_CMD_35_10ms, the angle
+    # request / state the MDPS actually receives (gw_req_valid False = not received lately).
+    self.lfa_state = -1
+    self.hda_icon = 0
+    self.gw_req_valid = False
+    self.gw_req_angle = 0.0
+    self.gw_req_lvl2 = 0
+    self.gw_req_gain = 0.0
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -399,6 +408,19 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       _ts_w = cp.ts_nanos["CCNC_WIPER"]["FRONT_WIPER_ON"]
       _ts_ref = cp.ts_nanos["MDPS"]["STEERING_COL_TORQUE"]
       self.wiper_stale = (_ts_w == 0) or (_ts_ref - _ts_w > CarControllerParams.RAIN_STALE_NS)
+      # Phase 72: factory LFA state and the request the MDPS receives (never part of canValid; staleness against the
+      # 100 Hz MDPS timestamp as for the wiper, so a silent message reads as "unknown")
+      _ts_l = cp.ts_nanos["LFAHDA_CLUSTER"]["LFA_ICON"]
+      if _ts_l == 0 or _ts_ref - _ts_l > CarControllerParams.GW_STALE_NS:
+        self.lfa_state, self.hda_icon = -1, 0
+      else:
+        self.lfa_state = int(cp.vl["LFAHDA_CLUSTER"]["LFA_ICON"])
+        self.hda_icon = int(cp.vl["LFAHDA_CLUSTER"]["HDA_ICON"])
+      _ts_g = cp.ts_nanos["ADAS_CMD_35_10ms"]["ADAS_StrAnglReqVal"]
+      self.gw_req_valid = not (_ts_g == 0 or _ts_ref - _ts_g > CarControllerParams.GW_STALE_NS)
+      self.gw_req_angle = float(cp.vl["ADAS_CMD_35_10ms"]["ADAS_StrAnglReqVal"])
+      self.gw_req_lvl2 = int(cp.vl["ADAS_CMD_35_10ms"]["ADAS_ActvACILvl2Sta"])
+      self.gw_req_gain = float(cp.vl["ADAS_CMD_35_10ms"]["ADAS_ACIAnglTqRedcGainVal"])
 
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
@@ -437,6 +459,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       msgs += [("ACCELERATOR", 50), ("MANUAL_SPEED_LIMIT_ASSIST", 5)]
       if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT:
         msgs += [("CCNC_0x162", 20), ("CCNC_WIPER", 5)]
+        msgs += [("LFAHDA_CLUSTER", 20), ("ADAS_CMD_35_10ms", 100)]   # Phase 72 (alive / counter ignored below)
 
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
@@ -461,6 +484,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT:
         skip_addrs.append(0x162)  # CCNC_0x162
         skip_addrs.append(0x35c)  # CCNC_WIPER (Phase 37a; never gates canValid)
+        skip_addrs += [0x1E0, 0xCB]  # LFAHDA_CLUSTER, ADAS_CMD_35_10ms (Phase 72; never gate canValid)
       for addr in skip_addrs:
         if addr in parsers[Bus.pt].message_states:
           parsers[Bus.pt].message_states[addr].ignore_counter = True

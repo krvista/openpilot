@@ -11,6 +11,7 @@ import openpilot.cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.common.steer_profile import ProfileLatch
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
@@ -328,6 +329,15 @@ LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = True
 # more, then the told (seed 0.65 s / learned) delay itself. Kill: LOOKAHEAD_DELAY_PIN_TOTAL = True.
 LOOKAHEAD_DELAY_PIN_TOTAL = False
 
+# i6n Phase 72 (report §96-97, common/steer_profile.py): DIRECT lateral path for the solo profile. With the factory LFA
+# held off the vehicle's ADAS controller relays our request and the MDPS follows it in 180 ms at 0.95 (request -> yaw
+# 0.32 s); the "late, partly delivered" steering every lead layer below was fitted to (6h-1 smoothing with matched lead,
+# 6f-5 / 6h-2 cubic lead, 55b / 55c plan lead, 60 / 64b / 68 / 69a delay match, 7c entry assist, latcontrol 7a trim) was
+# the factory LFA steering on its own schedule. In the solo profile the command is the model's action itself - the
+# model already plans for the lateral delay lagd publishes - and only the guards about the MODEL stay (non-finite hold,
+# confidence blend, lane-dropout hold, low-confidence rate cap, departure hold, BSM guard, turn-exit handling) plus
+# clip_curvature. self._steer_legacy (ProfileLatch: changes only while lateral is not active) selects the path; an
+# object without it (unit-test stubs, replays of pre-72 logs) keeps the legacy path.
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
 # only: nothing reads these bits back. Cost: a few int ORs per 100 Hz frame and one UInt16 in controlsState.
@@ -342,6 +352,7 @@ STEER_FLAG_BSM_HOLD = 1 << 7          # Phase 37b BSM lane guard held the comman
 STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added curvature
 STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55b lead taken (fully or partly) from the plan yaw-rate change
 STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55b orient lead clipped by the jerk budget
+STEER_FLAG_DIRECT = 1 << 11           # Phase 72 direct path in use (solo profile) while lateral is active
 
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
@@ -489,6 +500,8 @@ class Controls(ControlsExt):
 
     # Initialize sunnypilot controlsd extension and base model state
     ControlsExt.__init__(self, self.CP, self.params)
+    self._steer_profile = ProfileLatch(self.params)   # Phase 72: solo (default) / legacy steering profile
+    self._steer_legacy = self._steer_profile.legacy
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.CP_SP)
 
@@ -612,6 +625,12 @@ class Controls(ControlsExt):
                    (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
       return self.desired_curvature * float(ramp)
     self._model_nonfinite_frames = 0
+
+    if not getattr(self, "_steer_legacy", True):   # Phase 72 direct path: the model's action, no lead layers
+      self._delay_match = 0.0
+      self._delay_extra_eff = 0.0
+      self._lookahead_orient_w = 0.0
+      return fallback
 
     # Phase 60: speed-scheduled delay match (see LOOKAHEAD_DELAY_*): shift the base along the model's own plan.
     self._delay_match = 0.0
@@ -807,6 +826,13 @@ class Controls(ControlsExt):
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
+    # Phase 72: steering profile for this frame (the toggle is re-read every 3 s; it takes effect while lateral is off)
+    if hasattr(self, "_steer_profile"):
+      self._steer_legacy = self._steer_profile.update(bool(CC.latActive))
+    steer_direct = not getattr(self, "_steer_legacy", True)
+    if hasattr(self.LaC, "direct"):
+      self.LaC.direct = steer_direct
+
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
 
@@ -843,7 +869,7 @@ class Controls(ControlsExt):
     steer_flags = (STEER_FLAG_LOOKAHEAD_CAP if self._lookahead_capped else 0) | self._lookahead_flags   # Phase 46 / 55
 
     # Phase 7c geometry entry assist (constants above).
-    if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None:   # (lane-line read failed -> skip, as before)
+    if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None and not steer_direct:   # (lane-line read failed -> skip, as before; Phase 72: not on the direct path)
       lane_min_p = mf.lane_min_p
       klane_raw = mf.klane_raw          # lane-centre curvature, once per model frame (_ModelFrame)
       a = DT_CTRL / (0.3 + DT_CTRL)
@@ -996,6 +1022,8 @@ class Controls(ControlsExt):
             steer_flags |= STEER_FLAG_BSM_HOLD
         else:
           self.bsm_guard.reset()
+    if steer_direct and CC.latActive:
+      steer_flags |= STEER_FLAG_DIRECT   # Phase 72
     self.steer_flags = steer_flags   # Phase 46: published in controlsState.steerFlags
 
     # Temporal command smoothing w/ lead compensation (see constants). Applied AFTER
@@ -1003,7 +1031,7 @@ class Controls(ControlsExt):
     # jerk/accel safety limits still bound the result. tau=0 disables (no-op).
     # Phase 6h-1: tau is speed-dependent (lat_smooth_tau, computed above so the
     # lookahead lead matches); the angle-domain EMA downstream is now light.
-    if lat_smooth_tau > 0.0 and CC.latActive:
+    if lat_smooth_tau > 0.0 and CC.latActive and not steer_direct:   # Phase 72: no extra low-pass on the direct path
       alpha = DT_CTRL / (lat_smooth_tau + DT_CTRL)
       self._lat_cmd_lp = alpha * new_desired_curvature + (1.0 - alpha) * self._lat_cmd_lp
       new_desired_curvature = self._lat_cmd_lp

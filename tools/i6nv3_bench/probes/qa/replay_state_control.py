@@ -2,7 +2,10 @@
 plan npz (action, plan position/yaw rate/speed, inner lane lines, lane probs, lane-change state). Vehicle model:
 curvature <-> wheel angle from the drives' own median ratio per speed (deg per 1e-3/m). Variants: 'logged' = the 55b
 build's constants (Phase 56 off) — must reproduce controlsState.desiredCurvature; 'new' = shipped constants.
-Usage (repo root): PYTHONPATH=$PWD:$PWD/opendbc_repo python3 .../replay_state_control.py <scratch> <route> <t0> <t1>"""
+Usage (repo root): PYTHONPATH=$PWD:$PWD/opendbc_repo python3 .../replay_state_control.py <scratch> <route> <t0> <t1>
+Phase 72 (report §97): REPLAY_PROFILE=solo runs the direct path (the stub otherwise keeps the legacy stack, as the
+pre-72 drives did); REPLAY_FORCE_LAT=1 treats lateral as active throughout (shadow replay of a stock-LFA capture drive,
+where openpilot was passive)."""
 import math
 import sys
 import types
@@ -133,6 +136,8 @@ def replay(variant, t0, t1):
   if variant == "x_noslew":
     cd.LOOKAHEAD_ORIENT_W_SLEW_S = 1e-9
   s = H.mk_controls(); s.VM = VM(); s._lookahead_orient_w = 1.0
+  s._steer_legacy = __import__('os').environ.get('REPLAY_PROFILE', 'legacy') != 'solo'   # Phase 72
+  force_lat = bool(__import__('os').environ.get('REPLAY_FORCE_LAT'))
   # the logged plans / actions were produced with the model told 0.30 s (lagd unestimated); the test stub says 0.2 and
   # Phase 64b would read that as a -0.1 s reference shift (= 0.1 s more advance than asked for)
   # REPLAY_MODEL_DELAY=log: what lagd published on that drive (builds from Phase 64d on: the seed 0.65 s, then the learned
@@ -147,7 +152,7 @@ def replay(variant, t0, t1):
   for j in range(a0, a1):
     cs.vEgo = float(d['v'][j]) / 3.6; cs.steeringAngleDeg = float(d['ang'][j]); cs.steeringPressed = bool(d['pressed'][j])
     cs.steeringTorque = float(d['tq_s'][j]); cs.leftBlinker = bool(d['lb'][j]); cs.rightBlinker = bool(d['rb'][j])
-    lat = bool(d['lat'][j]); s.get_lat_active = (lambda sm, a=lat: a)
+    lat = bool(d['lat'][j]) or force_lat; s.get_lat_active = (lambda sm, a=lat: a)
     if md_log:
       s.sm['lateralDelay'].lateralDelay = float(LD[max(np.searchsorted(LD[:, 0], Tr[j], side='right') - 1, 0), 1])
     i = max(np.searchsorted(P['T'], Tr[j], side='right') - 1, 0)

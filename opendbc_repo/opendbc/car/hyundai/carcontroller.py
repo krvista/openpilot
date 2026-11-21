@@ -1,4 +1,5 @@
 import math
+from collections import deque
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
 from opendbc.car.scalar import interp as _interp, clip as _clip, sign as _sign   # bit-identical scalar np.interp/clip/sign (see scalar.py)
@@ -169,6 +170,17 @@ SF_HOD_TOUCH          = 1 << 28   # Phase 51: brief light touch exempted from th
 SF_HAND_GAP           = 1 << 29   # Phase 58: hand-on gap cap bound the request this frame
 SF_MDPS_COMP          = 1 << 30   # Phase 59: MDPS inverse-model compensator shaping the request (feedback on)
 SF_ENTRY_BOOST        = 1 << 31   # Phase 63b: corner-entry boost added to the request (Phase 69b: or the corner-exit lead)
+
+
+# Phase 72 telemetry (card.py -> carStateSP.gatewayFlags): what the vehicle's ADAS controller is doing with our request
+GW_VALID      = 1 << 0   # LFAHDA_CLUSTER and ADAS_CMD_35_10ms both received lately
+GW_LFA_ON     = 1 << 1   # factory LFA switched on (icon 1 / 2 / 3)
+GW_LFA_ACTIVE = 1 << 2   # factory LFA active (icon 2): the controller sends its own request to the MDPS
+GW_RELAY      = 1 << 3   # the controller's request equals one of our last transmitted angles (relayed)
+GW_SOLO       = 1 << 4   # Phase 72 profile in use (0 = pre-72 behaviour)
+GW_PULSE      = 1 << 5   # an LFA button pulse is being sent this frame
+GW_FOLLOW     = 1 << 6   # 72c bound the request to the wheel band this frame
+GW_GAVE_UP    = 1 << 7   # hold-off paused: the car kept switching the factory LFA back on
 
 
 def compute_hold_torque(v_ego, lat_acc):
@@ -642,6 +654,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # toggles the cluster icon exactly once per transition.
     self.prev_mads_enabled = False
     self.lfa_sync_pulse_remaining = 0
+    # Phase 72 (values.py LFA_HOLD_OFF_* / GW_*): solo profile, factory-LFA hold-off loop, relay check, follow band
+    self.solo_mode = False
+    self.lfa_hold_on_frames = 0       # consecutive frames with the factory LFA switched on (icon 1 / 2)
+    self.lfa_hold_wait = 0            # frames until the next pulse may be sent
+    self.lfa_hold_tries = 0           # pulses since the factory LFA was last seen off
+    self.lfa_hold_pulses = deque()    # frame numbers of the pulses inside the rate window
+    self.lfa_hold_give_up = 0         # frames left of the pause after too many pulses
+    self.gw_tx_hist = deque(maxlen=CarControllerParams.GW_RELAY_HIST)   # our last transmitted angles
+    self.gw_relay = False
+    self.gw_follow = False
+    self.gw_flags = 0
     # Lateral-alert hysteresis (kept-feature #18) — N-frame counters that
     # card.py reads via CarOutput to push onroadEvents.
     self.alert_vm_limit_frames = 0
@@ -674,6 +697,49 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_exit_frames = 0
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
+
+  def _lfa_hold_off(self, lfa_state: int) -> bool:
+    """Phase 72a: keep the factory LFA switched off (values.py LFA_HOLD_OFF_*). Returns True on the frames the LFA
+    button bit of LKAS_ALT must be high. lfa_state = LFAHDA_CLUSTER.LFA_ICON (0 off, 1 on / standby, 2 active,
+    3 releasing, -1 unknown). One pulse = LFA_SYNC_PULSE_FRAMES frames; the controller toggles ~0.1 s later."""
+    P = CarControllerParams
+    if self.lfa_sync_pulse_remaining > 0:        # rest of a pulse already started
+      self.lfa_sync_pulse_remaining -= 1
+      return True
+    if self.lfa_hold_wait > 0:
+      self.lfa_hold_wait -= 1
+    if self.lfa_hold_give_up > 0:
+      self.lfa_hold_give_up -= 1
+    while self.lfa_hold_pulses and self.frame - self.lfa_hold_pulses[0] >= P.LFA_HOLD_OFF_WINDOW_FRAMES:
+      self.lfa_hold_pulses.popleft()
+    if lfa_state == 0:
+      self.lfa_hold_on_frames = 0
+      self.lfa_hold_tries = 0
+      return False
+    if lfa_state not in (1, 2):                  # unknown, or releasing (a pulse now could switch it back on)
+      self.lfa_hold_on_frames = 0
+      return False
+    self.lfa_hold_on_frames = min(self.lfa_hold_on_frames + 1, P.LFA_HOLD_OFF_CONFIRM_FRAMES)
+    if self.lfa_hold_on_frames < P.LFA_HOLD_OFF_CONFIRM_FRAMES or self.lfa_hold_wait > 0 or self.lfa_hold_give_up > 0:
+      return False
+    if len(self.lfa_hold_pulses) >= P.LFA_HOLD_OFF_MAX_PULSES:   # the car keeps switching it back on: stop for a while
+      self.lfa_hold_give_up = P.LFA_HOLD_OFF_GIVE_UP_FRAMES
+      self.lfa_hold_pulses.clear()
+      return False
+    self.lfa_hold_tries += 1
+    self.lfa_hold_wait = P.LFA_HOLD_OFF_WAIT_FRAMES[min(self.lfa_hold_tries, len(P.LFA_HOLD_OFF_WAIT_FRAMES)) - 1]
+    self.lfa_hold_on_frames = 0
+    self.lfa_hold_pulses.append(self.frame)
+    self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES - 1
+    return True
+
+  def _gw_relayed(self, CS) -> bool:
+    """Phase 72: True while the vehicle's ADAS controller hands OUR request to the MDPS - its request (ADAS_CMD_35_10ms)
+    equals one of the angles we transmitted in the last GW_RELAY_HIST frames (it follows ours by ~30 ms)."""
+    if not (getattr(CS, 'gw_req_valid', False) and int(getattr(CS, 'gw_req_lvl2', 0)) == 2 and self.gw_tx_hist):
+      return False
+    req = float(getattr(CS, 'gw_req_angle', 0.0))
+    return min(abs(req - a) for a in self.gw_tx_hist) <= CarControllerParams.GW_RELAY_TOL_DEG
 
   def _mdps_comp(self, cmd: float, wheel: float, v_ego: float, lat_active: bool, hold: bool) -> float:
     """Phase 59/59b: inverse of the identified MDPS response with wheel feedback (values.py MDPS_COMP_*). The request is
@@ -1070,6 +1136,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # CCNC angle-control platform path
     ccnc_lka_alt = is_ccnc_angle_platform(self.CP.flags)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
+
+    # Phase 72 (values.py): solo = openpilot steers alone (factory LFA held off, direct profile, follow band);
+    # CarControlSP.stockLfaWithOp (developer toggle) or LFA_HOLD_OFF = False keep the pre-72 behaviour.
+    lfa_state = int(getattr(CS, 'lfa_state', -1))
+    solo = bool(ccnc_lka_alt and CarControllerParams.LFA_HOLD_OFF and not getattr(self._cc_sp, 'stockLfaWithOp', False))
+    solo_changed = solo != self.solo_mode
+    self.solo_mode = solo
+    self.gw_relay = self._gw_relayed(CS)
+    self.gw_follow = False
 
     # F1 / R4: Camera staleness detection via LKAS_ALT COUNTER. If the
     # COUNTER field stops advancing for >=CAM_STALE_FRAMES (~250 ms), treat
@@ -1698,7 +1773,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       trim_gate = (bool(CC.latActive) and not self.driver_pressed
                    and not self.parking_mode_active and not in_passthrough
                    and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate
-                   and not self.mdps_comp_active)   # Phase 59 replaces the trim
+                   and not self.mdps_comp_active    # Phase 59 replaces the trim
+                   and not solo)                    # Phase 72b: the MDPS follows a relayed request - nothing to trim
       self.curve_trim_sustain = min(self.curve_trim_sustain + 1, 10 * CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES) if trim_gate else 0
       # S-curve direction flip: a trim built for the previous curve points the
       # wrong way once desired crosses zero. The 2°/s integrator (or the 0.5 s
@@ -1754,20 +1830,29 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Phase 40: stall kick — a short request pulse away from a stuck wheel (values.py STALL_KICK_*).
       # Added after the smoothing so it reaches TX in full; the VM/panda rate limits below still bound it.
       desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on,
-                                        bool(CC.latActive) and not self.mdps_comp_active)   # Phase 59 replaces the kick
+                                        bool(CC.latActive) and not self.mdps_comp_active and not solo)   # Phase 59 / 72b
       # Phase 63b: corner-entry boost on the clean command (values.py ENTRY_BOOST_*); the hand-gap cap below still binds.
       desired_angle += self._entry_boost(comp_cmd, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive),
-                                         not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active)
+                                         not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active
+                                         and not solo)   # Phase 72b
       # Phase 69b: corner-exit lead — the request unwinds ahead of a wheel that lags the unwinding command (EXIT_LEAD_*).
       desired_angle += self._exit_lead(comp_cmd, steer_angle_safe, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive),
-                                       not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active)
+                                       not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active
+                                       and not solo)     # Phase 72b
       # Phase 59: MDPS inverse-model compensator (replaces the trim / kick output while active).
       comp_hold = (self.hand_gap_on or self.driver_pressed or self.aci_gain_last < CarControllerParams.MDPS_COMP_HOLD_GAIN)
-      comp_out = self._mdps_comp(comp_cmd, steer_angle_safe, v_ego_safe, bool(CC.latActive), comp_hold)
+      comp_out = self._mdps_comp(comp_cmd, steer_angle_safe, v_ego_safe, bool(CC.latActive) and not solo, comp_hold)   # Phase 72b
       if self.mdps_comp_active:
         desired_angle = comp_out
       # Phase 58: hand-on gap cap — a resting hand cannot release more than HAND_GAP_CAP_DEG of stored gap at once.
       desired_angle = self._hand_gap_cap(desired_angle, steer_angle_safe, v_ego_safe, driver_tq, bool(CC.latActive))
+      # Phase 72c: the factory LFA is active or releasing -> the ADAS controller does not relay us; stay with the wheel
+      # so nothing stored is released as a step when it switches over.
+      if solo and CC.latActive and lfa_state in (2, 3) and CarControllerParams.GW_FOLLOW_BAND_DEG > 0.0:
+        _band = CarControllerParams.GW_FOLLOW_BAND_DEG
+        _bound = float(_clip(desired_angle, steer_angle_safe - _band, steer_angle_safe + _band))
+        self.gw_follow = _bound != desired_angle
+        desired_angle = _bound
 
       # Phase 9 (yield-by-authority): op keeps its own clean commanded angle — the
       # driver yield is done entirely on the ACIGain authority axis below, so the
@@ -1848,12 +1933,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # MADS↔cluster LFA sync pulse (kept-feature #12). On every MADS
     # enabled-state edge, hold LFA_BUTTON=1 for LFA_SYNC_PULSE_FRAMES so
     # the gateway toggles the cluster icon exactly once per transition.
-    if ccnc_lka_alt and mads_enabled != self.prev_mads_enabled:
-      self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
+    if solo:
+      # Phase 72a: no pulse on MADS edges - the factory LFA is held off by its own state (see _lfa_hold_off)
+      lfa_sync_pulse = self._lfa_hold_off(lfa_state)
+    else:
+      if ccnc_lka_alt and mads_enabled != self.prev_mads_enabled:
+        self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
+      elif (ccnc_lka_alt and solo_changed and mads_enabled and lfa_state == 0 and CarControllerParams.LFA_HOLD_OFF
+            and self.lfa_sync_pulse_remaining == 0):
+        # back to the pre-72 behaviour while MADS is on: the factory LFA was held off, switch it on once so the two
+        # are in step again (as the MADS-on edge would have done)
+        self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
+      lfa_sync_pulse = self.lfa_sync_pulse_remaining > 0
+      if self.lfa_sync_pulse_remaining > 0:
+        self.lfa_sync_pulse_remaining -= 1
     self.prev_mads_enabled = mads_enabled
-    lfa_sync_pulse = self.lfa_sync_pulse_remaining > 0
-    if self.lfa_sync_pulse_remaining > 0:
-      self.lfa_sync_pulse_remaining -= 1
 
     # FAULT_LFA edge state kept so we can decide cam_invalid without the
     # original cloudlog diagnostics.
@@ -2313,6 +2407,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if on:
         sf |= bit
     self.steer_debug_flags = sf
+    # Phase 72 telemetry and the transmitted-angle history for the relay check
+    gw = GW_SOLO if solo else 0
+    if lfa_state >= 0 and getattr(CS, 'gw_req_valid', False):
+      gw |= GW_VALID
+    for on, bit in ((lfa_state > 0, GW_LFA_ON), (lfa_state == 2, GW_LFA_ACTIVE), (self.gw_relay, GW_RELAY),
+                    (bool(ccnc_lka_alt and lfa_sync_pulse), GW_PULSE), (self.gw_follow, GW_FOLLOW),
+                    (self.lfa_hold_give_up > 0, GW_GAVE_UP)):
+      if on:
+        gw |= bit
+    self.gw_flags = gw
+    if ccnc_lka_alt and wire_active:
+      self.gw_tx_hist.append(float(tx_angle))
+    else:
+      self.gw_tx_hist.clear()
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, effective_lat_active, apply_torque, self.lkas_icon,
                                                          apply_angle=tx_angle, lkas_alt_cam_msg=lkas_alt_cam_msg, wire_active=wire_active,
                                                          mads_lka_icon=mads_lka_icon,
@@ -2320,7 +2428,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
                                                          cam_invalid=bool(cam_stale_tripped or fault_lfa_bool),
                                                          lfa_sync_pulse=lfa_sync_pulse,
-                                                         meas_angle=meas_angle_for_panda))
+                                                         meas_angle=meas_angle_for_panda,
+                                                         lfa_button_mirror=not solo))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):

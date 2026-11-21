@@ -115,6 +115,9 @@ class ControlsExt(ModelStateBase):
     ok = sm.valid['modelV2'] and sm.alive['modelV2'] and math.isfinite(pl) and math.isfinite(pr)
     CC_SP.laneLineProbMin = min(pl, pr) if ok else 0.0
 
+    # Phase 72: the steering profile controlsd latched for this frame (common/steer_profile.py)
+    CC_SP.stockLfaWithOp = bool(getattr(self, "_steer_legacy", False))
+
     return CC_SP
 
   @staticmethod

@@ -23,6 +23,13 @@
 - 점수표·코너·지연 등 모든 조향 지표는 `e156`–`e160` 처럼 순정 / op(전달) / 혼합으로 나눠서 본다. 빌드 간 비교는 op(전달) 구간끼리만 의미가 있다.
 - 순정 LFA 가 언제 켜지고 꺼졌는지는 `probes/qa/e161_lfa_toggle_trace.py <rlog>`(버튼 비트·우리 펄스·순정 상태·MADS·크루즈).
 
+## 조향 프로파일 (Phase 72, `common/steer_profile.py`)
+- 기본 = **solo**: openpilot 이 조향하는 동안 순정 LFA 를 꺼 두고(계기판 LFA·HDA 아이콘 꺼짐) 모델 action 을 그대로 요청한다. LFA 버튼은 openpilot 조향 on / off 만 한다.
+- 개발자 화면 `stock LFA with op (old)` 를 켜면 Phase 71 까지의 동작(순정 LFA 를 같이 켬 + 이전 보상 스택)으로 돌아간다. 수 초 안에, 조향이 꺼져 있는 순간에 바뀐다.
+- 순정 LFA 로만 달리려면 `stock LFA capture`.
+- solo 주행 로그에서 먼저 볼 것: `e160`(op 조향 시간의 전달 비율 — 98 % 이상이어야 함, 펄스 횟수), `e156` 의 op 열 대 순정 열, `e157`(요청 → 핸들), lagd 학습값(0.3 s 근처).
+  `carStateSP.gatewayFlags`: 1 유효 · 2 순정 LFA 켜짐 · 4 활성 · 8 전달 · 16 solo · 32 펄스 · 64 추종 제한 · 128 꺼 두기 중단.
+
 ## 순정 LFA 수집 주행 (Phase 70 / 70b)
 - 목적: 순정 LFA 가 이 차 MDPS 를 직접 조향할 때의 요청·권한 값·응답을 기록(평소 로그에는 대기 프레임만 있다, 보고서 §91.5).
 - 켜기(지금): 시동을 건 뒤 **정차 상태·미인게이지**에서 설정 → 개발자 화면 끝의 `stock LFA capture`(quickboot mode 다음). openpilot 이 한 번

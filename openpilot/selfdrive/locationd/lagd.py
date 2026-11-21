@@ -12,6 +12,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
+from openpilot.common.steer_profile import legacy_requested
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose, fft_next_good_size, parabolic_peak_interp
 from openpilot.sunnypilot.livedelay.lagd_toggle import LagdToggle
@@ -88,10 +89,29 @@ CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence
                        publish_max=LAGD_PUBLISH_MAX_S)
 
 
-def lagd_profile(CP) -> dict:
-  """Estimator settings for this car: the CCNC profile for Hyundai angle-steering (CCNC) cars, stock otherwise."""
+# i6n Phase 72 (report §96-97, common/steer_profile.py): the SOLO profile. What Phases 64-68 learned as this car's
+# lateral delay (0.57 -> 0.69 -> 0.76 s) was the time the FACTORY LFA steered after our command - the ADAS controller did
+# not relay our request while the factory LFA was active. With the factory LFA held off the request is relayed and the
+# measured request -> yaw delay is 0.32 s (route a0, 4 s windows; request -> wheel 0.18 s, wheel -> yaw 0.14 s). In that
+# stretch the old profile's blocks went invalid within 5 min (a 0.3 s plant against 0.76 s blocks) and the published
+# value fell back to the 0.65 s seed for the rest of the drive. Solo: seed LAGD_SOLO_SEED_S, the stock search range,
+# what is published capped at LAGD_SOLO_PUBLISH_MAX_S (a drive in which the factory LFA could not be held off must not
+# talk the model back into 0.7 s), a cached estimate from the other profile is not carried over (the two differ by
+# 0.4 s; LAGD_MODE_SPLIT_S separates them), and windows in which the factory LFA was active (carStateSP.gatewayFlags)
+# do not count. Legacy profile: unchanged.
+LAGD_SOLO_SEED_S = 0.32
+LAGD_SOLO_PUBLISH_MAX_S = 0.50
+LAGD_MODE_SPLIT_S = 0.50
+LAGD_PROFILE_PARAM_FRAMES = 60     # the toggle is re-read every 3 s (20 Hz deviceMotion)
+GW_LFA_ACTIVE = 1 << 2             # carStateSP.gatewayFlags bit (opendbc hyundai carcontroller.py GW_LFA_ACTIVE)
+CCNC_SOLO_PROFILE_KW = dict(CCNC_PROFILE_KW, initial_lag_seed=LAGD_SOLO_SEED_S, max_lag=MAX_LAG, publish_max=LAGD_SOLO_PUBLISH_MAX_S)
+
+
+def lagd_profile(CP, solo: bool = False) -> dict:
+  """Estimator settings for this car: the CCNC profile for Hyundai angle-steering (CCNC) cars (solo: Phase 72),
+  stock otherwise."""
   if CCNC_PROFILE and CP.brand == "hyundai" and str(CP.steerControlType) == "angle":
-    return dict(CCNC_PROFILE_KW)
+    return dict(CCNC_SOLO_PROFILE_KW if solo else CCNC_PROFILE_KW)
   return {}
 
 
@@ -226,7 +246,7 @@ class BlockAverage:
 
 
 class LateralLagEstimator:
-  inputs = {"carControl", "carState", "controlsState", "extrinsicsCalibration", "deviceMotion"}
+  inputs = {"carControl", "carState", "controlsState", "extrinsicsCalibration", "deviceMotion", "carStateSP"}
 
   def __init__(self, CP: car.CarParams, dt: float,
                block_count: int = BLOCK_NUM, min_valid_block_count: int = BLOCK_NUM_NEEDED, block_size: int = BLOCK_SIZE,
@@ -260,6 +280,7 @@ class LateralLagEstimator:
 
     self.t = 0.0
     self.lat_active = False
+    self.factory_lfa_active = False   # i6n Phase 72: the factory LFA steers (our request is not relayed) - not our delay
     self.steering_pressed = False
     self.steering_saturated = False
     self.desired_curvature = 0.0
@@ -323,6 +344,8 @@ class LateralLagEstimator:
   def handle_log(self, t: float, which: str, msg: capnp._DynamicStructReader):
     if which == "carControl":
       self.lat_active = msg.latActive
+    elif which == "carStateSP":   # i6n Phase 72
+      self.factory_lfa_active = bool(int(getattr(msg, "gatewayFlags", 0)) & GW_LFA_ACTIVE)
     elif which == "carState":
       if msg.steeringPressed:
         self.last_press_raw_t = t
@@ -369,7 +392,7 @@ class LateralLagEstimator:
     la_valid = np.abs(la_actual_pose) <= self.max_lat_accel and np.abs(la_desired - la_actual_pose) <= self.max_lat_accel_diff
     calib_valid = self.calibrator.calib_valid
 
-    if not self.lat_active:
+    if not self.lat_active or self.factory_lfa_active:   # Phase 72: with the factory LFA active the car is not ours
       self.last_lat_inactive_t = self.t
     if self.steering_pressed:
       self.last_steering_pressed_t = self.t
@@ -382,7 +405,7 @@ class LateralLagEstimator:
       self.t - last_t >= self.min_recovery_buffer_sec
       for last_t in [self.last_lat_inactive_t, self.last_steering_pressed_t, self.last_steering_saturated_t, self.last_pose_invalid_t]
     )
-    okay = self.lat_active and not self.steering_pressed and not self.steering_saturated and \
+    okay = self.lat_active and not self.factory_lfa_active and not self.steering_pressed and not self.steering_saturated and \
            fast and turning and has_recovered and calib_valid and sensors_valid and la_valid
 
     self.points.update(self.t, la_desired, la_actual_pose, okay)
@@ -440,7 +463,9 @@ class LateralLagEstimator:
     return lag, corr, confidence
 
 
-def retrieve_initial_lag(params: Params, CP: car.CarParams):
+def retrieve_initial_lag(params: Params, CP: car.CarParams, solo: bool | None = None):
+  """solo (Phase 72): True / False = the cached estimate must belong to that steering profile (solo < LAGD_MODE_SPLIT_S
+  <= legacy), otherwise it is dropped; None = no such check (the pre-72 call)."""
   last_lag_data = params.get("LiveDelay")
   last_carparams_data = params.get("CarParamsPrevRoute")
 
@@ -455,6 +480,7 @@ def retrieve_initial_lag(params: Params, CP: car.CarParams):
         assert valid_blocks <= BLOCK_NUM, "Invalid number of valid blocks"
         assert status != log.LateralDelay.Status.invalid, "Lag estimate is invalid"
         assert version == VERSION, f"Lag estimate is from a different version (got {version}, expected {VERSION})"
+        assert solo is None or (lag < LAGD_MODE_SPLIT_S) == bool(solo), "Lag estimate is from the other steering profile"
         return lag, valid_blocks
     except Exception as e:
       cloudlog.error(f"Failed to retrieve initial lag: {e}")
@@ -469,13 +495,15 @@ def main():
   DEBUG = bool(int(os.getenv("DEBUG", "0")))
 
   pm = messaging.PubMaster(['lateralDelay'])
-  sm = messaging.SubMaster(['deviceMotion', 'extrinsicsCalibration', 'carState', 'controlsState', 'carControl'], poll='deviceMotion')
+  sm = messaging.SubMaster(['deviceMotion', 'extrinsicsCalibration', 'carState', 'controlsState', 'carControl', 'carStateSP'],
+                           poll='deviceMotion', ignore_alive=['carStateSP'], ignore_valid=['carStateSP'], ignore_avg_freq=['carStateSP'])
 
   params = Params()
   CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
 
-  lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP))
-  if (initial_lag_params := retrieve_initial_lag(params, CP)) is not None:
+  solo = not legacy_requested(params)   # i6n Phase 72: steering profile (common/steer_profile.py)
+  lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP, solo))
+  if (initial_lag_params := retrieve_initial_lag(params, CP, solo)) is not None:
     lag, valid_blocks = initial_lag_params
     lag_learner.reset(lag, valid_blocks)
 
@@ -502,3 +530,9 @@ def main():
 
       if sm.frame % 60 == 0:  # read from and write to params every 3 seconds
         lagd_toggle.update(lag_msg)
+
+    # i6n Phase 72: the steering profile was switched (Developer toggle) -> the plant is a different one: start over
+    # from that profile's seed (the two delays differ by 0.4 s; blocks of one are noise for the other)
+    if sm.frame % LAGD_PROFILE_PARAM_FRAMES == 0 and (not legacy_requested(params)) != solo:
+      solo = not solo
+      lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP, solo))

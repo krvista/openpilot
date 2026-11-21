@@ -146,6 +146,7 @@ class CarControlSP:
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
   lateralLaneChangeActive: bool = auto_field()   # Phase 37b-2: model laneChangeStarting
   laneLineProbMin: float = auto_field()          # Phase 45: min inner lane-line prob (0.0 = unknown)
+  stockLfaWithOp: bool = auto_field()            # Phase 72: True = pre-72 behaviour (factory LFA follows MADS, old stack)
 
   @auto_dataclass
   class Param:

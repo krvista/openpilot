@@ -388,6 +388,9 @@ struct CarControlSP @0xa5cd762cd951a455 {
   # Phase 45: min(inner-left, inner-right) model lane-line probability. Lets the car controller release the
   # parking-mode latch once the car is plainly on a marked road. 0.0 when absent (old logs) = never releases.
   laneLineProbMin @6 :Float32;
+  # i6n Phase 72: True = keep the pre-72 behaviour (factory LFA switched on with MADS, Phase 6-69 stack);
+  # False (default) = openpilot steers alone (common/steer_profile.py).
+  stockLfaWithOp @7 :Bool;
 
   struct Param {
     key @0 :Text;
@@ -460,6 +463,10 @@ struct CarStateSP @0xb86e6369214c01c8 {
   # i6n Phase 46: which CarController steering latches / yield paths acted on the
   # previous control step (bits: opendbc hyundai carcontroller.py SF_*), mirrored by card.py.
   steerFlags @2 :UInt32;
+  # i6n Phase 72: what the vehicle's ADAS controller does with our steering request on the previous control step
+  # (bits: opendbc hyundai carcontroller.py GW_* - valid, factory LFA on / active, relayed, solo profile, button pulse,
+  # follow band binding, hold-off paused), mirrored by card.py.
+  gatewayFlags @3 :UInt8;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

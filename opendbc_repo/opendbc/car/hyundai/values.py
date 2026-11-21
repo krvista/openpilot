@@ -556,6 +556,39 @@ class CarControllerParams:
   EXIT_LEAD_MAX_FRAC         = 0.5
   EXIT_LEAD_SPEEDS_KPH       = [70.0, 80.0, 90.0, 120.0]
   EXIT_LEAD_CAP_DEG          = [0.0, 1.5, 1.25, 1.0]
+  # Phase 72 (report §96-97): the MDPS is not commanded by our LKAS_ALT but by the vehicle's ADAS controller
+  # (ADAS_CMD_35_10ms, 0xCB on the ECAN). That controller relays our request 1:1 (30 ms later) only while the factory LFA
+  # is NOT active (LFAHDA_CLUSTER.LFA_ICON != 2); with the factory LFA active it sends its own request and ours is
+  # dropped (standing difference 0, changes under 5 deg/s 0, faster ones x 0.23-0.30). Up to Phase 71 the 'MADS <->
+  # cluster sync pulse' switched the factory LFA ON with every MADS-on edge, so 84-95 % of the "openpilot steering" time
+  # above 55 km/h was the factory LFA steering - and what Phases 59-69 identified as the MDPS (delivery 0.44-0.78, request
+  # rate floor, 0.9 s start delay) was that arbitration. The MDPS itself follows a relayed request in 180 ms at 0.95.
+  # 72a  LFA HOLD-OFF: the LFA button bit of LKAS_ALT toggles the factory LFA ~0.1 s later (ours as well as the camera's).
+  #      While openpilot is in charge the factory LFA is kept switched off: icon 1 / 2 (on) for LFA_HOLD_OFF_CONFIRM_FRAMES
+  #      -> one pulse, then wait LFA_HOLD_OFF_WAIT_FRAMES[tries - 1] (the release takes ~1.1 s; a pulse can be ignored,
+  #      e.g. at standstill) before the next; icon 3 (releasing) and an unknown state never pulse. More than
+  #      LFA_HOLD_OFF_MAX_PULSES within LFA_HOLD_OFF_WINDOW_FRAMES (the car keeps switching it back on) -> stop for
+  #      LFA_HOLD_OFF_GIVE_UP_FRAMES. The camera's own button bit is not forwarded to the controller any more (the press
+  #      still toggles MADS through carstate). Kill: LFA_HOLD_OFF = False (the old sync pulse and bit mirroring).
+  # 72b  DIRECT PROFILE: the stages built for a wheel that does not follow - curve trim (12a / 63a / 63c / 69c), stall
+  #      kick (40), entry boost (63b), exit lead (69b), compensator (59) - are skipped; the request is the commanded
+  #      angle through the hysteresis band, the low-speed smoothing, the hand-gap cap and the VM limits.
+  # 72c  FOLLOW: while the factory LFA is active or releasing (icon 2 / 3) our request has no authority, so it is kept
+  #      within GW_FOLLOW_BAND_DEG of the wheel - nothing is stored that could be released as a step when the controller
+  #      switches over to relaying (logs: 266 switch-overs, 32 % with >= 3 deg stored, up to 11 deg hands off).
+  #      Kill: GW_FOLLOW_BAND_DEG = 0.
+  # All three apply in the 'solo' mode only (CarControlSP.stockLfaWithOp False, the default); with the developer toggle
+  # 'stock LFA with op (old)' the pre-72 behaviour is kept bit for bit. Telemetry: carStateSP.gatewayFlags (GW_* bits).
+  LFA_HOLD_OFF                = True
+  LFA_HOLD_OFF_CONFIRM_FRAMES = 30                      # 0.3 s of 'on' before a pulse
+  LFA_HOLD_OFF_WAIT_FRAMES    = [150, 300, 600, 1000]   # after the 1st / 2nd / 3rd / later pulse without reaching 'off'
+  LFA_HOLD_OFF_MAX_PULSES     = 8
+  LFA_HOLD_OFF_WINDOW_FRAMES  = 6000                    # 60 s
+  LFA_HOLD_OFF_GIVE_UP_FRAMES = 12000                   # 120 s
+  GW_FOLLOW_BAND_DEG          = 1.0
+  GW_RELAY_TOL_DEG            = 0.5                     # |ADAS request - one of our last GW_RELAY_HIST angles| = relayed
+  GW_RELAY_HIST               = 8
+  GW_STALE_NS                 = int(0.5e9)              # LFAHDA_CLUSTER (20 Hz) / ADAS_CMD_35_10ms older than this = unknown
   # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
   # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
   #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel
