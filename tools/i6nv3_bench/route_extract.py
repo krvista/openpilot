@@ -19,6 +19,9 @@ Saved (carState-rate grid, T relative to the first log message):
   - the factory LFA / HDA state; lane_l / lane_r = LEFT / RIGHT_LANE_LINE of the camera's CAM_0x362 (bus 2), lane_tx_l /
   lane_tx_r = the same two fields in the copy op sends to the ADAS controller (-1 when op sends none); tx_b7 = byte 7 of
   the LKAS_ALT op transmits (bit 0 = LFA button bit: op's 'MADS <-> cluster sync pulse'; cam_b7 bit 0 = the camera's)
+  v5 (11-22, Phase 72 drives): gw_flags = carStateSP.gatewayFlags (GW_* bits of the car controller: 1 valid, 2 factory LFA
+  on, 4 active, 8 relayed, 16 solo profile, 32 button pulse, 64 follow band, 128 hold-off paused; 0 in pre-72 logs),
+  lat_paused = carStateSP.lateralControlPaused
 Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz>
 """
 import glob
@@ -52,7 +55,8 @@ for f in files:
         x = m.controlsState
         ct.append((t, x.desiredCurvature, x.curvature, getattr(x, "steerCmdGapDeg", 0.0), getattr(x, "steerFlags", 0)))
       elif w == "carStateSP":
-        sp.append((t, getattr(m.carStateSP, "steerFlags", 0)))
+        sp.append((t, getattr(m.carStateSP, "steerFlags", 0), getattr(m.carStateSP, "gatewayFlags", 0),
+                   getattr(m.carStateSP, "lateralControlPaused", False)))
       elif w == "modelV2":
         d = m.modelV2
         lm = min(d.laneLineProbs[1], d.laneLineProbs[2]) if len(d.laneLineProbs) >= 4 else 1.0
@@ -138,6 +142,7 @@ np.savez_compressed(out, T=T - t0, v=CS[:, 1], a_ego=CS[:, 2], ang=CS[:, 3], rat
                     tx_reject=rej, sd_active=res(sd, 1, kind="hold") > 0.5,
                     gps_lat=res(gp, 1), gps_lon=res(gp, 2), commit=np.array(commit),
                     sf_cc=res(sp, 1, kind="hold").astype(np.int64), sf_ctl=res(ct, 4, kind="hold").astype(np.int64),
+                    gw_flags=res(sp, 2, kind="hold").astype(np.int64), lat_paused=res(sp, 3, kind="hold") > 0.5,
                     cam_ang=res(cam, 1), cam_gain=res(cam, 2, kind="hold"), cam_active=res(cam, 3, kind="hold"),
                     cam_b7=res(cam, 4, kind="hold"), cam_b8=res(cam, 5, kind="hold"), cam_b13=res(cam, 6, kind="hold"),
                     cam_b9lo=res(cam, 7, kind="hold"), mdps_ang=res(mp, 4), mdps_col=res(mp, 5),
