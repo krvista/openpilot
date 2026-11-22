@@ -33,8 +33,7 @@ class _Tog:
 
 def _screen(dev, **kw):
   """a Developer screen reduced to the two capture toggles"""
-  me = types.SimpleNamespace(_stock_capture_toggle=_Tog(), _stock_next_toggle=_Tog(), _stock_with_op_toggle=_Tog(),   # (Phase 72 toggle)
-                             _stock_capture_refresh_n=0, **kw)
+  me = types.SimpleNamespace(_stock_capture_toggle=_Tog(), _stock_capture_refresh_n=0, **kw)
   me._show_stock_capture = lambda: dev.DeveloperLayoutMici._show_stock_capture(me)
   return me
 
@@ -173,7 +172,7 @@ def test_toggle_mirrors_a_param_cleared_elsewhere(dev):
 
 def test_toggle_sits_right_after_quickboot(dev):
   src = open(dev.__file__).read()
-  assert re.search(r"self\._quickboot_toggle,\n\s+self\._stock_capture_toggle,\n\s+self\._stock_next_toggle,\n\s+self\._stock_with_op_toggle,\n\s+\]\)", src)   # (+ the Phase 72 toggle)
+  assert re.search(r"self\._quickboot_toggle,\n\s+self\._stock_capture_toggle,\n\s+\]\)", src)   # the last entry (Phase 74: the two after it are gone)
   assert 'BigToggle("stock LFA capture"' in src
   assert "self._stock_capture_toggle.set_enabled(self._stock_capture_switchable)" in src
   assert dev.STOCK_LFA_CAPTURE_PARAM == slc.PARAM

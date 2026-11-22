@@ -25,7 +25,7 @@
 
 ## 조향 프로파일 (Phase 72, `common/steer_profile.py`)
 - 기본 = **solo**: openpilot 이 조향하는 동안 순정 LFA 를 꺼 두고(계기판 LFA·HDA 아이콘 꺼짐) 모델 action 을 그대로 요청한다. LFA 버튼은 openpilot 조향 on / off 만 한다.
-- 개발자 화면 `stock LFA with op (old)` 를 켜면 Phase 71 까지의 동작(순정 LFA 를 같이 켬 + 이전 보상 스택)으로 돌아간다. 수 초 안에, 조향이 꺼져 있는 순간에 바뀐다.
+- Phase 71 까지의 동작(순정 LFA 를 같이 켬 + 이전 보상 스택)으로 돌아가는 길은 코드 상수뿐이다: `common/steer_profile.SOLO_DEFAULT = False`(또는 `LFA_HOLD_OFF = False`) 로 빌드. 개발자 화면의 `stock LFA with op (old)` 토글은 Phase 74 에서 없앴다.
 - 순정 LFA 로만 달리려면 `stock LFA capture`.
 - solo 주행 로그에서 먼저 볼 것: `e160`(op 조향 시간의 전달 비율 — 98 % 이상이어야 함, 펄스 횟수), `e156` 의 op 열 대 순정 열, `e157`(요청 → 핸들), lagd 학습값(0.3 s 근처).
   `carStateSP.gatewayFlags`: 1 유효 · 2 순정 LFA 켜짐 · 4 활성 · 8 전달 · 16 solo · 32 펄스 · 64 추종 제한 · 128 꺼 두기 중단.
@@ -35,11 +35,9 @@
 
 ## 순정 LFA 수집 주행 (Phase 70 / 70b)
 - 목적: 순정 LFA 가 이 차 MDPS 를 직접 조향할 때의 요청·권한 값·응답을 기록(평소 로그에는 대기 프레임만 있다, 보고서 §91.5).
-- 켜기(지금): 시동을 건 뒤 **정차 상태·미인게이지**에서 설정 → 개발자 화면 끝의 `stock LFA capture`(quickboot mode 다음). openpilot 이 한 번
+- 켜기: 시동을 건 뒤 **정차 상태·미인게이지**에서 설정 → 개발자 화면 끝의 `stock LFA capture`(quickboot mode 다음). openpilot 이 한 번
   재시작하고(수 초) 화면에 "Dashcam Mode" 가 뜨면 수집 중이다. 그 주행 동안 sunnypilot 은 조향·가감속을 하지 않고 기록만 한다 — 순정 LFA/HDA2 를
   평소처럼 켜서 운전. (b62f36a0 에서는 켤 때마다 계기판 ADAS 경고가 떴다 — 릴레이가 가로챈 채 무송신, 보고서 §94.1. 70b 에서 수정.)
-- 켜기(예비 — 지금 전환에서 계기판 ADAS 경고가 뜰 때): `stock LFA capture` 를 다시 끄면 경고는 1–2 s 안에 풀린다. `stock LFA next start` 를
-  켠 다음(주행 중 아무 때나 — 그 주행은 달라지지 않는다) 시동을 껐다 켠다. 그 시동은 **처음부터** 수집 주행이고 재시작도 릴레이 전환도 없다. 예약은 1 회용.
 - 끄기: 시동을 끄면 자동 해제(다음 시동은 원래의 sunnypilot). 주행 중 되돌리려면 정차 후 `stock LFA capture` 를 끈다.
 - 권장 주행: 10–15 분, 고속도로 직선·완만한 커브와 40–70 km/h 커브 진입 몇 번을 순정 LFA 로.
 - 분석: `route_extract.py <route> <npz>`(v4) → `probes/qa/e156_who_steers.py`(순정 / op / 혼합 점수표)·`e157`(MDPS 가 받는 요청)·`e159`(코너).

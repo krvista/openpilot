@@ -912,7 +912,7 @@ class Controls(ControlsExt):
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
-    # Phase 72: steering profile for this frame (the toggle is re-read every 3 s; it takes effect while lateral is off)
+    # Phase 72: steering profile for this frame (re-evaluated every 3 s; a change takes effect while lateral is off)
     if hasattr(self, "_steer_profile"):
       self._steer_legacy = self._steer_profile.update(bool(CC.latActive))
     steer_direct = not getattr(self, "_steer_legacy", True)

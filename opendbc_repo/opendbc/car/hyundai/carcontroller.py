@@ -1139,7 +1139,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
 
     # Phase 72 (values.py): solo = openpilot steers alone (factory LFA held off, direct profile, follow band);
-    # CarControlSP.stockLfaWithOp (developer toggle) or LFA_HOLD_OFF = False keep the pre-72 behaviour.
+    # CarControlSP.stockLfaWithOp (controlsd: steer_profile.SOLO_DEFAULT False) or LFA_HOLD_OFF = False keep the pre-72 behaviour.
     lfa_state = int(getattr(CS, 'lfa_state', -1))
     solo = bool(ccnc_lka_alt and CarControllerParams.LFA_HOLD_OFF and not getattr(self._cc_sp, 'stockLfaWithOp', False))
     solo_changed = solo != self.solo_mode

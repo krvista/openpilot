@@ -2,8 +2,9 @@
  - the cause, measured on routes 8b-91: on every restart into the capture mode pandad armed the ENDED session's safety
    mode again (harness relay in intercept) off ControlsReady / FirmwareQueryDone / CarParams that outlived it; the passive
    session sent nothing, so the car had no LKAS_ALT / CAM_0x362 at all. manager now drops the two gates when a session ends
- - "stock LFA next start": the arming becomes the drive's mode on the rising edge of the ignition, so that drive never
-   restarts and never switches the relay"""
+ - "stock LFA next start" (an arming for the next ignition on, the fallback while the switch still brought warnings) was
+   removed in Phase 74: 70b's fix is verified on the car (routes 97-9f), so the toggle, its param and the rising-edge
+   branch are gone - the tests at the end pin that"""
 import re
 import textwrap
 import types
@@ -219,99 +220,55 @@ def test_manager_loop_drops_the_gates_as_the_session_ends():
   assert "started = sm['deviceState'].started\n" in loop
 
 
-def test_manager_loop_starts_an_armed_capture_before_card():
+def test_manager_loop_ends_a_capture_with_the_ignition():
   done, p = _run_manager_loop([
     (False, False),
     (True, True),       # the device booted with the car already on: ignition and onroad in one step
     (True, True),
     (False, False),     # ignition off
-  ], {"StockLfaCaptureNext": True})
-  assert done[1] == ["clear onroad", "clear ignition", "log stock LFA capture: started with the ignition", "run True capture=True"]
+  ], {"StockLfaCapture": True})
+  assert done[1] == ["clear onroad", "clear ignition", "run True capture=True"]
   assert done[2] == ["run True capture=True"]
   assert done[3][-1] == "run False capture=False" and "log stock LFA capture: ended with the ignition" in done[3]
-  assert not p.get_bool("StockLfaCaptureNext") and not p.get_bool("StockLfaCapture")
+  assert not p.get_bool("StockLfaCapture")
 
 
-# ---------------------------------------------------------------- "next start": armed, starts with the ignition
-def test_armed_capture_starts_with_the_ignition_and_is_used_up():
-  p = _Params({"StockLfaCaptureNext": True})
-  assert slc.on_ignition(p, False, False) is None and not p.get_bool("StockLfaCapture")     # car still off
-  assert slc.on_ignition(p, True, False) == "started"                                        # ignition on
-  assert p.get_bool("StockLfaCapture") is True and p.get_bool("StockLfaCaptureNext") is False
+# ---------------------------------------------------------------- Phase 74: no arming for the next start any more
+def test_ignition_on_never_starts_a_capture():
+  p = _Params({"StockLfaCaptureNext": True})                     # a value left over on a device from before Phase 74
+  assert slc.on_ignition(p, False, False) is None
+  assert slc.on_ignition(p, True, False) is None                 # ignition on: nothing starts
+  assert slc.capture_requested(p) is False and not p.get_bool("StockLfaCapture")
+  assert slc.on_ignition(p, True, True) is None
+
+
+def test_capture_still_ends_with_the_ignition():
+  p = _Params({"StockLfaCapture": True})
   assert slc.capture_requested(p) is True
   assert slc.on_ignition(p, True, True) is None
-  assert slc.on_ignition(p, False, True) == "ended" and not p.get_bool("StockLfaCapture")    # ignition off
-  assert slc.on_ignition(p, True, False) is None and not p.get_bool("StockLfaCapture")       # the next drive is normal
+  assert slc.on_ignition(p, False, True) == "ended" and not p.get_bool("StockLfaCapture")
+  assert slc.on_ignition(p, True, False) is None and not p.get_bool("StockLfaCapture")    # the next drive is normal
 
 
-def test_arming_does_nothing_in_the_drive_it_is_set_in():
-  p = _Params()
-  slc.on_ignition(p, True, False)
-  p.put_bool("StockLfaCaptureNext", True)                       # armed while driving
-  for _ in range(5):
-    assert slc.on_ignition(p, True, True) is None
-  assert slc.capture_requested(p) is False and p.get_bool("StockLfaCaptureNext") is True
-
-
-def test_cold_boot_with_the_ignition_already_on_counts_as_the_rising_edge():
-  """the device boots after the key is turned: manager's first loop with a panda already reports the ignition on"""
-  p = _Params({"StockLfaCaptureNext": True})
-  ignition_prev = False                                         # manager_thread starts with this
-  assert slc.on_ignition(p, True, ignition_prev) == "started"
-
-
-def test_kill_switch_uses_the_arming_up_without_a_capture_drive():
-  slc.STOCK_LFA_CAPTURE = False
-  p = _Params({"StockLfaCaptureNext": True})
-  assert slc.on_ignition(p, True, False) is None
-  assert not p.get_bool("StockLfaCapture") and not p.get_bool("StockLfaCaptureNext")   # no stale arming left for later
-
-
-def test_manager_arms_before_it_starts_card():
-  src = open(f"{REPO}/openpilot/system/manager/manager.py").read()
-  assert src.index("stock_lfa_capture.on_ignition(params, ignition, ignition_prev)") < \
-         src.index("ensure_running(managed_processes.values(), started, params=params")
+def test_the_next_start_arming_is_gone_everywhere():
+  assert not hasattr(slc, "PARAM_NEXT")
   keys = open(f"{REPO}/openpilot/common/params_keys.h").read()
-  m = re.search(r'\{"StockLfaCaptureNext", \{([^}]*)\}\}', keys)
-  assert m and m.group(1).replace(" ", "") == 'PERSISTENT,BOOL,"0"'       # survives the boot between the two drives
-  assert keys.isascii()
-  assert slc.PARAM_NEXT == "StockLfaCaptureNext"
+  assert "StockLfaCaptureNext" not in keys and '{"StockLfaCapture", {CLEAR_ON_MANAGER_START, BOOL}}' in keys and keys.isascii()
+  src = open(dev.__file__).read() if hasattr(dev, "__file__") else open(f"{REPO}/openpilot/selfdrive/ui/mici/layouts/settings/developer.py").read()
+  for gone in ("stock LFA next start", "_stock_next_toggle", "STOCK_LFA_NEXT_TEXT", "STOCK_LFA_CAPTURE_NEXT_PARAM", "_on_stock_next_toggled"):
+    assert gone not in src.replace('removed "stock LFA next start"', ""), gone
+  mgr = open(f"{REPO}/openpilot/system/manager/manager.py").read()
+  assert mgr.index("stock_lfa_capture.on_ignition(params, ignition, ignition_prev)") < \
+         mgr.index("ensure_running(managed_processes.values(), started, params=params")
 
 
-# ---------------------------------------------------------------- the second menu entry
-def test_next_start_toggle_arms_without_touching_this_drive(dev):
-  dev.ui_state.params = _Params()
-  dev.restart_needed_callback.reset_mock()
-  me = _screen(dev)
-  dev.DeveloperLayoutMici._on_stock_next_toggled(me, True)
-  assert dev.ui_state.params.get_bool("StockLfaCaptureNext") is True
-  assert dev.ui_state.params.get_bool("StockLfaCapture") is False
-  dev.restart_needed_callback.assert_not_called()               # no onroad cycle: nothing is handed over now
-  assert me._stock_next_toggle.checked is True and me._stock_next_toggle.value == dev.STOCK_LFA_NEXT_TEXT[True]
-  dev.DeveloperLayoutMici._on_stock_next_toggled(me, False)     # changed my mind
-  assert dev.ui_state.params.get_bool("StockLfaCaptureNext") is False
-  assert me._stock_next_toggle.checked is False and me._stock_next_toggle.value == dev.STOCK_LFA_NEXT_TEXT[False]
-  dev.restart_needed_callback.assert_not_called()
-
-
-def test_screen_follows_the_arming_turning_into_the_drive(dev):
-  dev.ui_state.params = _Params({"StockLfaCaptureNext": True})
+def test_screen_shows_the_capture_state_only(dev):
+  dev.ui_state.params = _Params({"StockLfaCapture": True})
   me = _screen(dev)
   dev.DeveloperLayoutMici._show_stock_capture(me)
-  assert (me._stock_capture_toggle.checked, me._stock_next_toggle.checked) == (False, True)
-  slc.on_ignition(dev.ui_state.params, True, False)             # the next ignition on
-  dev.DeveloperLayoutMici._show_stock_capture(me)
-  assert (me._stock_capture_toggle.checked, me._stock_next_toggle.checked) == (True, False)
-  assert me._stock_capture_toggle.value == dev.STOCK_LFA_CAPTURE_TEXT[True]
+  assert me._stock_capture_toggle.checked is True and me._stock_capture_toggle.value == dev.STOCK_LFA_CAPTURE_TEXT[True]
   n = me._stock_capture_toggle.layouts
   dev.DeveloperLayoutMici._show_stock_capture(me)
   assert me._stock_capture_toggle.layouts == n                  # an unchanged text is not laid out again
-
-
-def test_next_start_toggle_is_the_entry_after_capture(dev):
-  src = open(dev.__file__).read()
-  assert 'BigToggle("stock LFA next start"' in src
-  assert dev.STOCK_LFA_CAPTURE_NEXT_PARAM == slc.PARAM_NEXT
-  assert "self._stock_next_toggle.set_enabled" not in src       # arming changes nothing now: allowed at any time
-  for text in list(dev.STOCK_LFA_CAPTURE_TEXT.values()) + list(dev.STOCK_LFA_NEXT_TEXT.values()):
+  for text in dev.STOCK_LFA_CAPTURE_TEXT.values():
     assert len(text) <= 46                                      # the length the first version's sub-text had

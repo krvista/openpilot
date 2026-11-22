@@ -163,8 +163,7 @@ def manager_thread() -> None:
     ignition = any(ps.ignitionLine or ps.ignitionCan for ps in sm['pandaStates'] if ps.pandaType != log.PandaState.PandaType.unknown)
     if ignition and not ignition_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
-    # i6n Phase 70 / 70b: the stock-LFA capture mode starts and ends with the ignition (an armed capture becomes this
-    # drive's mode here, before ensure_running starts card; the ignition going off ends it)
+    # i6n Phase 70 / 70b: the stock-LFA capture mode ends with the ignition
     _slc = stock_lfa_capture.on_ignition(params, ignition, ignition_prev)
     if _slc is not None:
       cloudlog.warning(f"stock LFA capture: {_slc} with the ignition")

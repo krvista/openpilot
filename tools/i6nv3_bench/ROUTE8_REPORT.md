@@ -3102,3 +3102,9 @@ openpilot 은 조향이 켜져 있어도(MADS 활성) 일부 상태에서 요청
 4. 순정 대비 합격표(§98.1): a1 은 흔들림·지연은 통과, 위치·흩어짐·커브·접근은 미달.
 
 도구: `e164_solo_triage.py`, `e165_model_lane_law.py`, `e163`, `route_extract.py` v5.
+
+## 102. Phase 74 — 개발자 메뉴의 `stock LFA with op (old)` · `stock LFA next start` 삭제 (11-22)
+
+- `stock LFA with op (old)`(Phase 72 의 되돌리기 토글, §97.1): 토글과 `StockLfaWithOp` 파라미터를 없앴다. 프로파일은 항상 solo. §97·§100·§101 에서 "이 토글로 되돌린다"고 적은 부분은 이제 해당하지 않으며, 이전 동작은 `steer_profile.SOLO_DEFAULT = False`(또는 `LFA_HOLD_OFF = False`)로 빌드해야 나온다. `CarControlSP.stockLfaWithOp` 와 legacy 경로 자체는 그 스위치와 기존 테스트(legacy 로 607 건)를 위해 남겼다.
+- `stock LFA next start`(Phase 70b 의 예비 수단, §93–94): 토글, `StockLfaCaptureNext` 파라미터, manager 가 시동 켤 때 예약을 수집 주행으로 바꾸던 분기를 없앴다. 70b 의 원인 수정이 실차에서 확인됐으므로(97–9f: 수집 전환 뒤 경고 0) `stock LFA capture` 하나로 충분하다. 수집 모드가 시동을 끄면 끝나는 것은 그대로다.
+- 장치에 남아 있을 수 있는 두 파라미터의 값은 더 읽지 않는다(예약이 켜진 채였어도 다음 시동은 평소대로).

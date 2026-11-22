@@ -38,23 +38,14 @@ class AlphaLongConfirmPage(NavScroller):
 # Same path/semantics as the comma 3X layout (sunnypilot/layouts/settings/developer.py), which is not used on comma 4.
 PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/openpilot/prebuilt"
 
-# i6n Phase 70 / 70b: stock-LFA capture (common/stock_lfa_capture.py holds the mode itself). Two toggles after quickboot:
+# i6n Phase 70 / 70b: stock-LFA capture (common/stock_lfa_capture.py holds the mode itself). One toggle after quickboot:
 #   "stock LFA capture"    switches NOW (car stopped, openpilot not engaged): openpilot restarts passive and the factory LFA
 #                          steers until the ignition goes off.
-#   "stock LFA next start" arms the NEXT ignition on instead: that drive is passive from its first second, with no restart
-#                          - the fallback if switching now still brings ADAS warnings.
+# (Phase 74 removed "stock LFA next start" and "stock LFA with op (old)".)
 STOCK_LFA_CAPTURE_PARAM = "StockLfaCapture"            # this drive
-STOCK_LFA_CAPTURE_NEXT_PARAM = "StockLfaCaptureNext"   # armed: the next drive
 STOCK_LFA_CAPTURE_MAX_SPEED_MS = 0.3                   # "capture" only switches while the car is stopped
 STOCK_LFA_CAPTURE_REFRESH_FRAMES = 20                  # ~1 s at the comma 4 UI rate
 STOCK_LFA_CAPTURE_TEXT = {False: "this drive only: factory LFA steers, logs kept", True: "on: ends when the ignition goes off"}
-STOCK_LFA_NEXT_TEXT = {False: "next start only: nothing switches mid-drive", True: "armed: the next ignition on starts it"}
-# i6n Phase 72 (common/steer_profile.py): openpilot steers alone by default - the factory LFA is kept switched off while
-# openpilot is in charge. "stock LFA with op (old)" brings back the pre-72 steering (the factory LFA is switched on with
-# openpilot's lateral and steers while it is active). It takes effect within a few seconds, while steering is off.
-STOCK_LFA_WITH_OP_PARAM = "StockLfaWithOp"
-STOCK_LFA_WITH_OP_TEXT = {False: "off: openpilot steers alone (factory LFA kept off)",
-                          True: "on: factory LFA steers with openpilot, as before"}
 
 
 class DeveloperLayoutMici(NavScroller):
@@ -117,18 +108,12 @@ class DeveloperLayoutMici(NavScroller):
                                        initial_state=os.path.exists(PREBUILT_PATH),
                                        toggle_callback=self._on_quickboot_toggled)
     # i6n Phase 70 / 70b: one drive with openpilot passive so the factory LFA steers and is recorded
-    # (common/stock_lfa_capture.py). "capture" switches now and restarts openpilot, so only while the car is stopped;
-    # "next start" arms the next ignition on. Either way the mode ends by itself when the ignition goes off.
+    # (common/stock_lfa_capture.py). It switches now and restarts openpilot, so only while the car is stopped; the mode
+    # ends by itself when the ignition goes off.
     _sc_on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM)
-    _sn_on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_NEXT_PARAM)
     self._stock_capture_toggle = BigToggle("stock LFA capture", STOCK_LFA_CAPTURE_TEXT[_sc_on], initial_state=_sc_on,
                                            toggle_callback=self._on_stock_capture_toggled)
-    self._stock_next_toggle = BigToggle("stock LFA next start", STOCK_LFA_NEXT_TEXT[_sn_on], initial_state=_sn_on,
-                                        toggle_callback=self._on_stock_next_toggled)
     self._stock_capture_refresh_n = 0
-    _sw_on = ui_state.params.get_bool(STOCK_LFA_WITH_OP_PARAM)
-    self._stock_with_op_toggle = BigToggle("stock LFA with op (old)", STOCK_LFA_WITH_OP_TEXT[_sw_on], initial_state=_sw_on,
-                                           toggle_callback=self._on_stock_with_op_toggled)
 
     self._scroller.add_widgets([
       self._adb_toggle,
@@ -141,8 +126,6 @@ class DeveloperLayoutMici(NavScroller):
       self._debug_mode_toggle,
       self._quickboot_toggle,
       self._stock_capture_toggle,
-      self._stock_next_toggle,
-      self._stock_with_op_toggle,
     ])
 
     # Toggle lists
@@ -195,11 +178,7 @@ class DeveloperLayoutMici(NavScroller):
 
   def _show_stock_capture(self):
     on = ui_state.params.get_bool(STOCK_LFA_CAPTURE_PARAM)
-    armed = ui_state.params.get_bool(STOCK_LFA_CAPTURE_NEXT_PARAM)
-    with_op = ui_state.params.get_bool(STOCK_LFA_WITH_OP_PARAM)
-    for tog, checked, text in ((self._stock_capture_toggle, on, STOCK_LFA_CAPTURE_TEXT[on]),
-                               (self._stock_next_toggle, armed, STOCK_LFA_NEXT_TEXT[armed]),
-                               (self._stock_with_op_toggle, with_op, STOCK_LFA_WITH_OP_TEXT[with_op])):
+    for tog, checked, text in ((self._stock_capture_toggle, on, STOCK_LFA_CAPTURE_TEXT[on]),):
       tog.set_checked(checked)
       if tog.get_value() != text:   # the label is laid out again on every change of the text only
         tog.set_value(text)
@@ -249,15 +228,6 @@ class DeveloperLayoutMici(NavScroller):
   def _on_stock_capture_toggled(self, state: bool):
     ui_state.params.put_bool(STOCK_LFA_CAPTURE_PARAM, state, block=True)
     restart_needed_callback()   # car on: openpilot restarts into (or out of) the passive session right away
-    self._show_stock_capture()
-
-  def _on_stock_with_op_toggled(self, state: bool):
-    # read by controlsd (every 3 s, applied while steering is off), the car controller through it, and lagd
-    ui_state.params.put_bool(STOCK_LFA_WITH_OP_PARAM, state, block=True)
-    self._show_stock_capture()
-
-  def _on_stock_next_toggled(self, state: bool):
-    ui_state.params.put_bool(STOCK_LFA_CAPTURE_NEXT_PARAM, state, block=True)   # the next ignition on; nothing changes now
     self._show_stock_capture()
 
   def _on_quickboot_toggled(self, state: bool):

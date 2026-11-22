@@ -577,8 +577,9 @@ class CarControllerParams:
   #      within GW_FOLLOW_BAND_DEG of the wheel - nothing is stored that could be released as a step when the controller
   #      switches over to relaying (logs: 266 switch-overs, 32 % with >= 3 deg stored, up to 11 deg hands off).
   #      Kill: GW_FOLLOW_BAND_DEG = 0.
-  # All three apply in the 'solo' mode only (CarControlSP.stockLfaWithOp False, the default); with the developer toggle
-  # 'stock LFA with op (old)' the pre-72 behaviour is kept bit for bit. Telemetry: carStateSP.gatewayFlags (GW_* bits).
+  # All three apply in the 'solo' mode only (CarControlSP.stockLfaWithOp False, the default); with it True (controlsd sets
+  # it when common/steer_profile.SOLO_DEFAULT is False) the pre-72 behaviour is kept bit for bit. Telemetry:
+  # carStateSP.gatewayFlags (GW_* bits).
   LFA_HOLD_OFF                = True
   LFA_HOLD_OFF_CONFIRM_FRAMES = 30                      # 0.3 s of 'on' before a pulse
   LFA_HOLD_OFF_WAIT_FRAMES    = [150, 300, 600, 1000]   # after the 1st / 2nd / 3rd / later pulse without reaching 'off'

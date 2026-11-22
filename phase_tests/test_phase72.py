@@ -7,7 +7,8 @@ the factory LFA is not active. Up to Phase 71 the 'MADS <-> cluster sync pulse' 
      hands the model's action through (no lead layers, entry assist, extra low-pass); latcontrol without the 7a trim;
      lagd learns the relayed plant (seed 0.32 s, published <= 0.5 s, factory-LFA windows excluded).
 72c  follow band: while the factory LFA is active / releasing the request stays within 1 deg of the wheel.
-Legacy (CarControlSP.stockLfaWithOp, Developer toggle 'stock LFA with op (old)') = the pre-72 behaviour."""
+Legacy (CarControlSP.stockLfaWithOp; steer_profile.SOLO_DEFAULT = False) = the pre-72 behaviour. The Developer toggle
+'stock LFA with op (old)' and its param were removed in Phase 74."""
 import types
 
 import numpy as np
@@ -83,7 +84,7 @@ def test_shipped_values():
   assert P.LFA_HOLD_OFF_WAIT_FRAMES == [150, 300, 600, 1000] and P.LFA_HOLD_OFF_MAX_PULSES == 8
   assert P.LFA_HOLD_OFF_WINDOW_FRAMES == 6000 and P.LFA_HOLD_OFF_GIVE_UP_FRAMES == 12000
   assert P.GW_FOLLOW_BAND_DEG == 1.0 and P.GW_RELAY_TOL_DEG == 0.5 and P.GW_RELAY_HIST == 8
-  assert sp.SOLO_DEFAULT is True and sp.PARAM == "StockLfaWithOp"
+  assert sp.SOLO_DEFAULT is True and not hasattr(sp, "PARAM")       # Phase 74: no param, the constant is the switch
 
 
 def test_factory_lfa_found_on_is_switched_off_with_one_pulse():
@@ -320,7 +321,7 @@ def test_schema_and_plumbing():
   assert lagd.GW_LFA_ACTIVE == ccmod.GW_LFA_ACTIVE
   import os
   root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-  assert '"StockLfaWithOp", {PERSISTENT, BOOL, "0"}' in open(os.path.join(root, "openpilot/common/params_keys.h")).read()
+  assert "StockLfaWithOp" not in open(os.path.join(root, "openpilot/common/params_keys.h")).read()   # Phase 74
   card = open(os.path.join(root, "openpilot/selfdrive/car/card.py")).read()
   assert "CS_SP.gatewayFlags = int(getattr(self.CI.CC, 'gw_flags', 0)) & 0xFF" in card
   ext = open(os.path.join(root, "openpilot/sunnypilot/selfdrive/controls/controlsd_ext.py")).read()
@@ -339,40 +340,35 @@ def test_carstate_reads_the_two_messages_without_gating_can_valid():
 
 
 # ------------------------------------------------------------------ steering profile (toggle, latch)
-def test_profile_param_and_kill_switch():
+def test_profile_is_solo_and_the_constant_is_the_only_switch():
   FakeParams.reset()
-  assert sp.legacy_requested(FakeParams()) is False                  # default: solo
-  FakeParams().put_bool(sp.PARAM, True)
-  assert sp.legacy_requested(FakeParams()) is True
+  FakeParams().put_bool("StockLfaWithOp", True)                      # a value left over from before Phase 74 changes nothing
+  assert sp.legacy_requested(FakeParams()) is False and sp.legacy_requested() is False
   old = sp.SOLO_DEFAULT
   try:
     sp.SOLO_DEFAULT = False
-    FakeParams().put_bool(sp.PARAM, False)
-    assert sp.legacy_requested(FakeParams()) is True                 # the kill switch wins
+    assert sp.legacy_requested(FakeParams()) is True                 # the kill switch
   finally:
     sp.SOLO_DEFAULT = old
     FakeParams.reset()
 
-  class Boom:
-    def get_bool(self, k):
-      raise RuntimeError("params down")
-  assert sp.legacy_requested(Boom()) is False
-
 
 def test_profile_changes_only_while_lateral_is_off():
-  FakeParams.reset()
-  latch = sp.ProfileLatch(FakeParams(), period=10)
-  assert latch.legacy is False
-  FakeParams().put_bool(sp.PARAM, True)
-  for _ in range(25):
-    assert latch.update(True) is False                               # steering: stays solo, though the toggle is read
-  assert latch.requested is True
-  assert latch.update(False) is True                                 # steering off: now legacy
-  FakeParams().put_bool(sp.PARAM, False)
-  for _ in range(9):
-    latch.update(True)
-  assert latch.update(False) is False
-  FakeParams.reset()
+  old = sp.SOLO_DEFAULT
+  try:
+    latch = sp.ProfileLatch(None, period=10)
+    assert latch.legacy is False
+    sp.SOLO_DEFAULT = False
+    for _ in range(25):
+      assert latch.update(True) is False                             # steering: stays solo, though the request is seen
+    assert latch.requested is True
+    assert latch.update(False) is True                               # steering off: now legacy
+    sp.SOLO_DEFAULT = True
+    for _ in range(9):
+      latch.update(True)
+    assert latch.update(False) is False
+  finally:
+    sp.SOLO_DEFAULT = old
 
 
 # ------------------------------------------------------------------ 72b controlsd direct path
@@ -497,11 +493,11 @@ def test_published_delay_is_capped_in_solo():
   assert est.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.50)
 
 
-# ------------------------------------------------------------------ developer toggle
-def test_developer_toggle():
-  import os, re
+# ------------------------------------------------------------------ Phase 74: the developer toggle is gone
+def test_no_developer_toggle_for_the_old_behaviour():
+  import os
   root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
   src = open(os.path.join(root, "openpilot/selfdrive/ui/mici/layouts/settings/developer.py")).read()
-  assert 'STOCK_LFA_WITH_OP_PARAM = "StockLfaWithOp"' in src and 'BigToggle("stock LFA with op (old)"' in src
-  assert re.search(r"def _on_stock_with_op_toggled\(self, state: bool\):\n(\s+#.*\n)*\s+ui_state\.params\.put_bool\(STOCK_LFA_WITH_OP_PARAM, state, block=True\)", src)
-  assert "self._stock_with_op_toggle, with_op, STOCK_LFA_WITH_OP_TEXT[with_op]" in src   # mirrored about once a second
+  for gone in ("StockLfaWithOp", "_stock_with_op_toggle", "STOCK_LFA_WITH_OP", "_on_stock_with_op_toggled", 'BigToggle("stock LFA with op'):
+    assert gone not in src, gone
+  assert 'BigToggle("stock LFA capture"' in src                      # the capture toggle stays

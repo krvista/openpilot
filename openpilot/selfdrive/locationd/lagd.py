@@ -102,7 +102,7 @@ CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence
 LAGD_SOLO_SEED_S = 0.32
 LAGD_SOLO_PUBLISH_MAX_S = 0.50
 LAGD_MODE_SPLIT_S = 0.50
-LAGD_PROFILE_PARAM_FRAMES = 60     # the toggle is re-read every 3 s (20 Hz deviceMotion)
+LAGD_PROFILE_PARAM_FRAMES = 60     # the profile is re-evaluated every 3 s (20 Hz deviceMotion)
 GW_LFA_ACTIVE = 1 << 2             # carStateSP.gatewayFlags bit (opendbc hyundai carcontroller.py GW_LFA_ACTIVE)
 CCNC_SOLO_PROFILE_KW = dict(CCNC_PROFILE_KW, initial_lag_seed=LAGD_SOLO_SEED_S, max_lag=MAX_LAG, publish_max=LAGD_SOLO_PUBLISH_MAX_S)
 
@@ -531,7 +531,7 @@ def main():
       if sm.frame % 60 == 0:  # read from and write to params every 3 seconds
         lagd_toggle.update(lag_msg)
 
-    # i6n Phase 72: the steering profile was switched (Developer toggle) -> the plant is a different one: start over
+    # i6n Phase 72: the steering profile was switched -> the plant is a different one: start over
     # from that profile's seed (the two delays differ by 0.4 s; blocks of one are noise for the other)
     if sm.frame % LAGD_PROFILE_PARAM_FRAMES == 0 and (not legacy_requested(params)) != solo:
       solo = not solo
