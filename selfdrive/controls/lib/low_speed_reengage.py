@@ -1,33 +1,54 @@
-from openpilot.common.realtime import DT_CTRL
+import json
+import os
 
-# On by default: let lateral re-engage below minSteerSpeed on Chrysler EPS units with a high minimum
-# steer speed. Once engaged the WK2 EPS keeps tracking torque below minSteerSpeed (the hold, HOLD_MARGIN), but
-# after a dip below that floor lateral only came back above minSteerSpeed (63 km/h): WK2 drivelog 6a-7c spent 22%
-# of the time above 54 km/h (33.8 of 150 min, single stretches of 2 min) cruising with lateral off, mostly on
-# 60 km/h roads. Whether the EPS accepts a fresh LKAS request below 17.5 m/s is unknown (openpilot never asked);
-# this asks from ENTRY_MARGIN below it. If the EPS faults within FAULT_WINDOW of such an entry, later entries fall
-# back to PROVEN_ENTRY_MARGIN (or to minSteerSpeed if that was refused too) until the car is above minSteerSpeed.
-# Turn off: echo 0 > /data/params/d/LowSpeedReengage (read every 5 s; missing = on).
+from openpilot.common.realtime import DT_CTRL
+from openpilot.common.swaglog import cloudlog
+
+# Lateral below minSteerSpeed on Chrysler EPS units with a high minimum steer speed (WK2: 17.5 m/s = 63 km/h).
+#
+# History (WK2 drivelog): the EPS keeps tracking torque below minSteerSpeed once engaged (hold, dbb1463) and
+# accepts a fresh LKAS request there (routes 7e-8e: 103 entries at 54.5 km/h, no fault; route 8f on 1af62ef: 10
+# entries at 51 km/h and 3 drops at 49 km/h, no fault, motor torque following the applied torque as above 63 km/h).
+# Where it stops accepting is not documented beyond opendbc's "13 m/s on the way down once engaged", so instead
+# of fixed speeds this searches for the lowest ones that work, STEP at a time, and remembers them across drives:
+#
+#   hold   lowest speed lateral stays active at once engaged
+#   entry  lowest speed a fresh engagement is requested at, always >= hold + GAP
+#
+# Each has a confirmed value and, one STEP below it, a trial. Lateral runs to the trial; the trial becomes the
+# confirmed value after CONFIRMS clean uses with enough evidence that the EPS motor followed the applied torque
+# (gain = sum(applied * motor) / sum(applied^2), ~255 on the WK2 at every speed measured). A steer fault on a
+# trial, or a gain below MIN_GAIN (the EPS ignoring the request without a fault), sends that value back to the
+# confirmed one for the rest of the drive; after MAX_FAILS such failures the search stops there for good. A
+# fault on a confirmed value (not during a driver override) raises it one STEP and stops the search too.
+# State lives in STATE_FILE (delete it to start over). Turn the whole thing off: echo 0 > /data/params/d/LowSpeedReengage
+# (read every 5 s; missing = on; off = hold to minSteerSpeed - 3.0, entry at minSteerSpeed).
 PARAM = "LowSpeedReengage"
-# Step 1 of lowering both (was entry -2.5 / hold -3.0 = 54.5 / 52 km/h on the WK2). Routes 7e-8e (77a1df4, 2a9aafd):
-# 103 entries at 54-58 km/h and 13 drops at the hold floor without a steer fault, and EPS motor torque follows the
-# applied torque the same at 50-54.5 km/h as above 63 (corr 0.97-0.98, gain ~255). opendbc documents assist down to
-# 13 m/s (46.8 km/h) once engaged; the carcontroller's LKAS bit floor (-4.3 = 47.5 km/h) stays above that.
-# UNVERIFIED: a fresh entry below 54 km/h and torque below 50 km/h have no data yet; the fallback covers a refusal.
-ENTRY_MARGIN = 3.3   # m/s below minSteerSpeed where a fresh engagement is requested (WK2: 51 km/h)
-HOLD_MARGIN = 3.9    # m/s below minSteerSpeed that lateral holds to once active (WK2: 49 km/h)
-# Entry margin to fall back to when the EPS refuses a lower entry: 54.5 km/h on the WK2, where 103 entries on
-# routes 7e-8e went without a fault. Only a refusal at or above that speed falls back to minSteerSpeed itself.
-PROVEN_ENTRY_MARGIN = 2.5
-# Hold floor to fall back to when the EPS faults while holding below it: 52 km/h on the WK2, the floor since dbb1463
-# (no fault at it on any route since). The entry falls back with it, or lateral would engage below its own floor.
-PROVEN_HOLD_MARGIN = 3.0
-HOLD_FAULT_WINDOW = 1.0  # s after lateral was last active in which a fault below the proven floor still counts
-FAULT_WINDOW = 3.0   # s after a low-speed entry in which a steer fault counts as the EPS refusing it
+STATE_FILE = "low_speed_lateral.json"
+STATE_VERSION = 1
+
+STEP = 1. / 3.6           # m/s per search step (1 km/h)
+GAP = 2. / 3.6            # m/s the entry stays above the confirmed hold floor
+ABS_FLOOR = 20. / 3.6     # m/s, the search never goes below this
+START_HOLD_MARGIN = 3.9   # m/s below minSteerSpeed: confirmed hold floor to start from (WK2 49 km/h)
+START_ENTRY_MARGIN = 3.3  # m/s below minSteerSpeed: confirmed entry to start from (WK2 51 km/h)
+OFF_HOLD_MARGIN = 3.0     # m/s, hold floor with the toggle off (the floor since dbb1463)
+CONFIRMS = 2              # clean uses of a trial before it is confirmed
+MAX_FAILS = 2             # failures of a trial before the search stops there for good
+HOLD_EVIDENCE_FRAMES = 100   # frames of usable torque evidence over the trial's uses (1 s)
+ENTRY_EVIDENCE_FRAMES = 50   # per entry, within FAULT_WINDOW
+MIN_VISIT_FRAMES = 10     # frames below the confirmed hold floor for a dip to count as a use
+MIN_GAIN = 100.           # motor torque units per unit of applied torque; below = the EPS is not following
+EVIDENCE_MIN_TORQUE = 0.05   # |applied torque| for a frame to be usable evidence
+EVIDENCE_MAX_DRIVER = 40.    # |driver torque| (column units) for a frame to be usable evidence
+FAULT_WINDOW = 3.0        # s after a low-speed entry in which a steer fault counts as the EPS refusing it
+HOLD_FAULT_WINDOW = 1.0   # s after lateral was last active (the wind-down) in which a fault still counts
+PRESSED_WINDOW = 2.0      # s after steeringPressed in which a fault on a confirmed value is the driver's
 # Torque is ramped in after a low-speed entry. Routes 7e-87 (77a1df4, 59 entries, no faults): the request reached
 # 0.39 of full scale (p90 0.76) within 0.5 s of the entry and the car moved 0.12 m in 2 s, usually with the driver
 # still holding the wheel from steering by hand (pressed within 2 s on 76%).
 RAMP_SECONDS = 1.0
+EPS_ = 1e-3
 
 
 def read_toggle(params, key: str = PARAM) -> bool:
@@ -39,55 +60,227 @@ def read_toggle(params, key: str = PARAM) -> bool:
     return True
 
 
+def default_state_path() -> str:
+  # not in the params directory: Params.clearAll deletes files there that are not known keys
+  try:
+    from openpilot.system.hardware import PC
+    from openpilot.system.hardware.hw import Paths
+    return os.path.join(Paths.comma_home() if PC else "/data", STATE_FILE)
+  except Exception:
+    return os.path.join("/data", STATE_FILE)
+
+
+class Evidence:
+  """Does the EPS motor follow the applied torque? Least-squares gain through the origin."""
+  def __init__(self):
+    self.n, self.sxy, self.sxx = 0, 0., 0.
+
+  def add(self, applied: float, motor: float, driver: float):
+    if abs(applied) > EVIDENCE_MIN_TORQUE and abs(driver) < EVIDENCE_MAX_DRIVER:
+      self.n += 1
+      self.sxy += applied * motor
+      self.sxx += applied * applied
+
+  @property
+  def gain(self) -> float:
+    return self.sxy / self.sxx if self.sxx > 0. else 0.
+
+
 class LowSpeedReengage:
-  def __init__(self, CP, enabled: bool = True):
+  def __init__(self, CP, enabled: bool = True, state_path: str | None = None):
     self.applies = CP.brand == 'chrysler' and CP.minSteerSpeed > 10.
     self.min_steer_speed = CP.minSteerSpeed
     self.enabled = enabled
-    self.entry_margin = ENTRY_MARGIN  # shrinks after a refused entry, restored above minSteerSpeed
-    self.hold_margin = HOLD_MARGIN    # likewise after a fault while holding below the proven floor
+    self.state_path = state_path
+
+    # learned, persisted
+    self.hold = self.min_steer_speed - START_HOLD_MARGIN     # confirmed (m/s)
+    self.entry = self.min_steer_speed - START_ENTRY_MARGIN   # confirmed (m/s)
+    self.hold_ok = 0          # clean uses of the hold trial so far
+    self.entry_ok = 0
+    self.hold_fails = 0       # failures of the current hold trial; MAX_FAILS = search stopped
+    self.entry_fails = 0
+    self.hold_ev = Evidence()  # accumulated over the uses of the current hold trial
+    if self.applies:
+      self._load()
+    # a failed trial is not retried in the same drive
+    self.hold_trial_ok = self.hold_fails < MAX_FAILS
+    self.entry_trial_ok = self.entry_fails < MAX_FAILS
+
+    self.entry_timer = 0.     # s since the last low-speed entry, while inside FAULT_WINDOW
     self.entry_speed = 0.
-    self.since_active = 1e3           # s since lateral was last active
-    self.entry_timer = 0.   # s since the last low-speed entry, while inside FAULT_WINDOW
-    self.torque_scale = 1.  # multiplies the lateral torque request; ramps 0 -> 1 after a low-speed entry
+    self.entry_ev = Evidence()
+    self.visit_frames = 0     # frames active below the confirmed hold floor in the current dip
+    self.torque_scale = 1.    # multiplies the lateral torque request; ramps 0 -> 1 after a low-speed entry
+    self.since_active = 1e3   # s since lateral was last active
+    self.since_pressed = 1e3
     self.lat_active_prev = False
     self.fault_prev = False
+
+  # ---- persistence
+
+  def _load(self):
+    if self.state_path is None:
+      return
+    try:
+      with open(self.state_path) as f:
+        d = json.load(f)
+      if d.get("version") != STATE_VERSION or abs(d.get("min_steer_speed", 0.) - self.min_steer_speed) > 1e-3:
+        return
+      hold, entry = float(d["hold"]), float(d["entry"])
+      if not (ABS_FLOOR - EPS_ <= hold <= self.min_steer_speed and hold + GAP - EPS_ <= entry <= self.min_steer_speed):
+        return
+      self.hold, self.entry = hold, entry
+      self.hold_ok, self.entry_ok = int(d.get("hold_ok", 0)), int(d.get("entry_ok", 0))
+      self.hold_fails, self.entry_fails = int(d.get("hold_fails", 0)), int(d.get("entry_fails", 0))
+      self.hold_ev.n, self.hold_ev.sxy, self.hold_ev.sxx = int(d.get("ev_n", 0)), float(d.get("ev_sxy", 0.)), float(d.get("ev_sxx", 0.))
+    except Exception:
+      pass  # missing or unreadable: start from the defaults
+
+  def _save(self):
+    if self.state_path is None:
+      return
+    try:
+      d = {"version": STATE_VERSION, "min_steer_speed": self.min_steer_speed, "hold": self.hold, "entry": self.entry,
+           "hold_kph": round(self.hold * 3.6, 1), "entry_kph": round(self.entry * 3.6, 1),
+           "hold_ok": self.hold_ok, "entry_ok": self.entry_ok, "hold_fails": self.hold_fails, "entry_fails": self.entry_fails,
+           "ev_n": self.hold_ev.n, "ev_sxy": self.hold_ev.sxy, "ev_sxx": self.hold_ev.sxx}
+      tmp = self.state_path + ".tmp"
+      with open(tmp, "w") as f:
+        json.dump(d, f)
+      os.replace(tmp, self.state_path)
+    except Exception:
+      cloudlog.exception("low speed lateral: state not saved")
+
+  # ---- speeds in use
+
+  def hold_floor(self) -> float:
+    if self.hold_trial_ok and self.hold - STEP >= ABS_FLOOR - EPS_:
+      return self.hold - STEP
+    return self.hold
+
+  def entry_floor(self) -> float:
+    # the entry trial never goes closer than GAP to the confirmed hold floor
+    if self.entry_trial_ok and self.entry - STEP >= self.hold + GAP - EPS_:
+      return self.entry - STEP
+    return self.entry
 
   def min_lat_speed(self, v_ego: float) -> float:
     """Lowest speed at which lateral may be active this frame."""
     if not self.applies:
       return max(self.min_steer_speed, 0.3)
-    if self.lat_active_prev:
-      return max(self.min_steer_speed - self.hold_margin, 0.3)
-    if self.enabled:
-      return max(self.min_steer_speed - self.entry_margin, 0.3)
-    return max(self.min_steer_speed, 0.3)
+    if not self.enabled:
+      return max(self.min_steer_speed - OFF_HOLD_MARGIN if self.lat_active_prev else self.min_steer_speed, 0.3)
+    return max(self.hold_floor() if self.lat_active_prev else self.entry_floor(), 0.3)
 
-  def update(self, lat_active: bool, v_ego: float, steer_fault: bool):
+  # ---- outcomes
+
+  def _hold_trial_failed(self, why: str):
+    self.hold_fails += 1
+    self.hold_trial_ok = False
+    self.hold_ok = 0
+    self.hold_ev = Evidence()
+    cloudlog.warning(f"low speed lateral: hold trial {(self.hold - STEP) * 3.6:.1f} km/h failed ({why}), {self.hold_fails}/{MAX_FAILS}")
+    self._save()
+
+  def _entry_trial_failed(self, why: str):
+    self.entry_fails += 1
+    self.entry_trial_ok = False
+    self.entry_ok = 0
+    cloudlog.warning(f"low speed lateral: entry trial {(self.entry - STEP) * 3.6:.1f} km/h failed ({why}), {self.entry_fails}/{MAX_FAILS}")
+    self._save()
+
+  def _hold_confirmed_failed(self):
+    # a confirmed floor faulted: one step back up (not above the long-proven floor's worth of margin) and stop searching
+    self.hold = min(self.hold + STEP, self.min_steer_speed)
+    self.entry = min(max(self.entry, self.hold + GAP), self.min_steer_speed)
+    self.hold_fails, self.hold_trial_ok, self.hold_ok, self.hold_ev = MAX_FAILS, False, 0, Evidence()
+    cloudlog.warning(f"low speed lateral: fault on the confirmed hold floor, now {self.hold * 3.6:.1f} km/h")
+    self._save()
+
+  def _entry_confirmed_failed(self):
+    self.entry = min(self.entry + STEP, self.min_steer_speed)
+    self.entry_fails, self.entry_trial_ok, self.entry_ok = MAX_FAILS, False, 0
+    cloudlog.warning(f"low speed lateral: fault on the confirmed entry, now {self.entry * 3.6:.1f} km/h")
+    self._save()
+
+  def _finish_entry(self):
+    """FAULT_WINDOW after a low-speed entry passed without a fault."""
+    if self.entry_speed >= self.entry - EPS_ or self.entry_ev.n < ENTRY_EVIDENCE_FRAMES:
+      return  # not a trial, or not enough torque to tell: does not count either way
+    if self.entry_ev.gain < MIN_GAIN:
+      self._entry_trial_failed(f"motor gain {self.entry_ev.gain:.0f}")
+      return
+    self.entry_ok += 1
+    if self.entry_ok >= CONFIRMS:
+      self.entry, self.entry_ok, self.entry_fails = self.entry_floor(), 0, 0
+      cloudlog.warning(f"low speed lateral: entry confirmed at {self.entry * 3.6:.1f} km/h")
+    self._save()
+
+  def _finish_visit(self):
+    """A dip below the confirmed hold floor ended without a fault."""
+    frames, self.visit_frames = self.visit_frames, 0
+    if frames < MIN_VISIT_FRAMES:
+      return
+    self.hold_ok += 1
+    if self.hold_ok >= CONFIRMS and self.hold_ev.n >= HOLD_EVIDENCE_FRAMES:
+      if self.hold_ev.gain < MIN_GAIN:
+        self._hold_trial_failed(f"motor gain {self.hold_ev.gain:.0f}")
+        return
+      self.hold, self.hold_ok, self.hold_fails, self.hold_ev = self.hold_floor(), 0, 0, Evidence()
+      cloudlog.warning(f"low speed lateral: hold confirmed at {self.hold * 3.6:.1f} km/h")
+    self._save()
+
+  # ---- per frame
+
+  def update(self, lat_active: bool, v_ego: float, steer_fault: bool, steering_pressed: bool = False,
+             applied_torque: float = 0., motor_torque: float = 0., driver_torque: float = 0.):
     """Call once per controls frame after latActive is decided."""
+    if not self.applies:
+      return
+    fault_edge = steer_fault and not self.fault_prev
+    self.since_active = 0. if (lat_active or self.lat_active_prev) else self.since_active + DT_CTRL
+    self.since_pressed = 0. if steering_pressed else self.since_pressed + DT_CTRL
+    searching = self.enabled
+
+    # fresh engagement below minSteerSpeed
+    entry_fault = False
     if lat_active and not self.lat_active_prev and v_ego < self.min_steer_speed:
-      self.entry_timer = DT_CTRL  # fresh engagement below minSteerSpeed: watch for a refusal
-      self.entry_speed = v_ego
+      self.entry_timer, self.entry_speed, self.entry_ev = DT_CTRL, v_ego, Evidence()
       self.torque_scale = 0.
     elif self.entry_timer > 0.:
-      self.entry_timer = self.entry_timer + DT_CTRL if self.entry_timer < FAULT_WINDOW else 0.
-
+      if fault_edge:
+        entry_fault = True
+        self.entry_timer = 0.
+        if searching:
+          if self.entry_speed < self.entry - EPS_:
+            self._entry_trial_failed("steer fault")
+          else:
+            self._entry_confirmed_failed()
+      elif not lat_active:
+        self.entry_timer = 0.  # dropped out by itself: no verdict
+      else:
+        self.entry_ev.add(applied_torque, motor_torque, driver_torque)
+        self.entry_timer += DT_CTRL
+        if self.entry_timer >= FAULT_WINDOW:
+          self.entry_timer = 0.
+          if searching:
+            self._finish_entry()
     self.torque_scale = min(self.torque_scale + DT_CTRL / RAMP_SECONDS, 1.) if lat_active else 1.
 
-    if steer_fault and not self.fault_prev and self.entry_timer > 0.:
-      # refused: retry only from the proven speed; refused there as well: only from minSteerSpeed
-      below_proven = self.entry_speed < self.min_steer_speed - PROVEN_ENTRY_MARGIN
-      self.entry_margin = min(self.entry_margin, PROVEN_ENTRY_MARGIN) if below_proven else 0.
-      self.entry_timer = 0.
-    # fault while holding (or just after dropping out) below the proven hold floor: hold only to that floor
-    self.since_active = 0. if (lat_active or self.lat_active_prev) else self.since_active + DT_CTRL
-    if steer_fault and not self.fault_prev and self.since_active < HOLD_FAULT_WINDOW \
-       and v_ego < self.min_steer_speed - PROVEN_HOLD_MARGIN:
-      self.hold_margin = PROVEN_HOLD_MARGIN
-      self.entry_margin = min(self.entry_margin, PROVEN_ENTRY_MARGIN)
-    if v_ego > self.min_steer_speed:
-      self.entry_margin = ENTRY_MARGIN
-      self.hold_margin = HOLD_MARGIN
+    # holding below the confirmed floor (the hold trial)
+    in_trial = searching and lat_active and v_ego < self.hold - EPS_
+    if in_trial:
+      self.visit_frames += 1
+      self.hold_ev.add(applied_torque, motor_torque, driver_torque)
+    if fault_edge and not entry_fault and searching and self.since_active < HOLD_FAULT_WINDOW and v_ego < self.min_steer_speed:
+      if self.visit_frames > 0:
+        self.visit_frames = 0
+        self._hold_trial_failed("steer fault")
+      elif v_ego < self.hold + STEP and self.since_pressed > PRESSED_WINDOW:
+        self._hold_confirmed_failed()
+    elif self.visit_frames > 0 and not in_trial and (self.since_active >= HOLD_FAULT_WINDOW or v_ego >= self.hold + STEP):
+      self._finish_visit()  # wound down below the floor, or back up out of the trial band
 
     self.lat_active_prev = lat_active
     self.fault_prev = steer_fault

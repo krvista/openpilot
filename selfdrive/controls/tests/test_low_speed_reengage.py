@@ -1,90 +1,171 @@
+import json
 from types import SimpleNamespace
 
-from openpilot.selfdrive.controls.lib.low_speed_reengage import LowSpeedReengage, PARAM, read_toggle
+from openpilot.selfdrive.controls.lib.low_speed_reengage import LowSpeedReengage, PARAM, STEP, GAP, ABS_FLOOR, CONFIRMS, MAX_FAILS, \
+                                                                 read_toggle
 
 WK2 = SimpleNamespace(brand='chrysler', minSteerSpeed=17.5)
+HOLD0, ENTRY0 = 17.5 - 3.9, 17.5 - 3.3   # 49.0 / 51.1 km/h
+GAIN = 255.
 
 
-def run(lsr, v, frames=1, lat=None, fault=False):
-  """Advance like controlsd: latActive = speed gate (unless forced) and no fault."""
+def run(lsr, v, frames=1, lat=None, fault=False, torque=0.2, gain=GAIN, pressed=False):
+  """Advance like controlsd: latActive = speed gate (unless forced) and no fault; the EPS motor follows with `gain`."""
   out = None
   for _ in range(frames):
     allowed = v > lsr.min_lat_speed(v)
     out = (allowed and not fault) if lat is None else lat
-    lsr.update(out, v, fault)
+    lsr.update(out, v, fault, pressed, torque if out else 0., gain * torque if out else 0., 0.)
   return out
 
 
+def dip(lsr, v, frames=60, **kw):
+  """Engage above minSteerSpeed, hold at v for a while, then drop out well below everything."""
+  assert run(lsr, 17.6)
+  held = run(lsr, v, frames=frames, **kw)
+  run(lsr, 3.0, frames=150)
+  return held
+
+
+def low_entry(lsr, v, **kw):
+  """Fresh engagement at v from below, held past the fault window, then back out."""
+  run(lsr, 3.0, frames=150)
+  entered = run(lsr, v, **kw)
+  run(lsr, v, frames=350, **kw)
+  run(lsr, 3.0, frames=150)
+  return entered
+
+
 class TestLowSpeedReengage:
-  def test_off_is_unchanged(self):
+  def test_off_is_the_old_fixed_window(self):
     lsr = LowSpeedReengage(WK2, enabled=False)
     assert not run(lsr, 16.0)            # no fresh entry below minSteerSpeed
-    assert run(lsr, 17.6)                # entry above it
-    assert run(lsr, 13.7)                # hold down to -3.9
-    assert not run(lsr, 13.5)            # dropped below the hold floor
-    assert not run(lsr, 16.0)            # and stays off until minSteerSpeed again
     assert run(lsr, 17.6)
+    assert run(lsr, 14.6)                # hold down to -3.0
+    assert not run(lsr, 14.4)
+    assert not run(lsr, 16.0)
+    assert (lsr.hold, lsr.entry) == (HOLD0, ENTRY0)  # and nothing is learned
 
-  def test_on_reengages_from_entry_margin(self):
-    lsr = LowSpeedReengage(WK2, enabled=True)
-    assert not run(lsr, 14.1)            # below -3.3: still off
-    assert run(lsr, 14.3)                # above -3.3: fresh engagement
-    assert run(lsr, 13.7)                # then the -3.9 hold applies
-    assert not run(lsr, 13.5)
-
-  def test_refused_entry_falls_back_to_proven_speed_then_min_steer_speed(self):
-    lsr = LowSpeedReengage(WK2, enabled=True)
-    assert run(lsr, 14.5)                # entry below the proven speed (15.0)
-    run(lsr, 14.5, frames=50)
-    assert not run(lsr, 14.5, fault=True)  # EPS refuses within the window
-    run(lsr, 14.5, frames=300)           # fault clears
-    assert not run(lsr, 14.5)            # no retry down here
-    assert not run(lsr, 14.9)
-    assert run(lsr, 15.1)                # but from the proven speed, not only above minSteerSpeed
-    run(lsr, 15.1, frames=50)
-    assert not run(lsr, 15.1, fault=True)  # refused there too
-    run(lsr, 15.1, frames=300)
-    assert not run(lsr, 17.0)            # now only above minSteerSpeed
-    assert run(lsr, 17.6)                # which also restores the low entry
-    run(lsr, 13.0)                       # dip below the hold floor
-    assert run(lsr, 14.5)
-
-  def test_fault_while_holding_low_falls_back_to_proven_hold_floor(self):
+  def test_starts_one_step_below_the_confirmed_speeds(self):
     lsr = LowSpeedReengage(WK2)
+    assert abs(lsr.hold_floor() - (HOLD0 - STEP)) < 1e-6
+    # the entry trial may not come closer than GAP to the confirmed hold floor: 51.1 - 1 < 49.0 + 2
+    assert abs(lsr.entry_floor() - ENTRY0) < 1e-6
+    assert not run(lsr, ENTRY0 - 0.05)
+    assert run(lsr, ENTRY0 + 0.05)
+    assert run(lsr, HOLD0 - STEP + 0.05)
+    assert not run(lsr, HOLD0 - STEP - 0.05)
+
+  def test_hold_lowers_after_clean_dips_with_evidence(self):
+    lsr = LowSpeedReengage(WK2)
+    trial = HOLD0 - STEP + 0.05
+    for i in range(CONFIRMS):
+      assert abs(lsr.hold - HOLD0) < 1e-6
+      assert dip(lsr, trial)
+    assert abs(lsr.hold - (HOLD0 - STEP)) < 1e-6       # confirmed one step lower
+    assert abs(lsr.hold_floor() - (HOLD0 - 2 * STEP)) < 1e-6  # and the next trial is open
+    # now the entry trial has room: confirmed hold + GAP <= entry - STEP
+    assert abs(lsr.entry_floor() - (ENTRY0 - STEP)) < 1e-6
+
+  def test_hold_needs_torque_evidence(self):
+    lsr = LowSpeedReengage(WK2)
+    for _ in range(CONFIRMS + 3):
+      dip(lsr, HOLD0 - STEP + 0.05, torque=0.01)       # too little torque to tell whether the EPS follows
+    assert abs(lsr.hold - HOLD0) < 1e-6
+    dip(lsr, HOLD0 - STEP + 0.05, frames=120)
+    assert abs(lsr.hold - (HOLD0 - STEP)) < 1e-6
+
+  def test_hold_fault_on_trial_returns_to_confirmed_then_stops(self):
+    lsr = LowSpeedReengage(WK2)
+    trial = HOLD0 - STEP + 0.05
     assert run(lsr, 17.6)
-    assert run(lsr, 14.0, frames=50)     # holding below the proven floor (14.5)
-    assert not run(lsr, 14.0, fault=True)
-    run(lsr, 14.0, frames=300)           # fault clears
-    assert not run(lsr, 14.6)            # entry fell back with it (15.0), not below its own hold floor
-    assert run(lsr, 15.1)
-    assert run(lsr, 14.6)                # holds to the proven floor
-    assert not run(lsr, 14.4)            # but no further
-    assert run(lsr, 17.6)                # above minSteerSpeed restores both
-    assert run(lsr, 13.7)
-    # a fault in the proven part of the hold band changes nothing
+    assert run(lsr, trial, frames=20)
+    assert not run(lsr, trial, fault=True)
+    run(lsr, trial, frames=300)
+    assert lsr.hold_fails == 1 and abs(lsr.hold - HOLD0) < 1e-6
+    assert abs(lsr.hold_floor() - HOLD0) < 1e-6        # no retry in this drive
+    assert run(lsr, 17.6) and run(lsr, HOLD0 + 0.05) and not run(lsr, trial)
+    # next drive retries once more; a second failure stops the search for good
+    lsr2 = LowSpeedReengage(WK2)
+    lsr2.hold_fails = 1
+    lsr2.hold_trial_ok = True
+    run(lsr2, 17.6)
+    run(lsr2, trial, frames=20)
+    run(lsr2, trial, fault=True)
+    assert lsr2.hold_fails == MAX_FAILS and not lsr2.hold_trial_ok
+
+  def test_silent_refusal_fails_the_trial(self):
+    lsr = LowSpeedReengage(WK2)
+    for _ in range(CONFIRMS):
+      dip(lsr, HOLD0 - STEP + 0.05, gain=20.)          # no fault, but the motor does not follow
+    assert abs(lsr.hold - HOLD0) < 1e-6 and lsr.hold_fails == 1 and not lsr.hold_trial_ok
+
+  def test_fault_on_confirmed_hold_steps_back_up(self):
+    lsr = LowSpeedReengage(WK2)
+    lsr.hold_trial_ok = False                          # holding exactly at the confirmed floor
+    run(lsr, 17.6)
+    run(lsr, HOLD0 + 0.1, frames=50)
+    run(lsr, HOLD0 + 0.1, fault=True)
+    assert abs(lsr.hold - (HOLD0 + STEP)) < 1e-6 and lsr.hold_fails == MAX_FAILS
+    assert lsr.entry >= lsr.hold + GAP - 1e-6
+    # not when the driver was overriding, and not well above the floor
+    for kw, v in (({'pressed': True}, HOLD0 + 0.1), ({}, HOLD0 + 2.0)):
+      lsr = LowSpeedReengage(WK2)
+      lsr.hold_trial_ok = False
+      run(lsr, 17.6)
+      run(lsr, v, frames=50, **kw)
+      run(lsr, v, fault=True, **kw)
+      assert abs(lsr.hold - HOLD0) < 1e-6 and lsr.hold_fails == 0
+
+  def test_entry_lowers_and_fails_like_the_hold(self):
+    lsr = LowSpeedReengage(WK2)
+    lsr.hold = HOLD0 - 3 * STEP                        # room for entry trials
+    trial = ENTRY0 - STEP + 0.05
+    for _ in range(CONFIRMS):
+      assert abs(lsr.entry - ENTRY0) < 1e-6
+      assert low_entry(lsr, trial)
+    assert abs(lsr.entry - (ENTRY0 - STEP)) < 1e-6
+    # refused on the next trial: back to the confirmed entry for this drive
+    trial2 = ENTRY0 - 2 * STEP + 0.05
+    run(lsr, 3.0, frames=150)
+    assert run(lsr, trial2)
+    run(lsr, trial2, frames=50)
+    assert not run(lsr, trial2, fault=True)
+    run(lsr, 3.0, frames=400)
+    assert lsr.entry_fails == 1 and abs(lsr.entry - (ENTRY0 - STEP)) < 1e-6
+    assert not run(lsr, trial2) and run(lsr, ENTRY0 - STEP + 0.05)
+    # a fault on the confirmed entry raises it and stops the search
+    run(lsr, 3.0, frames=150)
+    run(lsr, ENTRY0 - STEP + 0.05, frames=50)
+    run(lsr, ENTRY0 - STEP + 0.05, fault=True)
+    assert abs(lsr.entry - ENTRY0) < 1e-6 and lsr.entry_fails == MAX_FAILS
+
+  def test_entry_above_min_steer_speed_and_late_faults_do_not_count(self):
     lsr = LowSpeedReengage(WK2)
     run(lsr, 17.6)
-    run(lsr, 15.5, frames=50)
-    run(lsr, 15.5, fault=True)
-    run(lsr, 15.5, frames=300)
-    assert run(lsr, 14.3)                # low entry still allowed
-    assert run(lsr, 13.7)                # and the low hold
-    # a fault in the wind-down just after dropping below the floor counts too
-    lsr = LowSpeedReengage(WK2)
-    run(lsr, 17.6)
-    run(lsr, 13.7, frames=20)
-    assert not run(lsr, 13.4, frames=30)
-    run(lsr, 13.4, fault=True)
-    run(lsr, 13.4, frames=300)
-    assert not run(lsr, 14.6)
+    run(lsr, 16.0, frames=400)
+    run(lsr, 16.0, fault=True)                         # holding well above the floor, long after the entry
+    assert (lsr.hold_fails, lsr.entry_fails) == (0, 0) and abs(lsr.hold - HOLD0) < 1e-6
 
-  def test_late_fault_does_not_lock_out(self):
-    lsr = LowSpeedReengage(WK2, enabled=True)
-    assert run(lsr, 15.5)
-    run(lsr, 15.5, frames=400)           # 4 s of accepted torque
-    run(lsr, 15.5, fault=True)           # an unrelated fault later (e.g. override)
-    run(lsr, 15.5, frames=10)
-    assert run(lsr, 15.5)
+  def test_never_below_abs_floor(self):
+    lsr = LowSpeedReengage(WK2)
+    lsr.hold = ABS_FLOOR
+    assert lsr.hold_floor() == ABS_FLOOR
+
+  def test_state_persists(self, tmp_path):
+    path = str(tmp_path / "state.json")
+    lsr = LowSpeedReengage(WK2, state_path=path)
+    for _ in range(CONFIRMS):
+      dip(lsr, HOLD0 - STEP + 0.05)
+    dip(lsr, HOLD0 - 2 * STEP + 0.05)                  # one clean use of the next trial
+    lsr2 = LowSpeedReengage(WK2, state_path=path)
+    assert abs(lsr2.hold - (HOLD0 - STEP)) < 1e-6 and lsr2.hold_ok == 1 and lsr2.hold_ev.n > 0
+    assert json.load(open(path))["hold_kph"] == round((HOLD0 - STEP) * 3.6, 1)
+    # a file for another car or a corrupt one is ignored
+    d = json.load(open(path)); d["min_steer_speed"] = 14.5; json.dump(d, open(path, "w"))
+    assert abs(LowSpeedReengage(WK2, state_path=path).hold - HOLD0) < 1e-6
+    open(path, "w").write("{")
+    assert abs(LowSpeedReengage(WK2, state_path=path).hold - HOLD0) < 1e-6
 
   def test_torque_ramp_after_low_entry(self):
     lsr = LowSpeedReengage(WK2)
@@ -104,12 +185,14 @@ class TestLowSpeedReengage:
     # dropping out mid-ramp resets it
     lsr = LowSpeedReengage(WK2)
     run(lsr, 15.5, frames=20)
-    run(lsr, 13.0)
+    run(lsr, 3.0)
     assert lsr.torque_scale == 1.
 
   def test_other_brands_untouched(self):
     lsr = LowSpeedReengage(SimpleNamespace(brand='toyota', minSteerSpeed=0.), enabled=True)
     assert lsr.min_lat_speed(5.) == 0.3
+    lsr.update(True, 5., True)
+    assert lsr.torque_scale == 1.
 
   def test_toggle_file(self, tmp_path):
     class P:
@@ -120,7 +203,3 @@ class TestLowSpeedReengage:
     assert read_toggle(P())
     (tmp_path / PARAM).write_text("0")
     assert not read_toggle(P())
-
-  def test_default_on(self):
-    lsr = LowSpeedReengage(WK2)
-    assert run(lsr, 14.3)

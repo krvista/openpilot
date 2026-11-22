@@ -64,19 +64,15 @@ class CarController(CarControllerBase, MadsCarController, CarControllerExt, Inte
       elif CS.out.vEgo > self.CP.minSteerSpeed:
         lkas_control_bit = True
       elif self.CP.flags & ChryslerFlags.HIGHER_MIN_STEERING_SPEED:
-        # -3.5 (was -3.0): WK2 drivelogs show the EPS still tracking torque commands down to
-        # minSteerSpeed - 3.0 (corr 0.93, full gain), and opendbc documents assist to 13 m/s
-        # once engaged; 14.0 m/s keeps 1 m/s above that. Lowered together with controlsd's
-        # lateral hold (-3.0) so the wind-down below still runs while the bit is up.
-        # -4.3 / -3.9 (were -3.5 / -3.0): lowered with controlsd's hold (-3.9) and low-speed entry (-3.3) after
-        # routes 7e-8e showed full EPS tracking at 50-54.5 km/h and no fault on 103 low-speed entries. 13.2 m/s
-        # stays above the 13 m/s assist floor; the wind-down still runs between -3.9 and -4.3 with the bit up.
-        if CS.out.vEgo < (self.CP.minSteerSpeed - 4.3):
-          lkas_control_bit = False
-        elif CC.latActive and CS.out.vEgo > (self.CP.minSteerSpeed - 3.9):
-          # Raise the bit below minSteerSpeed when controls asks for lateral there. With the bit down, controls
-          # only does that through its LowSpeedReengage (on by default); the hold keeps the bit up anyway.
+        # controls decides where lateral runs below minSteerSpeed (it searches for the lowest speeds this EPS
+        # accepts, see selfdrive/controls/lib/low_speed_reengage.py), so the bit follows CC.latActive there: up
+        # whenever lateral is requested, and once it no longer is, down only below minSteerSpeed - 3.5 (as before
+        # the search; 50-63 km/h with the bit up and no torque is the long-standing behaviour) and only after the
+        # wind-down below has taken the torque to zero.
+        if CC.latActive:
           lkas_control_bit = True
+        elif CS.out.vEgo < (self.CP.minSteerSpeed - 3.5) and self.apply_torque_last == 0:
+          lkas_control_bit = False
       elif self.CP.carFingerprint in RAM_CARS:
         if CS.out.vEgo < (self.CP.minSteerSpeed - 0.5):
           lkas_control_bit = False

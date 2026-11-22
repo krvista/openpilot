@@ -13,7 +13,8 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_camera_offset, read_enabled as curve_centering_enabled
 from openpilot.selfdrive.controls.lib.curve_exit_lead import CurveExitLead
-from openpilot.selfdrive.controls.lib.low_speed_reengage import LowSpeedReengage, read_toggle as read_low_speed_reengage
+from openpilot.selfdrive.controls.lib.low_speed_reengage import LowSpeedReengage, read_toggle as read_low_speed_reengage, \
+                                                               default_state_path as low_speed_state_path
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -60,7 +61,7 @@ class Controls(ControlsExt):
 
     self.curve_centering = CurveCentering(curve_centering_enabled(self.params), read_camera_offset(self.params))
     self.curve_exit_lead = CurveExitLead(curve_centering_enabled(self.params, "CurveExitLead"))
-    self.low_speed_reengage = LowSpeedReengage(self.CP, read_low_speed_reengage(self.params))
+    self.low_speed_reengage = LowSpeedReengage(self.CP, read_low_speed_reengage(self.params), low_speed_state_path())
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
@@ -126,7 +127,7 @@ class Controls(ControlsExt):
     # [-2.5, 0) with EPS motor torque tracking the command (corr 0.82, gain 80% of
     # >= minSteerSpeed), and 89 ramp-band frames in [-3.0, -2.5) with corr 0.93 / gain
     # 100%; the only steer faults coincided with driver override, not low-speed torque.
-    # Since then LowSpeedReengage owns both margins: hold to -3.9, fresh entry from -3.3 (see low_speed_reengage.py).
+    # Since then LowSpeedReengage owns both speeds and searches for the lowest the EPS accepts (see low_speed_reengage.py).
     min_lat_speed = self.low_speed_reengage.min_lat_speed(CS.vEgo)
     standstill = abs(CS.vEgo) <= min_lat_speed or CS.standstill
 
@@ -136,7 +137,8 @@ class Controls(ControlsExt):
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
     self.lat_active_prev = CC.latActive
-    self.low_speed_reengage.update(CC.latActive, CS.vEgo, CS.steerFaultTemporary)
+    self.low_speed_reengage.update(CC.latActive, CS.vEgo, CS.steerFaultTemporary or CS.steerFaultPermanent, CS.steeringPressed,
+                                   self.sm['carOutput'].actuatorsOutput.torque, CS.steeringTorqueEps, CS.steeringTorque)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
