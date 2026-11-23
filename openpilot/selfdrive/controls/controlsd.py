@@ -66,7 +66,7 @@ class _ModelFrame:
   disengaged frame — which never reads them — pays nothing (review: eager computation made
   disengaged frames slower than before)."""
   __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
-               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient", "_lanes")
+               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient", "_lanes", "_psi")
   _UNSET = object()
 
   def __init__(self, model_v2, key):
@@ -75,6 +75,7 @@ class _ModelFrame:
     self.n = len(model_v2.position.x)
     self._pos = None
     self._fit12 = self._fit24 = self._klane = self._bsm = self._orient = self._lanes = _ModelFrame._UNSET
+    self._psi = _ModelFrame._UNSET   # Phase 78
     probs = getattr(model_v2, "laneLineProbs", [])
     self.lane_min = min(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0
     self.lane_max = max(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0   # Phase 49
@@ -127,6 +128,19 @@ class _ModelFrame:
       except (AttributeError, TypeError, ValueError):
         pass
     return self._orient
+
+  @property
+  def psi_plan(self):
+    """Phase 78: plan heading on ModelConstants.T_IDXS; None = missing, short or non-finite."""
+    if self._psi is _ModelFrame._UNSET:
+      self._psi = None
+      try:
+        psi = np.array(list(self.ref.orientation.z), dtype=np.float64)
+        if len(psi) == len(_PLAN_T_IDXS) and np.all(np.isfinite(psi)):
+          self._psi = psi
+      except (AttributeError, TypeError, ValueError):
+        pass
+    return self._psi
 
   @property
   def klane_raw(self):
@@ -374,6 +388,7 @@ STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added cur
 STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55b lead taken (fully or partly) from the plan yaw-rate change
 STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55b orient lead clipped by the jerk budget
 STEER_FLAG_DIRECT = 1 << 11           # Phase 72 direct path in use (solo profile) while lateral is active
+STEER_FLAG_ENTRY_LEAD = 1 << 13       # Phase 78 entry lead is adding curvature
 STEER_FLAG_LANE_CENTER = 1 << 12      # Phase 73c lane-centre term is adding curvature
 
 # i6n Phase 73c (report §101, first solo drive a1): LANE-CENTRE term on the direct path. Steering alone, the model keeps
@@ -417,6 +432,21 @@ LANE_CENTER_BIAS_M = -0.034
 # as stiff as the model: the loop simulation overshoots there). Simulation at 60 / 80 / 110 km/h: curve cut
 # 15.5 / 22.4 / 27.5 -> 10.4 / 11.7 / 13.9 cm, straight error after 20 s 8.5-10.7 -> 4.4-5.1 cm, step overshoot
 # <= 22 %. Kill: LANE_CENTER_KE = [0.0, 0.0, 0.0] (and the two values above back to 0.03e-3 / 0.15e-3).
+# Phase 78 (report 108-109): ENTRY LEAD - where a curve is building up the wheel starts ENTRY_LEAD_S earlier. The
+# model's action is its plan read at the told delay; the same plan read ENTRY_LEAD_S later is what the action will be
+# then. The difference is added only while it makes the action larger on the side it is already going to (entry, not
+# exit, not a straight: weight 0 below ENTRY_LEAD_K[0] of future curvature), capped at ENTRY_LEAD_CAP (about 0.5 deg of
+# wheel at 60 km/h). It is washed out with ENTRY_LEAD_WASHOUT_S: only the START of the build-up is brought forward and
+# the extra is then taken out again even if the curve keeps building (replay of 24 entries: without the washout the term
+# sat at its cap for ~3 s and moved the car ~20 cm to the inside for 20-50 ms of lead). Not during lane changes, blinker,
+# driver press, lane dropout or below ENTRY_LEAD_MIN_MS. Kill: ENTRY_LEAD_S = 0.0.
+ENTRY_LEAD_S = 0.10
+ENTRY_LEAD_CAP = 0.15e-3
+ENTRY_LEAD_K = [0.15e-3, 0.4e-3]
+ENTRY_LEAD_WASHOUT_S = 0.6
+ENTRY_LEAD_MIN_MS = 30.0 / 3.6
+ENTRY_LEAD_TAU_S = 0.05
+ENTRY_LEAD_FRAME_S = 0.075     # modeld: frame delay + half a model interval on top of the told delay
 LANE_CENTER_KE_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6, 80.0 / 3.6]
 LANE_CENTER_KE = [0.0, 0.5e-3, 0.8e-3]      # 1/m per m of offset
 
@@ -717,6 +747,30 @@ class Controls(ControlsExt):
     self._lc_p, self._lc_i, self._lc_e = p, integ, pe
     return p + integ + pe
 
+  def _entry_lead(self, mf, CS, k_action, usable_ctx):
+    """Phase 78: curvature that starts the wheel ENTRY_LEAD_S earlier while a curve builds up (see ENTRY_LEAD_*)."""
+    v = float(CS.vEgo); raw = 0.0
+    el = getattr(self, "_entry_lead_lp", 0.0)
+    if usable_ctx and ENTRY_LEAD_S > 0.0 and math.isfinite(v) and v >= ENTRY_LEAD_MIN_MS and math.isfinite(k_action):
+      psi = mf.psi_plan
+      if psi is not None:
+        t1 = max(float(getattr(self, "_model_lat_delay", LOOKAHEAD_DELAY_BASE_S)), 0.05) + ENTRY_LEAD_FRAME_S
+        t2 = t1 + ENTRY_LEAD_S
+        d = (2.0 / v) * (float(np.interp(t2, _PLAN_T_IDXS, psi)) / t2 - float(np.interp(t1, _PLAN_T_IDXS, psi)) / t1)
+        kf = k_action + d
+        if math.isfinite(d) and d * kf > 0.0 and abs(kf) > abs(k_action):     # growing, toward the side it is going to
+          raw = float(_clip(float(_interp(abs(kf), ENTRY_LEAD_K, [0.0, 1.0])) * d, -ENTRY_LEAD_CAP, ENTRY_LEAD_CAP))
+    wo = getattr(self, "_entry_lead_wo", 0.0)
+    wo += DT_CTRL / (ENTRY_LEAD_WASHOUT_S + DT_CTRL) * (raw - wo)
+    pulse = raw - wo
+    if pulse * raw <= 0.0:          # never the other way: when the lead ends the pulse is simply over
+      pulse = 0.0
+    el += DT_CTRL / (ENTRY_LEAD_TAU_S + DT_CTRL) * (pulse - el)
+    if not (math.isfinite(el) and math.isfinite(wo)):
+      el = wo = 0.0
+    self._entry_lead_lp, self._entry_lead_wo = el, wo
+    return el
+
   def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
 
@@ -992,7 +1046,12 @@ class Controls(ControlsExt):
       if LANE_CENTER_NONFINITE_GUARD and self._model_nonfinite_frames > 0:
         lc_add = 0.0   # Phase 75j: the held command already contains the term; states kept as they are
       else:
-        lc_add = self._lane_center(mf, CS, new_desired_curvature, lc_ok)
+        k_act = new_desired_curvature
+        lc_add = self._lane_center(mf, CS, k_act, lc_ok)
+        el_add = self._entry_lead(mf, CS, k_act, lc_ok)          # Phase 78
+        if abs(el_add) > 2e-5:
+          steer_flags |= STEER_FLAG_ENTRY_LEAD
+        lc_add += el_add
       new_desired_curvature = new_desired_curvature + lc_add
       if abs(lc_add) > 2e-5:
         steer_flags |= STEER_FLAG_LANE_CENTER
@@ -1000,6 +1059,8 @@ class Controls(ControlsExt):
       self._lc_p = 0.0
       self._lc_i = 0.0
       self._lc_e = 0.0
+      self._entry_lead_lp = 0.0
+      self._entry_lead_wo = 0.0
 
     # Phase 7c geometry entry assist (constants above).
     if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None and not steer_direct:   # (lane-line read failed -> skip, as before; Phase 72: not on the direct path)
