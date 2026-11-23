@@ -19,6 +19,29 @@ from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import BlinkerPauseLateral
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
 
+# Phase 75 (report §103):
+# 75l  CarControlSP.latGranted = the panda allows lateral (pandaStates.controlsAllowedLateral, the field the MADS mismatch
+#      check uses; pandas in silent / noOutput are skipped as there). After an LFA-button re-enable the panda grants at
+#      its next 1 Hz heartbeat check, 0-1 s later, and rejected every active frame until then; the car controller now
+#      sends passive frames meanwhile. pandaStates is 10 Hz, so a normal engage starts at most ~0.1 s later. Missing /
+#      stale / empty pandaStates -> True (as before Phase 75; the panda enforces either way), so it cannot deadlock.
+#      Kill: LAT_GRANT_FROM_PANDA = False.
+# 75k  request paused: the car controller is not delivering the request by design (carStateSP.lateralControlPaused /
+#      lateralPausedReason) or, in the solo profile, the factory LFA is steering (gatewayFlags) - the saturation alert
+#      stays off then (latcontrol_angle.py). A missing / stale carStateSP reads as not paused.
+LAT_GRANT_FROM_PANDA = True
+IGNORED_SAFETY_MODES = (structs.CarParams.SafetyModel.silent, structs.CarParams.SafetyModel.noOutput)
+GW_SOLO_LFA_ACTIVE = (1 << 4) | (1 << 2)   # carStateSP.gatewayFlags: GW_SOLO | GW_LFA_ACTIVE (opendbc hyundai carcontroller.py)
+GW_SOLO_FOLLOW = (1 << 4) | (1 << 6)       # GW_SOLO | GW_FOLLOW: the follow band holds the request on the wheel (icon 2 / 3)
+PAUSED_WHILE_FOLLOW_BAND = True            # Phase 75k kill switch for the follow-band term
+
+
+def _fresh(sm, service: str) -> bool:
+  """the service has been received and is alive (False for a SubMaster without it)"""
+  alive = getattr(sm, "alive", None)
+  seen = getattr(sm, "seen", None)
+  return bool(alive is not None and seen is not None and alive.get(service, False) and seen.get(service, False))
+
 
 class ControlsExt(ModelStateBase):
   def __init__(self, CP: structs.CarParams, params: Params):
@@ -32,7 +55,7 @@ class ControlsExt(ModelStateBase):
     self.CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
     cloudlog.info("controlsd_ext got CarParamsSP")
 
-    self.sm_services_ext = ['radarState', 'selfdriveStateSP']
+    self.sm_services_ext = ['radarState', 'selfdriveStateSP', 'pandaStates', 'carStateSP']   # Phase 75: + the last two
     self.pm_services_ext = ['carControlSP']
 
   def initialize_lateral_control(self, lac, CI, dt):
@@ -67,6 +90,25 @@ class ControlsExt(ModelStateBase):
 
     # MADS not available, use stock state to engage
     return bool(sm['selfdriveState'].active)
+
+  @staticmethod
+  def get_lat_granted(sm: messaging.SubMaster) -> bool:
+    """Phase 75l: every panda in a car safety mode allows lateral; True when the panda state is not known."""
+    if not LAT_GRANT_FROM_PANDA or not _fresh(sm, 'pandaStates'):
+      return True
+    return not any(not ps.controlsAllowedLateral for ps in sm['pandaStates']
+                   if ps.safetyModel not in IGNORED_SAFETY_MODES)
+
+  @staticmethod
+  def get_request_paused(sm: messaging.SubMaster) -> bool:
+    """Phase 75k: the car controller reports the request as passive, the factory LFA as steering, or the request as
+    held on the wheel by the follow band while the factory LFA releases."""
+    if not _fresh(sm, 'carStateSP'):
+      return False
+    cs_sp = sm['carStateSP']
+    return bool(cs_sp.lateralControlPaused or cs_sp.lateralPausedReason != 0
+                or (cs_sp.gatewayFlags & GW_SOLO_LFA_ACTIVE) == GW_SOLO_LFA_ACTIVE
+                or (PAUSED_WHILE_FOLLOW_BAND and (cs_sp.gatewayFlags & GW_SOLO_FOLLOW) == GW_SOLO_FOLLOW))
 
   @staticmethod
   def get_lead_data(_lead, src: log.RadarState.LeadData) -> None:
@@ -117,6 +159,9 @@ class ControlsExt(ModelStateBase):
 
     # Phase 72: the steering profile controlsd latched for this frame (common/steer_profile.py)
     CC_SP.stockLfaWithOp = bool(getattr(self, "_steer_legacy", False))
+
+    # Phase 75l: the panda's lateral permission (see LAT_GRANT_FROM_PANDA)
+    CC_SP.latGranted = self.get_lat_granted(sm)
 
     return CC_SP
 

@@ -7,6 +7,7 @@ import os
 
 collect_ignore = []
 _here = os.path.dirname(os.path.abspath(__file__))
+_failed = {}
 for _f in sorted(glob.glob(os.path.join(_here, "test_*.py"))):
   _mod = "phase_tests." + os.path.basename(_f)[:-3]
   try:
@@ -14,6 +15,12 @@ for _f in sorted(glob.glob(os.path.join(_here, "test_*.py"))):
   except Exception as _e:  # noqa: BLE001 - any import failure means "cannot run here"
     if os.environ.get("PHASE_TESTS_STRICT"):
       raise
+    _failed[_mod] = _f
+# second pass: a module that failed only because a later module's stubs were not in place yet (as when it is run alone)
+for _mod, _f in _failed.items():
+  try:
+    importlib.import_module(_mod)
+  except Exception as _e:  # noqa: BLE001
     collect_ignore.append(os.path.basename(_f))
     print(f"[phase_tests] skipping {_mod}: {type(_e).__name__}: {_e}")
 

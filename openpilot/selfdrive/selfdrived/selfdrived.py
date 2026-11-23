@@ -33,6 +33,7 @@ from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import IntelligentCruiseButtonManagement
 from openpilot.sunnypilot.selfdrive.selfdrived.button_state_tracker import ButtonStateTracker
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
+from openpilot.sunnypilot.selfdrive.selfdrived.lateral_info import LateralInfo
 
 DEVICE_STATE_DEAD_S = 15.0   # i6n: hardwared silent this long -> commIssue (a 7 s hiccup is not)
 # i6n Phase 46 (report §32): on this device the driving model's first output comes 10-11.6 s after the first carState
@@ -136,13 +137,14 @@ class SelfdriveD(CruiseHelper):
     # still caught: process death via managerState (processNotRunning) and a hung thread via
     # the DEVICE_STATE_DEAD_S escalation below (the thermal values it carries would be frozen).
     ignore += unused_lateral_services(self.CP)   # i6n Phase 46
+    ignore += ['carStateSP']   # i6n Phase 75o: display input only, must never raise commIssue
     ignore_liveness = ignore + ['deviceState']
     self.device_state_dead_frames = 0
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'extrinsicsCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'deviceMotion', 'lateralDelay',
                                    'managerState', 'vehicleParameters', 'radarState', 'lateralTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark',
-                                   'lateralManeuverPlan', 'modelDataV2SP', 'longitudinalPlanSP'] + \
+                                   'lateralManeuverPlan', 'modelDataV2SP', 'longitudinalPlanSP', 'carStateSP'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
                                   ignore_alive=ignore_liveness, ignore_avg_freq=ignore_liveness,
                                   ignore_valid=ignore, frequency=int(1/DT_CTRL))
@@ -219,6 +221,7 @@ class SelfdriveD(CruiseHelper):
 
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.CP_SP)
 
+    self.lateral_info = LateralInfo()   # i6n Phase 75o
     CruiseHelper.__init__(self, self.CP)
     self.button_state_tracker = ButtonStateTracker()
 
@@ -579,6 +582,11 @@ class SelfdriveD(CruiseHelper):
     # mute canBusMissing event if in Park, as it sometimes may trigger a false alarm with MADS in Paused state
     if CS.gearShifter == car.CarState.GearShifter.park and self.mads.enabled:
       self.events.remove(EventName.canBusMissing)
+
+    # i6n Phase 75o: steering request passive / factory LFA steering / hold-off paused (carStateSP, when fresh)
+    cs_sp = self.sm['carStateSP'] if (self.sm.alive['carStateSP'] and self.sm.seen['carStateSP']) else None
+    for e in self.lateral_info.update(CS, cs_sp, self.sm['carControl'].latActive):
+      self.events_sp.add(e)
 
     CruiseHelper.update(self, CS, self.events_sp, self.experimental_mode)
 

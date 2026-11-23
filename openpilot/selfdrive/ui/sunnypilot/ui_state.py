@@ -19,6 +19,7 @@ OpenpilotState = log.SelfdriveState.OpenpilotState
 MADSState = custom.ModularAssistiveDrivingSystem.ModularAssistiveDrivingSystemState
 
 ONROAD_BRIGHTNESS_TIMER_PAUSED = -1
+GW_SOLO_LFA_ACTIVE = (1 << 4) | (1 << 2)   # carStateSP.gatewayFlags: GW_SOLO | GW_LFA_ACTIVE (opendbc hyundai carcontroller.py)
 
 
 class OnroadTimerStatus(Enum):
@@ -132,6 +133,11 @@ class UIStateSP:
     # engaged — show the same paused/override presentation so the driver is
     # never left believing op is steering when it deliberately is not.
     if cs_sp is not None and mads.available and mads.enabled and cs_sp.lateralControlPaused:
+      return "override"
+    # i6n Phase 75o: in the solo profile the factory LFA is steering instead of openpilot (carStateSP.gatewayFlags) -
+    # same presentation; the text comes from selfdrived (factoryLfaActive / lfaHoldOffPaused alerts)
+    if (cs_sp is not None and mads.available and mads.enabled
+        and (int(getattr(cs_sp, "gatewayFlags", 0)) & GW_SOLO_LFA_ACTIVE) == GW_SOLO_LFA_ACTIVE):
       return "override"
 
     # MADS specific statuses

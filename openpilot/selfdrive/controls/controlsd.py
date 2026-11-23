@@ -410,6 +410,15 @@ LANE_CENTER_WIDTH_M = (2.5, 4.6)
 LANE_CENTER_WIDTH_RATIO = 0.25
 LANE_CENTER_BIAS_M = -0.034
 
+# Phase 75 (report §103), controls side:
+# 75j  While the model action is non-finite the held command (MODEL_NONFINITE_*) already contains the lane-centre
+#      term; adding it again every frame made the command run away (14 x in 0.3 s). The add is skipped, the two states
+#      are kept as they are. Kill: LANE_CENTER_NONFINITE_GUARD = False.
+# 75n  Minimum steer speed with hysteresis: lateral goes off LAT_MIN_SPEED_HYST_MS below CP.minSteerSpeed (4 km/h) and
+#      comes back above it (5 km/h) - it flapped for 0.1-2.2 s around 5.0 km/h. Kill: LAT_MIN_SPEED_HYST_MS = 0.0.
+LANE_CENTER_NONFINITE_GUARD = True
+LAT_MIN_SPEED_HYST_MS = 1.0 / 3.6
+
 # Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
 # corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
 # under<0.6 32-41%) — invisible to the 7a feedback (desired-vs-achieved). When a
@@ -560,6 +569,7 @@ class Controls(ControlsExt):
     self._steer_legacy = self._steer_profile.legacy
     self._lc_p = 0.0   # Phase 73c lane-centre term: low-passed proportional part
     self._lc_i = 0.0   #                             integral part
+    self._lat_speed_ok = False   # Phase 75n: above the minimum steer speed on the last frame
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.CP_SP)
 
@@ -902,7 +912,11 @@ class Controls(ControlsExt):
     CC.enabled = self.sm['selfdriveState'].enabled
 
     # Check which actuators can be enabled
-    standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
+    min_steer_speed = max(self.CP.minSteerSpeed, 0.3)
+    if getattr(self, "_lat_speed_ok", False):   # Phase 75n: was above the minimum -> stays on down to the lower edge
+      min_steer_speed = max(min_steer_speed - LAT_MIN_SPEED_HYST_MS, 0.3)
+    standstill = abs(CS.vEgo) <= min_steer_speed or CS.standstill
+    self._lat_speed_ok = not standstill
 
     # Get which state to use for active lateral control
     _lat_active = self.get_lat_active(self.sm)
@@ -918,6 +932,8 @@ class Controls(ControlsExt):
     steer_direct = not getattr(self, "_steer_legacy", True)
     if hasattr(self.LaC, "direct"):
       self.LaC.direct = steer_direct
+    if hasattr(self.LaC, "request_paused"):
+      self.LaC.request_paused = self.get_request_paused(self.sm)   # Phase 75k
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -958,7 +974,10 @@ class Controls(ControlsExt):
     if steer_direct and CC.latActive:
       lc_ok = (mf.lane_change_state == LaneChangeState.off and not (CS.leftBlinker or CS.rightBlinker)
                and not CS.steeringPressed and not self.lane_dropout)
-      lc_add = self._lane_center(mf, CS, new_desired_curvature, lc_ok)
+      if LANE_CENTER_NONFINITE_GUARD and self._model_nonfinite_frames > 0:
+        lc_add = 0.0   # Phase 75j: the held command already contains the term; states kept as they are
+      else:
+        lc_add = self._lane_center(mf, CS, new_desired_curvature, lc_ok)
       new_desired_curvature = new_desired_curvature + lc_add
       if abs(lc_add) > 2e-5:
         steer_flags |= STEER_FLAG_LANE_CENTER

@@ -443,6 +443,7 @@ CONFIGS = [
       "carControl", "driverAssistance", "alertDebug",
       # sunnypilot services selfdrived subscribes to (without them MADS/ext state is never fed)
       "lateralManeuverPlan", "modelDataV2SP", "longitudinalPlanSP", "userBookmark",
+      "carStateSP",   # i6n Phase 75o
     ],
     subs=["selfdriveState", "onroadEvents", "selfdriveStateSP", "onroadEventsSP"],
     ignore=["logMonoTime"],
@@ -459,7 +460,8 @@ CONFIGS = [
           "driverMonitoringState", "onroadEvents", "driverAssistance",
           # sunnypilot services controlsd subscribes to: selfdriveStateSP carries the MADS state that
           # decides latActive — without it the whole lateral path replays as inactive
-          "lateralDelay", "lateralManeuverPlan", "radarState", "selfdriveStateSP"],
+          "lateralDelay", "lateralManeuverPlan", "radarState", "selfdriveStateSP",
+          "pandaStates", "carStateSP"],   # i6n Phase 75k / 75l
     subs=["carControl", "controlsState", "carControlSP"],
     ignore=["logMonoTime", ],
     init_callback=get_car_params_callback,

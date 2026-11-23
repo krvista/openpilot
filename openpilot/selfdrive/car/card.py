@@ -228,6 +228,8 @@ class Car:
     CS_SP.steerFlags = int(getattr(self.CI.CC, 'steer_debug_flags', 0)) & 0xFFFFFFFF
     # i6n Phase 72: what the vehicle's ADAS controller did with our request on the last control step (GW_* bits)
     CS_SP.gatewayFlags = int(getattr(self.CI.CC, 'gw_flags', 0)) & 0xFF
+    # i6n Phase 75: why the request was passive with lateral on (PR_* code, 0 = not passive)
+    CS_SP.lateralPausedReason = int(getattr(self.CI.CC, 'lat_passive_reason', 0)) & 0xFF
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)

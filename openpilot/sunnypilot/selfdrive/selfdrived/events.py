@@ -73,6 +73,27 @@ def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messag
     Priority.LOW, VisualAlert.none, AudibleAlertSP.promptSingleLow, .1)
 
 
+# i6n Phase 75o: text by carStateSP.lateralPausedReason (opendbc hyundai carcontroller.py PR_*)
+LATERAL_PAUSED_REASON_TEXT = {
+  1: "Camera Signal Lost", 2: "LFA Fault", 3: "Reverse", 4: "Parking Mode", 5: "Driver Steering",
+  6: "Driver Steering", 7: "Low Speed", 8: "Turn Too Sharp",
+}
+
+
+def lateral_paused_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  """Phase 75o: nobody is steering although lateral is on. Louder chime with cruise engaged."""
+  try:
+    reason = int(sm['carStateSP'].lateralPausedReason)
+  except Exception:  # noqa: BLE001 - a missing service must not take the alert down
+    reason = 0
+  return Alert(
+    "Steering Paused",
+    LATERAL_PAUSED_REASON_TEXT.get(reason, "Steer Manually"),
+    AlertStatus.userPrompt, AlertSize.mid,
+    Priority.LOW, VisualAlert.none,
+    AudibleAlert.prompt if CS.cruiseState.enabled else AudibleAlertSP.promptSingleLow, 3.)
+
+
 class EventsSP(EventsBase):
   def __init__(self):
     super().__init__()
@@ -243,6 +264,32 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "",
       AlertStatus.normal, AlertSize.none,
       Priority.MID, VisualAlert.none, AudibleAlert.prompt, 3.),
+  },
+
+  # i6n Phase 75m: LFA button with SCC main off (shown in any state, like a no-entry alert)
+  EventNameSP.cruiseMainRequired: {
+    ET.PERMANENT: NoEntryAlert("Switch Cruise Main On"),
+  },
+
+  # i6n Phase 75o
+  EventNameSP.lateralPaused: {
+    ET.WARNING: lateral_paused_alert,
+  },
+
+  EventNameSP.factoryLfaActive: {
+    ET.WARNING: Alert(
+      "Factory LFA Active",
+      "openpilot Not Steering",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .2),
+  },
+
+  EventNameSP.lfaHoldOffPaused: {
+    ET.PERMANENT: Alert(
+      "LFA Hold-Off Paused",
+      "Factory LFA May Steer",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.LOWER, VisualAlert.none, AudibleAlert.none, 5.),
   },
 
   EventNameSP.laneChangeRoadEdge: {

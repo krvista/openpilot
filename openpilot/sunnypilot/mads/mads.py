@@ -23,6 +23,27 @@ SafetyModel = structs.CarParams.SafetyModel
 SET_SPEED_BUTTONS = (ButtonType.accelCruise, ButtonType.resumeCruise, ButtonType.decelCruise, ButtonType.setCruise)
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
+# i6n Phase 75m (report §103.3-4), CCNC angle-steering platform only (self.main_gated). There the panda cannot see the
+# LFA button (it reaches the car on the camera's LKAS_ALT only) and the cruise buttons are not decoded, so the panda
+# grants lateral on the SCC main edge or through the MADS heartbeat and never without main.
+#   LKAS_BUTTON_NEEDS_MAIN  the LFA button is not an enable source while cruiseState.available is False (it enabled
+#                           MADS, the panda never granted, 2 s later 'Controls Mismatch: Lateral'); the press shows
+#                           cruiseMainRequired instead. Switching off with the button is unchanged. Nor does a paused
+#                           MADS resume while main is off. Kill: False.
+#   CRUISE_EDGE_ENABLE      with Unified Engagement Mode on and MADS off, the rising edge of cruiseState.enabled raises
+#                           lkasEnable (engage chime) - only with cruiseState.available, not while a panda reports
+#                           invalid RX checks and not after a mismatch trip until the next main-on edge (the panda
+#                           would not grant: 2 s later the mismatch alert). The usual no-entry conditions apply. It also
+#                           brings lateral back at the next cruise engagement after the driver switched it off with
+#                           the LFA button; MadsUnifiedEngagementMode off keeps 'cruise only'. Kill: False.
+# i6n Phase 75l: the lateral mismatch counter only ever grew while MADS stayed active, so short panda gaps (each grant
+# wait leaves 0-100) added up to the 200-frame trip. It now loses one count per LATERAL_MISMATCH_DECAY_FRAMES frames in
+# which the panda agrees - a decay, not a reset: a grant that keeps flapping (more than 1 / (1 + N) of the time off)
+# still trips. Kill: 0.
+LKAS_BUTTON_NEEDS_MAIN = True
+CRUISE_EDGE_ENABLE = True
+LATERAL_MISMATCH_DECAY_FRAMES = 5
+
 
 class ModularAssistiveDrivingSystem:
   def __init__(self, selfdrive):
@@ -34,7 +55,10 @@ class ModularAssistiveDrivingSystem:
     self.active = False
     self.available = False
     self.lateral_mismatch_counter = 0
+    self.lateral_agree_frames = 0   # Phase 75l
     self.allow_always = False
+    self.main_gated = False         # Phase 75m
+    self.cruise_edge_blocked = False   # Phase 75m: a mismatch trip happened; cleared by the next main-on edge
     self.no_main_cruise = False
     self.selfdrive = selfdrive
     self.selfdrive.enabled_prev = False
@@ -45,6 +69,8 @@ class ModularAssistiveDrivingSystem:
     if self.CP.brand == "hyundai":
       if self.CP.flags & (HyundaiFlags.HAS_LDA_BUTTON | HyundaiFlags.CANFD):
         self.allow_always = True
+      # Phase 75m: CCNC angle steering (LKAS_ALT) - see LKAS_BUTTON_NEEDS_MAIN
+      self.main_gated = bool(self.CP.flags & HyundaiFlags.CCNC and self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT)
     if self.CP.brand == "tesla":
       self.allow_always = True
 
@@ -119,9 +145,34 @@ class ModularAssistiveDrivingSystem:
     # Therefore we allow a mismatch for two samples, then we trigger the disengagement.
     if not self.active or self.selfdrive.enabled:
       self.lateral_mismatch_counter = 0
+      self.lateral_agree_frames = 0
     elif any(not ps.controlsAllowedLateral for ps in self.selfdrive.sm['pandaStates']
              if ps.safetyModel not in IGNORED_SAFETY_MODES):
       self.lateral_mismatch_counter += 1
+      self.lateral_agree_frames = 0
+    elif LATERAL_MISMATCH_DECAY_FRAMES > 0 and self.lateral_mismatch_counter > 0:
+      # Phase 75l: the panda agrees -> slow decay
+      self.lateral_agree_frames += 1
+      if self.lateral_agree_frames >= LATERAL_MISMATCH_DECAY_FRAMES:
+        self.lateral_agree_frames = 0
+        self.lateral_mismatch_counter -= 1
+
+  def main_off_blocks_enable(self, CS: structs.CarState) -> bool:
+    """Phase 75m: on the main-gated platform lateral cannot be granted while SCC main is off."""
+    return bool(LKAS_BUTTON_NEEDS_MAIN and self.main_gated and not CS.cruiseState.available)
+
+  def cruise_edge_enable(self, CS: structs.CarState) -> bool:
+    """Phase 75m: the driver engaged cruise with MADS off (main on) on a car whose cruise buttons cannot be read."""
+    if not (CRUISE_EDGE_ENABLE and self.main_gated and self.unified_engagement_mode) or self.enabled:
+      return False
+    if not (CS.cruiseState.enabled and not self.selfdrive.CS_prev.cruiseState.enabled and CS.cruiseState.available):
+      return False
+    # a panda that dropped lateral for invalid RX checks re-arms on a main edge only: not while they are invalid, and
+    # not after a mismatch trip until main has been switched on again
+    if self.cruise_edge_blocked:
+      return False
+    return not any(ps.safetyRxChecksInvalid for ps in self.selfdrive.sm['pandaStates']
+                   if ps.safetyModel not in IGNORED_SAFETY_MODES)
 
   def update_events(self, CS: structs.CarState):
     if not self.selfdrive.enabled and self.enabled:
@@ -192,6 +243,9 @@ class ModularAssistiveDrivingSystem:
          self.should_silent_lkas_enable(CS) and \
          not (self.steering_mode_on_brake == MadsSteeringModeOnBrake.DISENGAGE and self.pedal_pressed_non_gas_pressed(CS)):
         self.events_sp.add(EventNameSP.silentLkasEnable)
+      # Phase 75m: cruise engaged with MADS off
+      if self.cruise_edge_enable(CS):
+        self.events_sp.add(EventNameSP.lkasEnable)
 
     for be in CS.buttonEvents:
       if be.type == ButtonType.cancel:
@@ -204,6 +258,8 @@ class ModularAssistiveDrivingSystem:
           else:
             self.events_sp.add(EventNameSP.lkasDisable)
             self._boot_enable_pending = False
+        elif self.main_off_blocks_enable(CS):
+          self.events_sp.add(EventNameSP.cruiseMainRequired)   # Phase 75m: no entry, tell the driver why
         else:
           self.events_sp.add(EventNameSP.lkasEnable)
 
@@ -223,11 +279,14 @@ class ModularAssistiveDrivingSystem:
             self.events_sp.add(EventNameSP.pedalPressedAlertOnly)
 
     if self.should_silent_lkas_enable(CS):
-      if self.state_machine.state == State.paused:
+      if self.state_machine.state == State.paused and not self.main_off_blocks_enable(CS):   # Phase 75m
         self.events_sp.add(EventNameSP.silentLkasEnable)
 
+    if CS.cruiseState.available and not self.selfdrive.CS_prev.cruiseState.available:
+      self.cruise_edge_blocked = False   # Phase 75m: the main edge re-arms the panda
     if self.lateral_mismatch_counter >= 200:
       self.events_sp.add(EventNameSP.controlsMismatchLateral)
+      self.cruise_edge_blocked = True
 
     self.events.remove(EventName.pcmDisable)
     self.events.remove(EventName.buttonCancel)

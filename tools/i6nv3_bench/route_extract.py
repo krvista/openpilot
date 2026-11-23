@@ -1,4 +1,4 @@
-"""One-pass route extractor (09-23; v2 10-02): read a route's rlogs ONCE and save every 100 Hz series the i6nv3 probes
+"""One-pass route extractor (09-23; v2 10-02; v6 11-23): read a route's rlogs ONCE and save every 100 Hz series the i6nv3 probes
 need, so routes can be deleted from the disk-limited container right after extraction and analysed offline.
 
 Saved (carState-rate grid, T relative to the first log message):
@@ -22,7 +22,19 @@ Saved (carState-rate grid, T relative to the first log message):
   v5 (11-22, Phase 72 drives): gw_flags = carStateSP.gatewayFlags (GW_* bits of the car controller: 1 valid, 2 factory LFA
   on, 4 active, 8 relayed, 16 solo profile, 32 button pulse, 64 follow band, 128 hold-off paused; 0 in pre-72 logs),
   lat_paused = carStateSP.lateralControlPaused
-Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz>
+  v6 (11-23, Phase 75): mads_state (selfdriveStateSP.mads.state: 0 disabled, 1 paused, 2 enabled, 3 softDisabling,
+  4 overriding; -1 = no message) / mads_enabled / mads_active / mads_available; panda_ctrl / panda_lat = pandaStates
+  controlsAllowed / controlsAllowedLateral over the pandas in a car safety mode (1 all allow, 0 one does not, -1 unknown);
+  buttons = carState.buttonEvents as rows (t, type, pressed), type = car.capnp ButtonEvent.Type (5 cancel, 6 lkas,
+  8 mainCruise, 9 setCruise, 10 resumeCruise, ...); gear (carState.gearShifter: 1 park, 2 drive, 3 neutral, 4 reverse);
+  lead / lead_d / lead_v = radarState.leadOne present / dRel (m) / vRel (m/s); cruise_avail (cruiseState.available);
+  lat_granted (carControlSP.latGranted; True in pre-75 logs), lat_reason (carStateSP.lateralPausedReason, car controller
+  PR_*: 1 camera stale, 2 LFA fault, 3 reverse, 4 parking, 5 angle, 6 low-speed grip, 7 scenario, 8 envelope, 9 not
+  granted, 10 wheel outrun; 0 = not passive / pre-75); cb_esa / cb_esa_gain = FCA_ESA_ActvSta / FCA_ESA_TqBstGainVal of
+  ADAS_CMD_35_10ms (emergency steering assist state and torque boost gain); version = 6 (absent before v6).
+  The camera's own LKAS_ALT active / gain / byte 13 are cam_active / cam_gain / cam_b13 (since v3).
+  Fields a log does not have keep their defaults. extract(msgs) / parse_* are importable (phase_tests/test_phase75_extract.py).
+Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz> [log dir]
 """
 import glob
 import sys
@@ -31,127 +43,208 @@ import numpy as np
 
 from openpilot.tools.lib.logreader import LogReader
 
-r, out = sys.argv[1], sys.argv[2]
-files = sorted(glob.glob(f"/home/user/drivelog/drivelog/*_{r}--*--rlog.zst"), key=lambda f: int(f.split("--")[-2]))
-cs, cc, wr, ct, md, lp, gp, mp, rj, sd, sp, cam, cbm, e0m, lnc, lnt = [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
-passive = False
-events = []; prev_ev = set()
-t0 = None; commit = ""
-for f in files:
-  try:
-    for m in LogReader(f):
-      w = m.which(); t = m.logMonoTime * 1e-9
-      if t0 is None:
-        t0 = t
-      if w == "carState":
-        s = m.carState
-        cs.append((t, s.vEgo * 3.6, s.aEgo, s.steeringAngleDeg, s.steeringRateDeg, s.steeringPressed, s.steeringTorque,
-                   s.steeringTorqueEps, s.leftBlinker, s.rightBlinker, s.gasPressed, s.brakePressed, s.leftBlindspot,
-                   s.rightBlindspot, s.cruiseState.enabled))
-      elif w == "carControl":
-        c = m.carControl
-        cc.append((t, c.latActive, c.actuators.steeringAngleDeg, c.actuators.accel))
-      elif w == "controlsState":
-        x = m.controlsState
-        ct.append((t, x.desiredCurvature, x.curvature, getattr(x, "steerCmdGapDeg", 0.0), getattr(x, "steerFlags", 0)))
-      elif w == "carStateSP":
-        sp.append((t, getattr(m.carStateSP, "steerFlags", 0), getattr(m.carStateSP, "gatewayFlags", 0),
-                   getattr(m.carStateSP, "lateralControlPaused", False)))
-      elif w == "modelV2":
-        d = m.modelV2
-        lm = min(d.laneLineProbs[1], d.laneLineProbs[2]) if len(d.laneLineProbs) >= 4 else 1.0
-        md.append((t, d.action.desiredCurvature, lm, int(d.meta.laneChangeState.raw)))
-      elif w == "livePose":
-        lp.append((t, np.degrees(m.livePose.angularVelocityDevice.z)))
-      elif w == "selfdriveState":
-        sd.append((t, m.selfdriveState.active))
-      elif w == "onroadEvents":
-        cur = {str(e.name) for e in m.onroadEvents}
-        for nm in cur - prev_ev:
-          events.append((t - t0, nm))
-        prev_ev = cur
-      elif w in ("gpsLocationExternal", "gpsLocation"):
-        g = getattr(m, w)
-        if g.latitude != 0.0:
-          gp.append((t, g.latitude, g.longitude))
-      elif w == "initData" and not commit:
-        commit = m.initData.gitCommit[:9]
-      elif w == "carParams":
-        passive = bool(m.carParams.passive)
-      elif w == "can":
-        nrej = 0
-        for c in m.can:
-          if c.address == 234 and c.src < 128 and len(c.dat) >= 24:
-            dd = bytes(c.dat)
-            a16 = dd[12] | (dd[13] << 8)
-            mp.append((t, dd[18] & 0x3, (dd[18] >> 5) & 1, ((dd[8] | (dd[9] << 8)) & 0xFFF) * 0.1 - 204.8,
-                       (a16 - 0x10000 if a16 & 0x8000 else a16) * 0.1, ((dd[10] | (dd[11] << 8)) & 0x1FFF) - 4095))
-          elif c.address == 272 and c.src >= 192:
-            nrej += 1
-          elif c.address == 203 and c.src == 1 and len(c.dat) >= 9:
-            dd = bytes(c.dat); raw = (dd[4] | (dd[5] << 8)) & 0x3FFF
-            if raw & 0x2000:
-              raw -= 0x4000
-            cbm.append((t, raw * 0.1, dd[6] * 0.004, dd[3] >> 4, dd[3] & 0xF))
-          elif c.address == 480 and c.src == 1 and len(c.dat) >= 8:
-            bits = int.from_bytes(bytes(c.dat)[:8], "little")
-            e0m.append((t, (bits >> 47) & 3, (bits >> 31) & 1))
-          elif c.address == 272 and c.src == 2 and len(c.dat) >= 14:
-            dd = bytes(c.dat); raw = ((dd[10] >> 2) | (dd[11] << 6)) & 0x3FFF
-            if raw & 0x2000:
-              raw -= 0x4000
-            cam.append((t, raw * 0.1, dd[12] * 0.004, (dd[9] >> 4) & 0x3, dd[7], dd[8], dd[13], dd[9] & 0xF))
-          elif c.address == 866 and c.src == 2 and len(c.dat) >= 8:
-            lnc.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
-        if nrej:
-          rj.append((t, nrej))
-      elif w == "sendcan":
-        for c in m.sendcan:
-          if c.address == 272 and len(c.dat) >= 13:
-            dd = bytes(c.dat); raw = ((dd[10] >> 2) | (dd[11] << 6)) & 0x3FFF
-            if raw & 0x2000:
-              raw -= 0x4000
-            wr.append((t, raw * 0.1, dd[12] * 0.004, (dd[9] >> 4) & 0x3, dd[7]))
-          elif c.address == 866 and len(c.dat) >= 8:
-            lnt.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
-  except Exception as e:  # noqa: BLE001 - a truncated last segment must not lose the route
-    print(f"  {f.split('/')[-1]}: {type(e).__name__}: {e}")
-CS = np.array(cs, float)
-if not len(CS):
-  print(f"== {r}: no carState"); sys.exit(0)
-T = CS[:, 0]
-def res(a, col, default=0.0, kind="interp"):
-  A = np.array(a, float)
-  if not len(A):
-    return np.full(len(T), default)
-  if kind == "hold":
-    idx = np.clip(np.searchsorted(A[:, 0], T, side="right") - 1, 0, len(A) - 1)
-    return A[idx, col]
-  return np.interp(T, A[:, 0], A[:, col])
-rej = np.zeros(len(T))
-if rj:
-  RJ = np.array(rj, float); idx = np.clip(np.searchsorted(T, RJ[:, 0]), 0, len(T) - 1); np.add.at(rej, idx, RJ[:, 1])
-np.savez_compressed(out, T=T - t0, v=CS[:, 1], a_ego=CS[:, 2], ang=CS[:, 3], rate=CS[:, 4], pressed=CS[:, 5] > 0.5,
-                    tq_s=CS[:, 6], tq_eps=CS[:, 7], lb=CS[:, 8] > 0.5, rb=CS[:, 9] > 0.5, gas=CS[:, 10] > 0.5,
-                    brake=CS[:, 11] > 0.5, bsl=CS[:, 12] > 0.5, bsr=CS[:, 13] > 0.5,
-                    lat=res(cc, 1, kind="hold") > 0.5, apply=res(cc, 2), accel_cmd=res(cc, 3),
-                    wire=res(wr, 1), gain=res(wr, 2), tx_active=res(wr, 3, kind="hold"),
-                    k_ctrl=res(ct, 1), k_meas=res(ct, 2), gap=res(ct, 3), k_model=res(md, 1),
-                    lane_min=res(md, 2, 1.0), lcs=res(md, 3, kind="hold"), yaw=res(lp, 1),
-                    mdps_active=res(mp, 1, kind="hold"), mdps_fault=res(mp, 2, kind="hold"), mdps_tq=res(mp, 3),
-                    tx_reject=rej, sd_active=res(sd, 1, kind="hold") > 0.5,
-                    gps_lat=res(gp, 1), gps_lon=res(gp, 2), commit=np.array(commit),
-                    sf_cc=res(sp, 1, kind="hold").astype(np.int64), sf_ctl=res(ct, 4, kind="hold").astype(np.int64),
-                    gw_flags=res(sp, 2, kind="hold").astype(np.int64), lat_paused=res(sp, 3, kind="hold") > 0.5,
-                    cam_ang=res(cam, 1), cam_gain=res(cam, 2, kind="hold"), cam_active=res(cam, 3, kind="hold"),
-                    cam_b7=res(cam, 4, kind="hold"), cam_b8=res(cam, 5, kind="hold"), cam_b13=res(cam, 6, kind="hold"),
-                    cam_b9lo=res(cam, 7, kind="hold"), mdps_ang=res(mp, 4), mdps_col=res(mp, 5),
-                    cb_req=res(cbm, 1), cb_gain=res(cbm, 2), cb_lvl2=res(cbm, 3, kind="hold"), cb_aci=res(cbm, 4, kind="hold"),
-                    lfa_sym=res(e0m, 1, -1.0, kind="hold"), hda_icon=res(e0m, 2, -1.0, kind="hold"),
-                    lane_l=res(lnc, 1, -1.0, kind="hold"), lane_r=res(lnc, 2, -1.0, kind="hold"),
-                    lane_tx_l=res(lnt, 1, -1.0, kind="hold"), lane_tx_r=res(lnt, 2, -1.0, kind="hold"),
-                    tx_b7=res(wr, 4, kind="hold"),
-                    cruise=CS[:, 14] > 0.5, passive=np.array(passive),
-                    events=np.array(events, dtype=object))
-print(f"== {r}: {len(T) / 6000:.1f} min, commit {commit}, lat active {np.mean(res(cc, 1, kind='hold') > 0.5) * 100:.0f}%, "
-      f"events {len(events)}")
+VERSION = 6
+LOG_DIR = "/home/user/drivelog/drivelog"
+NO_CAR_SAFETY = ("silent", "noOutput")   # pandas in these modes say nothing about the car (as the MADS mismatch check)
+
+
+def _s14(raw):
+  raw &= 0x3FFF
+  return raw - 0x4000 if raw & 0x2000 else raw
+
+
+def parse_mdps(dd):
+  """MDPS (0xEA): LKA_ANGLE_ACTIVE, LKA_ANGLE_FAULT, STEERING_OUT_TORQUE, STEERING_ANGLE (deg), STEERING_COL_TORQUE."""
+  a16 = dd[12] | (dd[13] << 8)
+  return (dd[18] & 0x3, (dd[18] >> 5) & 1, ((dd[8] | (dd[9] << 8)) & 0xFFF) * 0.1 - 204.8,
+          (a16 - 0x10000 if a16 & 0x8000 else a16) * 0.1, ((dd[10] | (dd[11] << 8)) & 0x1FFF) - 4095)
+
+
+def parse_cb(dd):
+  """ADAS_CMD_35_10ms (0xCB): ADAS_StrAnglReqVal (deg), ACI gain, ADAS_ActvACILvl2Sta, ADAS_ActvACISta,
+  FCA_ESA_ActvSta, FCA_ESA_TqBstGainVal (v6)."""
+  return _s14(dd[4] | (dd[5] << 8)) * 0.1, dd[6] * 0.004, dd[3] >> 4, dd[3] & 0xF, dd[7] & 0x3, dd[8] * 0.004
+
+
+def parse_lkas_alt(dd):
+  """LKAS_ALT (0x110): angle (deg), ACI gain, LKAS_ANGLE_ACTIVE, byte 7, byte 8, byte 13 (0 if short), byte 9 low nibble."""
+  return (_s14((dd[10] >> 2) | (dd[11] << 6)) * 0.1, dd[12] * 0.004, (dd[9] >> 4) & 0x3, dd[7], dd[8],
+          dd[13] if len(dd) > 13 else 0, dd[9] & 0xF)
+
+
+def panda_allowed(panda_states):
+  """(controlsAllowed, controlsAllowedLateral) over the pandas in a car safety mode: 1 all, 0 not all, -1 no such panda."""
+  car = [ps for ps in panda_states if str(ps.safetyModel) not in NO_CAR_SAFETY]
+  if not car:
+    return -1, -1
+  return int(all(ps.controlsAllowed for ps in car)), int(all(getattr(ps, "controlsAllowedLateral", True) for ps in car))
+
+
+class Extractor:
+  """feed() every log message in order, then result() -> dict of arrays (None without carState)."""
+
+  def __init__(self):
+    (self.cs, self.cc, self.wr, self.ct, self.md, self.lp, self.gp, self.mp, self.rj, self.sd, self.sp, self.cam, self.cbm,
+     self.e0m, self.lnc, self.lnt) = ([] for _ in range(16))
+    self.mads, self.pnd, self.btn, self.ld, self.ccsp = [], [], [], [], []   # v6
+    self.passive = False
+    self.events = []; self.prev_ev = set()
+    self.t0 = None; self.commit = ""
+
+  def feed(self, m):
+    w = m.which(); t = m.logMonoTime * 1e-9
+    if self.t0 is None:
+      self.t0 = t
+    if w == "carState":
+      s = m.carState
+      self.cs.append((t, s.vEgo * 3.6, s.aEgo, s.steeringAngleDeg, s.steeringRateDeg, s.steeringPressed, s.steeringTorque,
+                      s.steeringTorqueEps, s.leftBlinker, s.rightBlinker, s.gasPressed, s.brakePressed, s.leftBlindspot,
+                      s.rightBlindspot, s.cruiseState.enabled, s.cruiseState.available, int(s.gearShifter.raw)))
+      for b in s.buttonEvents:
+        self.btn.append((t - self.t0, int(b.type.raw), bool(b.pressed)))
+    elif w == "carControl":
+      c = m.carControl
+      self.cc.append((t, c.latActive, c.actuators.steeringAngleDeg, c.actuators.accel))
+    elif w == "controlsState":
+      x = m.controlsState
+      self.ct.append((t, x.desiredCurvature, x.curvature, getattr(x, "steerCmdGapDeg", 0.0), getattr(x, "steerFlags", 0)))
+    elif w == "carStateSP":
+      self.sp.append((t, getattr(m.carStateSP, "steerFlags", 0), getattr(m.carStateSP, "gatewayFlags", 0),
+                      getattr(m.carStateSP, "lateralControlPaused", False), getattr(m.carStateSP, "lateralPausedReason", 0)))
+    elif w == "carControlSP":
+      self.ccsp.append((t, getattr(m.carControlSP, "latGranted", True)))
+    elif w == "selfdriveStateSP":
+      x = m.selfdriveStateSP.mads
+      self.mads.append((t, int(x.state.raw), x.enabled, x.active, x.available))
+    elif w == "pandaStates":
+      self.pnd.append((t, *panda_allowed(m.pandaStates)))
+    elif w == "radarState":
+      x = m.radarState.leadOne
+      self.ld.append((t, x.present, x.dRel, x.vRel))
+    elif w == "modelV2":
+      d = m.modelV2
+      lm = min(d.laneLineProbs[1], d.laneLineProbs[2]) if len(d.laneLineProbs) >= 4 else 1.0
+      self.md.append((t, d.action.desiredCurvature, lm, int(d.meta.laneChangeState.raw)))
+    elif w == "livePose":
+      self.lp.append((t, np.degrees(m.livePose.angularVelocityDevice.z)))
+    elif w == "selfdriveState":
+      self.sd.append((t, m.selfdriveState.active))
+    elif w == "onroadEvents":
+      cur = {str(e.name) for e in m.onroadEvents}
+      for nm in cur - self.prev_ev:
+        self.events.append((t - self.t0, nm))
+      self.prev_ev = cur
+    elif w in ("gpsLocationExternal", "gpsLocation"):
+      g = getattr(m, w)
+      if g.latitude != 0.0:
+        self.gp.append((t, g.latitude, g.longitude))
+    elif w == "initData" and not self.commit:
+      self.commit = m.initData.gitCommit[:9]
+    elif w == "carParams":
+      self.passive = bool(m.carParams.passive)
+    elif w == "can":
+      nrej = 0
+      for c in m.can:
+        if c.address == 234 and c.src < 128 and len(c.dat) >= 24:
+          self.mp.append((t, *parse_mdps(bytes(c.dat))))
+        elif c.address == 272 and c.src >= 192:
+          nrej += 1
+        elif c.address == 203 and c.src == 1 and len(c.dat) >= 9:
+          self.cbm.append((t, *parse_cb(bytes(c.dat))))
+        elif c.address == 480 and c.src == 1 and len(c.dat) >= 8:
+          bits = int.from_bytes(bytes(c.dat)[:8], "little")
+          self.e0m.append((t, (bits >> 47) & 3, (bits >> 31) & 1))
+        elif c.address == 272 and c.src == 2 and len(c.dat) >= 14:
+          self.cam.append((t, *parse_lkas_alt(bytes(c.dat))))
+        elif c.address == 866 and c.src == 2 and len(c.dat) >= 8:
+          self.lnc.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
+      if nrej:
+        self.rj.append((t, nrej))
+    elif w == "sendcan":
+      for c in m.sendcan:
+        if c.address == 272 and len(c.dat) >= 13:
+          self.wr.append((t, *parse_lkas_alt(bytes(c.dat))[:4]))
+        elif c.address == 866 and len(c.dat) >= 8:
+          self.lnt.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
+
+  def result(self):
+    CS = np.array(self.cs, float)
+    if not len(CS):
+      return None
+    T = CS[:, 0]; t0 = self.t0
+
+    def res(a, col, default=0.0, kind="interp"):
+      A = np.array(a, float)
+      if not len(A):
+        return np.full(len(T), default)
+      if kind in ("hold", "since"):
+        i = np.searchsorted(A[:, 0], T, side="right") - 1
+        y = A[np.clip(i, 0, len(A) - 1), col]
+        return np.where(i < 0, default, y) if kind == "since" else y   # since: the default until the first sample
+      return np.interp(T, A[:, 0], A[:, col])
+    rej = np.zeros(len(T))
+    if self.rj:
+      RJ = np.array(self.rj, float); idx = np.clip(np.searchsorted(T, RJ[:, 0]), 0, len(T) - 1); np.add.at(rej, idx, RJ[:, 1])
+    cc, wr, ct, md, lp, gp, mp, sd, sp = self.cc, self.wr, self.ct, self.md, self.lp, self.gp, self.mp, self.sd, self.sp
+    cam, cbm, e0m, lnc, lnt = self.cam, self.cbm, self.e0m, self.lnc, self.lnt
+    return dict(
+      T=T - t0, v=CS[:, 1], a_ego=CS[:, 2], ang=CS[:, 3], rate=CS[:, 4], pressed=CS[:, 5] > 0.5,
+      tq_s=CS[:, 6], tq_eps=CS[:, 7], lb=CS[:, 8] > 0.5, rb=CS[:, 9] > 0.5, gas=CS[:, 10] > 0.5,
+      brake=CS[:, 11] > 0.5, bsl=CS[:, 12] > 0.5, bsr=CS[:, 13] > 0.5,
+      lat=res(cc, 1, kind="hold") > 0.5, apply=res(cc, 2), accel_cmd=res(cc, 3),
+      wire=res(wr, 1), gain=res(wr, 2), tx_active=res(wr, 3, kind="hold"),
+      k_ctrl=res(ct, 1), k_meas=res(ct, 2), gap=res(ct, 3), k_model=res(md, 1),
+      lane_min=res(md, 2, 1.0), lcs=res(md, 3, kind="hold"), yaw=res(lp, 1),
+      mdps_active=res(mp, 1, kind="hold"), mdps_fault=res(mp, 2, kind="hold"), mdps_tq=res(mp, 3),
+      tx_reject=rej, sd_active=res(sd, 1, kind="hold") > 0.5,
+      gps_lat=res(gp, 1), gps_lon=res(gp, 2), commit=np.array(self.commit),
+      sf_cc=res(sp, 1, kind="hold").astype(np.int64), sf_ctl=res(ct, 4, kind="hold").astype(np.int64),
+      gw_flags=res(sp, 2, kind="hold").astype(np.int64), lat_paused=res(sp, 3, kind="hold") > 0.5,
+      cam_ang=res(cam, 1), cam_gain=res(cam, 2, kind="hold"), cam_active=res(cam, 3, kind="hold"),
+      cam_b7=res(cam, 4, kind="hold"), cam_b8=res(cam, 5, kind="hold"), cam_b13=res(cam, 6, kind="hold"),
+      cam_b9lo=res(cam, 7, kind="hold"), mdps_ang=res(mp, 4), mdps_col=res(mp, 5),
+      cb_req=res(cbm, 1), cb_gain=res(cbm, 2), cb_lvl2=res(cbm, 3, kind="hold"), cb_aci=res(cbm, 4, kind="hold"),
+      lfa_sym=res(e0m, 1, -1.0, kind="hold"), hda_icon=res(e0m, 2, -1.0, kind="hold"),
+      lane_l=res(lnc, 1, -1.0, kind="hold"), lane_r=res(lnc, 2, -1.0, kind="hold"),
+      lane_tx_l=res(lnt, 1, -1.0, kind="hold"), lane_tx_r=res(lnt, 2, -1.0, kind="hold"),
+      tx_b7=res(wr, 4, kind="hold"),
+      cruise=CS[:, 14] > 0.5, passive=np.array(self.passive),
+      events=np.array(self.events, dtype=object),
+      # v6
+      version=np.array(VERSION), cruise_avail=CS[:, 15] > 0.5, gear=CS[:, 16].astype(np.int64),
+      mads_state=res(self.mads, 1, -1.0, kind="since").astype(np.int64), mads_enabled=res(self.mads, 2, kind="since") > 0.5,
+      mads_active=res(self.mads, 3, kind="since") > 0.5, mads_available=res(self.mads, 4, kind="since") > 0.5,
+      panda_ctrl=res(self.pnd, 1, -1.0, kind="since").astype(np.int64),
+      panda_lat=res(self.pnd, 2, -1.0, kind="since").astype(np.int64),
+      buttons=np.array(self.btn, float).reshape(-1, 3),
+      lead=res(self.ld, 1, kind="since") > 0.5, lead_d=res(self.ld, 2, kind="since"), lead_v=res(self.ld, 3, kind="since"),
+      lat_granted=res(self.ccsp, 1, 1.0, kind="since") > 0.5, lat_reason=res(sp, 4, kind="since").astype(np.int64),
+      cb_esa=res(cbm, 5, kind="since").astype(np.int64), cb_esa_gain=res(cbm, 6, kind="since"))
+
+
+def extract(msgs):
+  ex = Extractor()
+  for m in msgs:
+    ex.feed(m)
+  return ex.result()
+
+
+def main(r, out, log_dir=LOG_DIR):
+  files = sorted(glob.glob(f"{log_dir}/*_{r}--*--rlog.zst"), key=lambda f: int(f.split("--")[-2]))
+  ex = Extractor()
+  for f in files:
+    try:
+      for m in LogReader(f):
+        ex.feed(m)
+    except Exception as e:  # noqa: BLE001 - a truncated last segment must not lose the route
+      print(f"  {f.split('/')[-1]}: {type(e).__name__}: {e}")
+  d = ex.result()
+  if d is None:
+    print(f"== {r}: no carState"); return
+  np.savez_compressed(out, **d)
+  print(f"== {r}: {len(d['T']) / 6000:.1f} min, commit {ex.commit}, lat active {np.mean(d['lat']) * 100:.0f}%, "
+        f"events {len(d['events'])}")
+
+
+if __name__ == "__main__":
+  main(*sys.argv[1:4])

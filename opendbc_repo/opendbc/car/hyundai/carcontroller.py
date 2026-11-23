@@ -182,6 +182,20 @@ GW_PULSE      = 1 << 5   # an LFA button pulse is being sent this frame
 GW_FOLLOW     = 1 << 6   # 72c bound the request to the wheel band this frame
 GW_GAVE_UP    = 1 << 7   # hold-off paused: the car kept switching the factory LFA back on
 
+# Phase 75i (card.py -> carStateSP.lateralPausedReason): why the request is passive although lateral is on (0 = it is
+# not). One cause per frame, in this order of precedence. Telemetry / display only.
+PR_NONE         = 0
+PR_CAM_STALE    = 1    # camera LKAS_ALT not advancing
+PR_LFA_FAULT    = 2    # FAULT_LFA
+PR_REVERSE      = 3    # reverse / the crawl after it
+PR_PARKING      = 4    # parking-mode latch
+PR_ANGLE        = 5    # angle-passive (driver turning)
+PR_LOWSPEED_GRIP = 6   # low-speed grip latch
+PR_SCENARIO     = 7    # low-speed scenario gate
+PR_VM_REJECT    = 8    # request outside the lateral envelope
+PR_NOT_GRANTED  = 9    # waiting for the panda's lateral permission
+PR_WHEEL_OUTRUN = 10   # wheel moving faster than an active frame may follow
+
 
 def compute_hold_torque(v_ego, lat_acc):
   """Phase 31 hold-torque model (values.py ACIGAIN_HOLD_*): op's own
@@ -201,7 +215,7 @@ def compute_hold_torque(v_ego, lat_acc):
 def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_gain, steering_error, blinker_on=False,
                                   grip_start=30.0, grip_full=140.0, grip_floor=0.15, suppress_error_boost=False,
                                   post_grip=False, rate_dn_floor=0.0, anchored_recovery=False, curve_deg=0.0, rate_up_cap=0.04,
-                                  city_release=False, ceiling_scale=1.0):
+                                  city_release=False, ceiling_scale=1.0, lowspeed_raise=False):
   # Phase 22: the yield input is now DRIVER torque (caller subtracts the
   # op holding-torque baseline — see the call site). Parked-car measurement
   # proved the long-assumed "+90..180 Nm sensor offset" was actually the
@@ -315,7 +329,13 @@ def compute_torque_reduction_gain(steering_torque, v_ego_kph, lat_active, last_g
     # release had anchor_recent = 103).
     big_err_taper = _interp(abs(steering_error), [2.5, 4.0], [1.0, 0.0]) if post_grip else 1.0
     error_mult = 1.0 if suppress_error_boost else (1.0 + (error_mult_raw - 1.0) * torque_suppress * big_err_taper)
-    dynamic_ceiling = min(1.0, base_ceiling * error_mult) * ceiling_scale   # Phase 43b: accel yield (1.0 = off)
+    dynamic_ceiling = min(1.0, base_ceiling * error_mult)
+    # Phase 75h: low-speed hands-off ceiling at least the raised rungs (solo; values.py ACIGAIN_LOWSPEED_RAISE_*). A floor
+    # under the ceiling, not a new base: the error boost is not multiplied up, and the blinker ceiling below stays as is.
+    if lowspeed_raise and not blinker_on:
+      dynamic_ceiling = max(dynamic_ceiling, min(1.0, float(_interp(v_ego_kph, CarControllerParams.ACIGAIN_LOWSPEED_RAISE_SPEEDS_KPH,
+                                                                    CarControllerParams.ACIGAIN_LOWSPEED_RAISE_V))))
+    dynamic_ceiling *= ceiling_scale   # Phase 43b: accel yield (1.0 = off)
     # Phase 5d A2 (commit 4a4d29b): when the driver signals intent with
     # the blinker, force the MDPS ceiling down so a light-grip lane
     # change does not have to fight op torque. 0.45 mirrors the
@@ -666,6 +686,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.gw_follow = False
     self.gw_flags = 0
     self.road_context = False         # Phase 73a: the car has been driving on the road since the last parking signature
+    # Phase 75 (values.py)
+    self.lfa_hold_off_seen = 0        # 75b: consecutive frames with the factory LFA seen off (icon 0)
+    self.lfa_hold_clears = deque()    # 75b: frame numbers at which a retry wait was cleared, inside the rate window
+    self.lfa_fast_left = 0            # 75f: frames left of the fast-confirm window after a cruise-engagement edge
+    self.cruise_enabled_prev = None   # 75f: cruiseState.enabled of the previous frame (None = no frame yet)
+    self.first_ctrl_frame = True      # 75d
+    self.lat_ungranted = False        # 75e: lateral on but not granted by the panda (CarControlSP.latGranted False)
+    self.tx_rej_run = 0               # 75e: consecutive frames the panda rejected
+    self.gw_band_prev = False         # 75g: the follow band applied / bound on the previous frame
+    self.gw_bound_prev = False
+    self.lowv_creep_open = False      # 75h: the scenario gate is re-opening because the creep zone was left
+    self.lowv_creep_prev = False
+    self.lat_passive_reason = 0       # 75i: PR_* of the last control step (card.py -> carStateSP.lateralPausedReason)
     # Lateral-alert hysteresis (kept-feature #18) — N-frame counters that
     # card.py reads via CarOutput to push onroadEvents.
     self.alert_vm_limit_frames = 0
@@ -699,10 +732,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
 
-  def _lfa_hold_off(self, lfa_state: int) -> bool:
+  def _lfa_hold_off(self, lfa_state: int, fast_confirm: bool = False) -> bool:
     """Phase 72a: keep the factory LFA switched off (values.py LFA_HOLD_OFF_*). Returns True on the frames the LFA
     button bit of LKAS_ALT must be high. lfa_state = LFAHDA_CLUSTER.LFA_ICON (0 off, 1 on / standby, 2 active,
-    3 releasing, -1 unknown). One pulse = LFA_SYNC_PULSE_FRAMES frames; the controller toggles ~0.1 s later."""
+    3 releasing, -1 unknown). One pulse = LFA_SYNC_PULSE_FRAMES frames; the controller toggles ~0.1 s later.
+    fast_confirm (Phase 75f): inside the window after a cruise-engagement edge - the short confirm time, for one pulse."""
     P = CarControllerParams
     if self.lfa_sync_pulse_remaining > 0:        # rest of a pulse already started
       self.lfa_sync_pulse_remaining -= 1
@@ -716,12 +750,26 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if lfa_state == 0:
       self.lfa_hold_on_frames = 0
       self.lfa_hold_tries = 0
+      # Phase 75b: really off (not one sample) -> the wait left from the last pulse is over, a new switch-on is answered
+      # after the confirm time. Only LFA_HOLD_OFF_CLEAR_MAX times per rate window: a car that keeps switching it back
+      # on gets the old spacing after that.
+      self.lfa_hold_off_seen = min(self.lfa_hold_off_seen + 1, 10**6)
+      while self.lfa_hold_clears and self.frame - self.lfa_hold_clears[0] >= P.LFA_HOLD_OFF_WINDOW_FRAMES:
+        self.lfa_hold_clears.popleft()
+      if (self.lfa_hold_wait > 0 and 0 < P.LFA_HOLD_OFF_CLEAR_FRAMES <= self.lfa_hold_off_seen
+          and len(self.lfa_hold_clears) < P.LFA_HOLD_OFF_CLEAR_MAX):
+        self.lfa_hold_wait = 0
+        self.lfa_hold_clears.append(self.frame)
       return False
+    self.lfa_hold_off_seen = 0
     if lfa_state not in (1, 2):                  # unknown, or releasing (a pulse now could switch it back on)
       self.lfa_hold_on_frames = 0
       return False
+    confirm = P.LFA_HOLD_OFF_CONFIRM_FRAMES
+    if fast_confirm and 0 < P.LFA_HOLD_OFF_FAST_CONFIRM_FRAMES < confirm:
+      confirm = P.LFA_HOLD_OFF_FAST_CONFIRM_FRAMES
     self.lfa_hold_on_frames = min(self.lfa_hold_on_frames + 1, P.LFA_HOLD_OFF_CONFIRM_FRAMES)
-    if self.lfa_hold_on_frames < P.LFA_HOLD_OFF_CONFIRM_FRAMES or self.lfa_hold_wait > 0 or self.lfa_hold_give_up > 0:
+    if self.lfa_hold_on_frames < confirm or self.lfa_hold_wait > 0 or self.lfa_hold_give_up > 0:
       return False
     if len(self.lfa_hold_pulses) >= P.LFA_HOLD_OFF_MAX_PULSES:   # the car keeps switching it back on: stop for a while
       self.lfa_hold_give_up = P.LFA_HOLD_OFF_GIVE_UP_FRAMES
@@ -732,6 +780,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.lfa_hold_on_frames = 0
     self.lfa_hold_pulses.append(self.frame)
     self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES - 1
+    self.lfa_fast_left = 0                       # Phase 75f: one fast pulse per cruise edge
     return True
 
   def _gw_relayed(self, CS) -> bool:
@@ -1171,6 +1220,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     op_curv_raw = float(CC.actuators.steeringAngleDeg)
     op_curv_safe = op_curv_raw if math.isfinite(op_curv_raw) else steer_angle_safe
     blinker_on = bool(CS.out.leftBlinker or CS.out.rightBlinker)
+    # passive-frame angle: the exact sensor panda samples (MDPS.STEERING_ANGLE_2),
+    # clipped to the safety window; steeringAngleDeg only if that is unavailable
+    _mdps2 = getattr(CS, "mdps_angle_2", None)
+    _meas_src = float(_mdps2) if (_mdps2 is not None and math.isfinite(_mdps2)) else steer_angle_safe
+    meas_angle_for_panda = float(_clip(_meas_src, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+    # Phase 75e: lateral is on but the panda has not granted it (CarControlSP.latGranted, absent = granted) - every
+    # active frame would be rejected, so the request waits on the wheel like the other passive states
+    self.lat_ungranted = bool(solo and CarControllerParams.LAT_GRANT_GATE and CC.latActive
+                              and not getattr(self._cc_sp, 'latGranted', True))
+    # Phase 75e: consecutive panda-rejected frames (one reject, e.g. the 38-2 resync frame, is not "nobody receives it")
+    self.tx_rej_run = self.tx_rej_run + 1 if bool(getattr(CS, "tx_rejected", False)) else 0
 
     # Phase 26: hold-compensated driver-torque domain, computed ONCE here and
     # consumed by every latch/grip test below (the ACIGain caller reuses it).
@@ -1549,10 +1609,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       scen_raw = self.traffic_following and not blinker_on
     else:
       scen_raw = self.traffic_following or (abs(op_curv_safe) < gentle_thr)
+    # Phase 75h: the gate opens because the creep zone was just left (blinker off) -> the short dwell; an opening on
+    # the |cmd| path or by a lead keeps the 1.0 s
+    if not scen_raw or self.low_speed_scen_ok:
+      self.lowv_creep_open = False
+    elif solo and self.lowv_creep_prev and not self.in_creep_zone and not blinker_on and self.lowv_scen_dwell == 0:
+      self.lowv_creep_open = True
+    self.lowv_creep_prev = self.in_creep_zone
     if scen_raw != self.low_speed_scen_ok:
       self.lowv_scen_dwell += 1
       need = (CarControllerParams.LOW_SPEED_SCEN_TO_ACTIVE_FRAMES if scen_raw
               else CarControllerParams.LOW_SPEED_SCEN_TO_PASSIVE_FRAMES)
+      if scen_raw and self.lowv_creep_open:
+        need = min(need, CarControllerParams.LOW_SPEED_SCEN_CREEP_EXIT_FRAMES)
       if self.lowv_scen_dwell >= need:
         self.low_speed_scen_ok = scen_raw
         self.lowv_scen_dwell = 0
@@ -1639,6 +1708,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.parking_exit_frames = 0
     if self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
       self.road_context = True        # Phase 73a: above the latch's exit speed for its sustain time = on the road
+      # Phase 75c: a signature that never armed the latch is stale here (none can be set above the entry speed)
+      if solo and CarControllerParams.PARKING_STALE_SIGNATURE_CLEAR and not self.parking_mode_active:
+        self.parking_signature_seen = False
     if self.parking_mode_active and self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
       self.parking_mode_active = False
       self.parking_signature_seen = False
@@ -1679,6 +1751,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # from the wheel, collapsing transition-frame mismatch. The later
       # post-frame clamp still runs, covering the angle_passive_active
       # case which is updated mid-method.
+      # Phase 75d: the controller's first frame - the request and the wire reference start at the wheel, not at 0 deg
+      # (they were anchored only by a frame with lateral off), and the engage taper starts
+      if self.first_ctrl_frame and solo and CarControllerParams.FIRST_FRAME_ANCHOR:
+        self.apply_angle_last = float(_clip(steer_angle_safe,
+                                              -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+                                               self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+        self.tx_angle_last = meas_angle_for_panda
+        self.frames_since_apply_anchor = 0
+      self.first_ctrl_frame = False
       if heavy_grip_anchor:
         self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
@@ -1856,11 +1937,20 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       desired_angle = self._hand_gap_cap(desired_angle, steer_angle_safe, v_ego_safe, driver_tq, bool(CC.latActive))
       # Phase 72c: the factory LFA is active or releasing -> the ADAS controller does not relay us; stay with the wheel
       # so nothing stored is released as a step when it switches over.
-      if solo and CC.latActive and lfa_state in (2, 3) and CarControllerParams.GW_FOLLOW_BAND_DEG > 0.0:
+      # Phase 75g: around the MDPS's own angle (the frame it regulates in); when a binding band ends the engage taper
+      # is restarted once - never while it binds, the request must keep up with the wheel there
+      _band_on = bool(solo and CC.latActive and lfa_state in (2, 3) and CarControllerParams.GW_FOLLOW_BAND_DEG > 0.0)
+      if _band_on:
         _band = CarControllerParams.GW_FOLLOW_BAND_DEG
-        _bound = float(_clip(desired_angle, steer_angle_safe - _band, steer_angle_safe + _band))
+        _ref = meas_angle_for_panda if CarControllerParams.GW_FOLLOW_MDPS_REF else steer_angle_safe
+        _bound = float(_clip(desired_angle, _ref - _band, _ref + _band))
         self.gw_follow = _bound != desired_angle
         desired_angle = _bound
+      elif (self.gw_band_prev and self.gw_bound_prev and solo and CC.latActive
+            and CarControllerParams.GW_FOLLOW_EXIT_TAPER):
+        self.frames_since_apply_anchor = 0
+      self.gw_band_prev = _band_on
+      self.gw_bound_prev = self.gw_follow
 
       # Phase 9 (yield-by-authority): op keeps its own clean commanded angle — the
       # driver yield is done entirely on the ACIGain authority axis below, so the
@@ -1949,7 +2039,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # the gateway toggles the cluster icon exactly once per transition.
     if solo:
       # Phase 72a: no pulse on MADS edges - the factory LFA is held off by its own state (see _lfa_hold_off)
-      lfa_sync_pulse = self._lfa_hold_off(lfa_state)
+      # Phase 75f: short confirm for a while after cruise was engaged (the car's own switch-on follows that edge), not
+      # in the controller's first frames
+      _cruise_on = bool(CS.out.cruiseState.enabled)
+      if self.cruise_enabled_prev is False and _cruise_on:
+        self.lfa_fast_left = CarControllerParams.LFA_HOLD_OFF_FAST_WINDOW_FRAMES
+      elif self.lfa_fast_left > 0:
+        self.lfa_fast_left -= 1
+      self.cruise_enabled_prev = _cruise_on
+      lfa_sync_pulse = self._lfa_hold_off(lfa_state, self.lfa_fast_left > 0
+                                          and self.frame >= CarControllerParams.LFA_HOLD_OFF_FAST_GUARD_FRAMES)
     else:
       if ccnc_lka_alt and mads_enabled != self.prev_mads_enabled:
         self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
@@ -1961,6 +2060,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       lfa_sync_pulse = self.lfa_sync_pulse_remaining > 0
       if self.lfa_sync_pulse_remaining > 0:
         self.lfa_sync_pulse_remaining -= 1
+      self.cruise_enabled_prev = None            # Phase 75f: no edge is taken from before a profile change
+      self.lfa_fast_left = 0
     self.prev_mads_enabled = mads_enabled
 
     # FAULT_LFA edge state kept so we can decide cam_invalid without the
@@ -2106,7 +2207,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # angle tens of degrees off the wheel (sim measured a 40°+ first-frame
     # step at scenario-gate release). Anchored, resume starts at the wheel.
     if (self.angle_passive_active or heavy_grip_anchor or self.parking_mode_active
-        or in_passthrough):
+        or in_passthrough or self.lat_ungranted):   # Phase 75e: waiting for the lateral grant
       self.apply_angle_last = float(_clip(steer_angle_safe,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
@@ -2123,7 +2224,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                               and not cam_stale_tripped and not fault_lfa_bool
                               and not vm_reject_persistent
                               and not self.angle_passive_active
-                              and not self.parking_mode_active)
+                              and not self.parking_mode_active
+                              and not self.lat_ungranted)   # Phase 75e
     else:
       effective_lat_active = bool(apply_steer_req)
 
@@ -2144,9 +2246,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # post-reverse crawl has none at any speed, so both are silent passivity
     # in exactly the regime this flag exists for. cam_stale / LFA fault stay
     # excluded (they raise their own alerts).
+    # Phase 75i: camera stale / LFA fault are shown as well (0.1 s in 16.65 h; their own alerts stay as they are)
     self.lat_passive_indicated = bool(CC.latActive) and ccnc_lka_alt and (
       self.parking_mode_active or in_passthrough or self.angle_passive_active
-      or vm_reject_persistent or self.was_in_reverse)
+      or vm_reject_persistent or self.was_in_reverse
+      or (solo and CarControllerParams.PASSIVE_INDICATE_CAM_FAULT and (cam_stale_tripped or fault_lfa_bool)))
     self.prev_eff_lat_active = bool(effective_lat_active)
 
     # ACIGain (reference 17-line compute_torque_reduction_gain).
@@ -2286,6 +2390,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         grip_start=grip_start_eff,
         anchored_recovery=anchored_recovery,         # Phase 35b
         city_release=city_release,                   # Phase 39a
+        lowspeed_raise=solo,                         # Phase 75h
         # Phase 28: boost held off only in the first ~0.25 s after an anchor
         # frame (the recovery transient) — G1 review: the full 2 s memory
         # suppressed 26.1% of hands-off drift-recovery frames, worse than
@@ -2313,6 +2418,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                    # points at an occupied adjacent lane
                    or blind_caution),
       )
+      # Phase 75e: nobody receives this gain (factory LFA active / a run of rejected frames / lateral not granted):
+      # keep the internal ramp at 0 as the wheel-outrun path does, so it restarts under the rate cap when relayed
+      if (solo and CarControllerParams.ACI_HOLD_ZERO_UNRELAYED
+          and (lfa_state == 2 or self.lat_ungranted
+               or 0 < CarControllerParams.ACI_HOLD_ZERO_REJECT_FRAMES <= self.tx_rej_run)):
+        effective_aci_gain = 0.0
       self.aci_gain_last = effective_aci_gain
       fast_floor = real_grip or (CarControllerParams.GRIP_FLOOR_EPS_PRESSED and bool(CS.out.steeringPressed))
       for on, bit in ((real_grip, SF_DRIVER_PRESSED), (fast_floor, SF_FAST_FLOOR),
@@ -2327,11 +2438,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         if on:
           sf |= bit
 
-    # passive-frame angle: the exact sensor panda samples (MDPS.STEERING_ANGLE_2),
-    # clipped to the safety window; steeringAngleDeg only if that is unavailable
-    _mdps2 = getattr(CS, "mdps_angle_2", None)
-    _meas_src = float(_mdps2) if (_mdps2 is not None and math.isfinite(_mdps2)) else steer_angle_safe
-    meas_angle_for_panda = float(_clip(_meas_src, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
     # Phase 38 wire governor (see values.py TX_GOVERNOR): what goes on the bus
     # never exceeds the panda's per-frame VM delta / max angle relative to the
     # last transmitted value; passive frames reset the reference to the
@@ -2349,6 +2455,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # integer CAN units (0.1 deg): panda allows int(delta*10)+1 units; stay one unit inside
       _d_can = max(int(_dmax * 10.0) - 1, 1)
       _a_can = max(int(_amax * 10.0) - 1, 5)
+      _outrun_margin = CarControllerParams.WHEEL_OUTRUN_MARGIN_CAN
+      # Phase 75a: the panda's own allowance is int(delta(v - 1 m/s) * 10) + 1 units; one unit inside that
+      if (solo and CarControllerParams.TX_GOVERNOR_MIRROR
+          and v_ego_safe * CV.MS_TO_KPH >= CarControllerParams.TX_GOVERNOR_MIRROR_MIN_KPH):
+        _dfudge = min(get_max_angle_delta_vm(max(_vg - 1.0, 1.0), self.BASELINE_VM, self.params),
+                      self.params.ANGLE_LIMITS.MAX_ANGLE_RATE)
+        if int(_dfudge * 10.0) >= _d_can:           # (not where both sit on the one-unit floor, ~140 km/h up)
+          _d_can = int(_dfudge * 10.0)
+          _outrun_margin = CarControllerParams.WHEEL_OUTRUN_MARGIN_MIRROR_CAN
       # Phase 38-3: is the wheel itself outrunning what an active frame may move per frame?
       # per-CAN-sample step from carstate when available (immune to two samples landing in one frame)
       _meas_can = int(round(meas_angle_for_panda * 10.0))
@@ -2358,7 +2473,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         _wheel_step = abs(_meas_can - self.meas_can_prev) if self.meas_can_prev is not None else 0
       if CarControllerParams.WHEEL_OUTRUN_PASSIVE:
-        _over = _wheel_step > _d_can + CarControllerParams.WHEEL_OUTRUN_MARGIN_CAN
+        _over = _wheel_step > _d_can + _outrun_margin
         self.wheel_outrun_hot = self.wheel_outrun_hot + 1 if _over else 0
         if not self.wheel_outrun_passive:
           if self.wheel_outrun_hot >= CarControllerParams.WHEEL_OUTRUN_ENTRY_FRAMES:
@@ -2421,6 +2536,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if on:
         sf |= bit
     self.steer_debug_flags = sf
+    # Phase 75i: the cause of a passive request while lateral is on (PR_*), for the device
+    _pr = PR_NONE
+    if bool(CC.latActive) and ccnc_lka_alt and not wire_active:
+      for on, code in ((cam_stale_tripped, PR_CAM_STALE), (fault_lfa_bool, PR_LFA_FAULT), (self.was_in_reverse, PR_REVERSE),
+                       (self.parking_mode_active, PR_PARKING), (self.angle_passive_active, PR_ANGLE),
+                       (self.low_speed_cam_latched, PR_LOWSPEED_GRIP), (in_passthrough, PR_SCENARIO),
+                       (vm_reject_persistent, PR_VM_REJECT), (self.lat_ungranted, PR_NOT_GRANTED),
+                       (self.wheel_outrun_passive, PR_WHEEL_OUTRUN)):
+        if on:
+          _pr = code
+          break
+    self.lat_passive_reason = _pr
     # Phase 72 telemetry and the transmitted-angle history for the relay check
     gw = GW_SOLO if solo else 0
     if lfa_state >= 0 and getattr(CS, 'gw_req_valid', False):

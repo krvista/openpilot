@@ -123,6 +123,18 @@ LAT_FB_LEAK_TAU     = 5.0     # s at the full 10e-4 cap when on; scaled with the
 # Kill switch: LAT_FB_ENTRY_BOOST = 1.0.
 LAT_FB_ENTRY_BOOST = 2.5
 
+# Phase 75k (report §103.6-2): 'Turn Exceeds Steering Limit'. For brands whose car controller limits the request the
+# saturation input is "carOutput differs from the command"; the port passed that same flag as the argument of
+# _check_saturation that must be False, so the alert could only come from the curvature limit (a1: it should have
+# sounded 0.6 s before the driver took over at 72 km/h with the request 5.5 deg behind). Upstream passes False; so does
+# this again, in the solo profile (self.direct) - in the legacy profile the request and the wire differ by design
+# while the factory LFA steers (36 / 51 alerts on two logged drives), so the old call stays there.
+# While the car controller holds the request passive by design or the factory LFA steers (self.request_paused, set by
+# controlsd every frame) the timer runs down instead: those states have their own indication and are not a steering
+# limit. A driver press runs it down as before.
+# Kill: SAT_CHECK_UPSTREAM = False (the pre-75 call).
+SAT_CHECK_UPSTREAM = True
+
 
 class LatControlAngle(LatControl):
   def __init__(self, CP, CP_SP, CI, dt):
@@ -139,6 +151,7 @@ class LatControlAngle(LatControl):
     # deficit" of a wheel that did not follow the request, which was the factory LFA holding it (report §96); a
     # relayed request is followed at 0.95, and an integrator reaching its cap in ~0.5 s on top of that only overshoots.
     self.direct = False
+    self.request_paused = False   # Phase 75k (controlsd sets it every frame)
     try:
       self._trim_7a6 = bool(Params().get_bool("LatFbTrim7a6"))
     except Exception:
@@ -182,7 +195,7 @@ class LatControlAngle(LatControl):
       # deficit, not transient spikes (see constants block).
       err_lp_a = self.dt / (LAT_FB_ERR_LP_TAU + self.dt) if LAT_FB_ERR_LP_TAU > 0.0 else 1.0
       self._fb_err_lp += err_lp_a * (fb_err - self._fb_err_lp)
-      if not active or self.direct or CS.vEgo < LAT_FB_MIN_SPEED or not math.isfinite(CS.vEgo):
+      if not active or getattr(self, "direct", False) or CS.vEgo < LAT_FB_MIN_SPEED or not math.isfinite(CS.vEgo):
         self._fb_integ *= max(1.0 - self.dt / LAT_FB_BLEED_INACTIVE, 0.0)
       elif (CS.steeringPressed or steer_limited_by_safety or curvature_limited
             or abs(self._fb_err_lp) > LAT_FB_ERR_MAX or abs(fb_err) > LAT_FB_ERR_MAX_HARD):
@@ -224,7 +237,12 @@ class LatControlAngle(LatControl):
       # for cars which use a method of limiting torque such as a torque signal (Nissan and Toyota)
       # or relying on EPS (Ford Q3), carOutput does not capture maxing out torque  # TODO: this can be improved
       angle_control_saturated = abs(angle_steers_des - CS.steeringAngleDeg) > STEER_ANGLE_SATURATION_THRESHOLD
-    angle_log.saturated = bool(self._check_saturation(angle_control_saturated, CS, steer_limited_by_safety, curvature_limited))
+    if not SAT_CHECK_UPSTREAM or not getattr(self, "direct", False):
+      angle_log.saturated = bool(self._check_saturation(angle_control_saturated, CS, steer_limited_by_safety, curvature_limited))
+    elif getattr(self, "request_paused", False):   # Phase 75k: passive by design -> not a steering limit
+      angle_log.saturated = bool(self._check_saturation(False, CS, False, False))
+    else:
+      angle_log.saturated = bool(self._check_saturation(angle_control_saturated, CS, False, curvature_limited))
     angle_log.steeringAngleDeg = float(CS.steeringAngleDeg)
     angle_log.steeringAngleDesiredDeg = angle_steers_des
     return 0, float(angle_steers_des), angle_log

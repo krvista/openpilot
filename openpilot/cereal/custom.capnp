@@ -353,6 +353,11 @@ struct OnroadEventSP @0xda96579883444c35 {
     speedLimitPending @22;
     e2eChime @23;
     laneChangeRoadEdge @24;
+    # i6n Phase 75
+    cruiseMainRequired @25;   # LFA button pressed with SCC main off: lateral cannot be granted
+    lateralPaused @26;        # the steering request is passive with lateral on (prompt)
+    factoryLfaActive @27;     # the factory LFA is steering instead of openpilot
+    lfaHoldOffPaused @28;     # the factory LFA is no longer being switched off (hold-off paused)
   }
 }
 
@@ -391,6 +396,10 @@ struct CarControlSP @0xa5cd762cd951a455 {
   # i6n Phase 72: True = keep the pre-72 behaviour (factory LFA switched on with MADS, Phase 6-69 stack);
   # False (default) = openpilot steers alone (common/steer_profile.py: the SOLO_DEFAULT kill switch).
   stockLfaWithOp @7 :Bool;
+  # i6n Phase 75: the panda currently allows lateral control (controlsd, from pandaStates). While False with latActive
+  # the car controller sends passive frames and keeps its request on the wheel. Default true: a message without the
+  # field (old logs, replay) behaves as before.
+  latGranted @8 :Bool = true;
 
   struct Param {
     key @0 :Text;
@@ -467,6 +476,9 @@ struct CarStateSP @0xb86e6369214c01c8 {
   # (bits: opendbc hyundai carcontroller.py GW_* - valid, factory LFA on / active, relayed, solo profile, button pulse,
   # follow band binding, hold-off paused), mirrored by card.py.
   gatewayFlags @3 :UInt8;
+  # i6n Phase 75: why the steering request is passive although lateral is on, on the previous control step
+  # (opendbc hyundai carcontroller.py PR_*; 0 = it is not passive), mirrored by card.py.
+  lateralPausedReason @4 :UInt8;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

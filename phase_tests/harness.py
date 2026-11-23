@@ -100,7 +100,8 @@ class Sim:
            door=False, belt=False, standstill=None, cruise_available=True,
            v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
            wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None, tx_rejected=False, mdps_step_can=None, a_ego=0.0, gas=False, lane_prob_min=0.0,
-           lfa_state=-1, gw_req_angle=None, gw_req_lvl2=2, cam_lfa_button=0):
+           lfa_state=-1, gw_req_angle=None, gw_req_lvl2=2, cam_lfa_button=0, lat_granted=True, cruise_enabled=False,
+           fault_lfa=0):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
     out = structs.CarState()
@@ -120,6 +121,7 @@ class Sim:
     out.standstill = bool(standstill if standstill is not None else (np.isfinite(v) and v < 0.1))
     out.gearShifter = gear
     out.cruiseState.available = bool(cruise_available)
+    out.cruiseState.enabled = bool(cruise_enabled)   # Phase 75f
 
     # emulate carstate's debounced steeringPressed unless forced
     if pressed is None:
@@ -135,7 +137,7 @@ class Sim:
     cam["COUNTER"] = self.cam_counter
     self.cam_counter = (self.cam_counter + 1) % 256
 
-    CS = types.SimpleNamespace(out=out, lkas_alt_cam_msg=cam, fault_lfa=0,
+    CS = types.SimpleNamespace(out=out, lkas_alt_cam_msg=cam, fault_lfa=int(fault_lfa),
                                msg_161=None, lfa_block_msg=None, is_metric=True,
                                main_cruise_enabled=True,
                                wiper_front_on=bool(wiper), wiper_stale=bool(wiper_stale),
@@ -160,6 +162,7 @@ class Sim:
     CC.rightBlinker = bool(cc_blinker_right)
     cc._cc_sp.lateralLaneChangeActive = bool(cc_lc_active)
     cc._cc_sp.laneLineProbMin = float(lane_prob_min)   # Phase 45
+    cc._cc_sp.latGranted = bool(lat_granted)           # Phase 75e
 
     # lead data (LeadDataCarController outputs)
     cc.lead_visible = lead_dist is not None

@@ -605,6 +605,64 @@ class CarControllerParams:
   ROAD_STOP_NO_PARKING        = True
   ENGAGE_TAPER_FRAMES         = 150                     # 1.5 s
   ENGAGE_TAPER_RATE_DPS       = [4.0, 30.0]
+  # Phase 75 (report §103, audit of who commands the MDPS), car-controller side. All of it in the solo profile only;
+  # the legacy profile is unchanged.
+  # 75a  TX GOVERNOR = THE PANDA'S LIMIT, ONE UNIT INSIDE: the governor allowed int(delta(v) * 10) - 1 CAN units per
+  #      frame, the panda int(delta(v - 1 m/s) * 10) + 1 - two units apart, which left 10 deg/s from 67 km/h (panda
+  #      30-40; a1: 22 s saturated, the wire up to 17.7 deg behind). From TX_GOVERNOR_MIRROR_MIN_KPH the allowance is
+  #      int(delta(v - 1 m/s) * 10) (40 / 30 / 20 / 20 / 10 deg/s at 60 / 70 / 80 / 90 / 100 km/h); below it the old
+  #      formula stays (the VM chain binds there and the panda's speed fudge is kept as margin). The wheel-outrun
+  #      threshold keeps sitting on the panda's own allowance: margin 2 -> WHEEL_OUTRUN_MARGIN_MIRROR_CAN with the new
+  #      formula. Kill: TX_GOVERNOR_MIRROR = False.
+  # 75b  HOLD-OFF RETRY WAIT: the wait left from the last pulse kept running after the factory LFA was seen off, so a
+  #      new switch-on was answered 1.0-9.5 s late. Icon 0 for LFA_HOLD_OFF_CLEAR_FRAMES clears it - at most
+  #      LFA_HOLD_OFF_CLEAR_MAX times per rate window: a car that keeps switching it back on gets the old spacing after
+  #      that, so the 8-in-60 s pause comes at most two short waits sooner. An icon that is stale or unknown clears
+  #      nothing (the wait is what keeps a pulse off an LFA that is already off). Kill: LFA_HOLD_OFF_CLEAR_FRAMES = 0.
+  # 75c  STALE PARKING SIGNATURE: above the latch's exit speed for its sustain time a signature that never armed the
+  #      latch is dropped (it armed it at a later stop). Kill: PARKING_STALE_SIGNATURE_CLEAR = False.
+  # 75d  FIRST FRAME: a controller that starts with lateral already on anchors the request (and the wire reference) to
+  #      the wheel instead of 0 deg and starts the engage taper. Kill: FIRST_FRAME_ANCHOR = False.
+  # 75e  GAIN STAYS 0 WHILE NOBODY RECEIVES IT: with the factory LFA active (icon 2), after a run of
+  #      ACI_HOLD_ZERO_REJECT_FRAMES frames the panda rejected (0 = never; one or two rejects, e.g. the 38-2 resync
+  #      frame, leave the gain alone), and while lateral is not granted, the internal gain is held at 0 (as the
+  #      wheel-outrun path does) so it re-ramps under its rate cap once the request is relayed.
+  #      Kill: ACI_HOLD_ZERO_UNRELAYED = False.
+  #      LATERAL GRANT (CarControlSP.latGranted, absent = True): False with latActive -> passive frames, the request on
+  #      the wheel, the engage taper starts when it turns True. Kill: LAT_GRANT_GATE = False.
+  # 75f  FAST CONFIRM AFTER A CRUISE EDGE: the car switches the factory LFA on 50-90 ms after cruise is engaged in an
+  #      HDA zone. For LFA_HOLD_OFF_FAST_WINDOW_FRAMES after a rising edge of cruiseState.enabled the confirm time is
+  #      LFA_HOLD_OFF_FAST_CONFIRM_FRAMES (two 20 Hz icon samples), for one pulse, never in the controller's first
+  #      LFA_HOLD_OFF_FAST_GUARD_FRAMES (its first frames are rejected). Kill: LFA_HOLD_OFF_FAST_WINDOW_FRAMES = 0.
+  # 75g  FOLLOW BAND IN THE MDPS FRAME: the 72c band is taken around the MDPS's own angle (the one passive frames
+  #      carry) and the engage taper is restarted once when a binding band ends. Kill: GW_FOLLOW_MDPS_REF = False /
+  #      GW_FOLLOW_EXIT_TAPER = False.
+  # 75h  LOW SPEED: the scenario gate re-opens after LOW_SPEED_SCEN_CREEP_EXIT_FRAMES (instead of 1.0 s) when it opens
+  #      because the creep zone was left with the blinker off (first-car launches: first steering 16-22 -> 14-15 km/h).
+  #      Kill: = LOW_SPEED_SCEN_TO_ACTIVE_FRAMES. Hands-off gain ceiling at least ACIGAIN_LOWSPEED_RAISE_V below
+  #      ~33 km/h (was 0.18-0.30 below 20 km/h where the factory LFA sends 0.95; delivery 0.6-0.7 at 10-20 km/h); not
+  #      with a blinker; yield breakpoints / floors / rates unchanged. Kill: ACIGAIN_LOWSPEED_RAISE_V = [0.0, 0.0, 0.0].
+  # 75i  INDICATION: camera stale / LFA fault count as 'request passive' for the device (PASSIVE_INDICATE_CAM_FAULT);
+  #      carStateSP.lateralPausedReason carries the cause in both profiles (carcontroller.py PR_*, telemetry).
+  TX_GOVERNOR_MIRROR             = True
+  TX_GOVERNOR_MIRROR_MIN_KPH     = 50.0
+  WHEEL_OUTRUN_MARGIN_MIRROR_CAN = 1
+  LFA_HOLD_OFF_CLEAR_FRAMES      = 20                   # 0.2 s of icon 0 (4 cluster samples)
+  LFA_HOLD_OFF_CLEAR_MAX         = 2
+  PARKING_STALE_SIGNATURE_CLEAR  = True
+  FIRST_FRAME_ANCHOR             = True
+  ACI_HOLD_ZERO_UNRELAYED        = True
+  ACI_HOLD_ZERO_REJECT_FRAMES    = 3                    # consecutive rejected frames before the gain is zeroed
+  LAT_GRANT_GATE                 = True
+  LFA_HOLD_OFF_FAST_CONFIRM_FRAMES = 10                 # 0.1 s
+  LFA_HOLD_OFF_FAST_WINDOW_FRAMES  = 150                # 1.5 s after the cruise edge
+  LFA_HOLD_OFF_FAST_GUARD_FRAMES   = 50                 # the controller's first 0.5 s
+  GW_FOLLOW_MDPS_REF             = True
+  GW_FOLLOW_EXIT_TAPER           = True
+  LOW_SPEED_SCEN_CREEP_EXIT_FRAMES = 30                 # 0.3 s
+  ACIGAIN_LOWSPEED_RAISE_SPEEDS_KPH = [0.0, 10.0, 20.0]
+  ACIGAIN_LOWSPEED_RAISE_V          = [0.45, 0.45, 0.60]
+  PASSIVE_INDICATE_CAM_FAULT     = True
   # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
   # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
   #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel
