@@ -431,7 +431,8 @@ LANE_CENTER_BIAS_M = -0.034
 # proportional part on the car's own offset from the target, by speed (none at 45 km/h, where the plan part is already
 # as stiff as the model: the loop simulation overshoots there). Simulation at 60 / 80 / 110 km/h: curve cut
 # 15.5 / 22.4 / 27.5 -> 10.4 / 11.7 / 13.9 cm, straight error after 20 s 8.5-10.7 -> 4.4-5.1 cm, step overshoot
-# <= 22 %. Kill: LANE_CENTER_KE = [0.0, 0.0, 0.0] (and the two values above back to 0.03e-3 / 0.15e-3).
+# <= 22 % (not reproduced later - see Phase 79 below). Kill: LANE_CENTER_KE all zero (and the two values above back to
+# 0.03e-3 / 0.15e-3).
 # Phase 78 (report 108-109): ENTRY LEAD - where a curve is building up the wheel starts ENTRY_LEAD_S earlier. The
 # model's action is its plan read at the told delay; the same plan read ENTRY_LEAD_S later is what the action will be
 # then. The difference is added only while it makes the action larger on the side it is already going to (entry, not
@@ -447,8 +448,16 @@ ENTRY_LEAD_WASHOUT_S = 0.6
 ENTRY_LEAD_MIN_MS = 30.0 / 3.6
 ENTRY_LEAD_TAU_S = 0.05
 ENTRY_LEAD_FRAME_S = 0.075     # modeld: frame delay + half a model interval on top of the told delay
-LANE_CENTER_KE_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6, 80.0 / 3.6]
-LANE_CENTER_KE = [0.0, 0.5e-3, 0.8e-3]      # 1/m per m of offset
+# Phase 79 (report 110): the offset part is trimmed before its first drive. A closed-loop simulation fitted to both solo
+# drives (10 model variants) could not reproduce the "<= 22 %" above: the Phase 77 schedule [0, 0.5e-3, 0.8e-3] @
+# 45 / 60 / 80 km/h overshoots a 20 cm step by 21 / 24 / 27 % at 65 / 75 / 85 km/h (59-90 % with a weak heading gain)
+# and leaves a worst-variant delay margin of 0.27 / 0.19 / 0.12 / 0.04 s at 65 / 75 / 85 / 100 km/h, for 1-2 cm of
+# scatter the data cannot resolve. Flat 0.3e-3 from 60 km/h, fading to 0.15e-3 at 110: overshoot 14 / 12 / 11 %, worst
+# margin 0.33 / 0.27 / 0.22 / 0.13 s, about half of the simulated scatter gain kept. The integral (straight offset) is
+# untouched. Kill: LANE_CENTER_KE = [0.0, 0.0, 0.0, 0.0]. Phase 77 values: speeds 45 / 60 / 80 / 110, [0, 0.5e-3,
+# 0.8e-3, 0.8e-3].
+LANE_CENTER_KE_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6, 80.0 / 3.6, 110.0 / 3.6]
+LANE_CENTER_KE = [0.0, 0.3e-3, 0.3e-3, 0.15e-3]      # 1/m per m of offset
 
 # Phase 75 (report §103), controls side:
 # 75j  While the model action is non-finite the held command (MODEL_NONFINITE_*) already contains the lane-centre

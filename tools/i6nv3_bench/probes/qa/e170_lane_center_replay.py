@@ -8,7 +8,7 @@ import replay_state_control as R   # noqa: E402 - installs the stubs controlsd n
 cd = R.cd
 S, r = sys.argv[1], sys.argv[2]; R.load(S, r); d = R.d
 NEW = dict(LANE_CENTER_KI=cd.LANE_CENTER_KI, LANE_CENTER_I_CAP=cd.LANE_CENTER_I_CAP, LANE_CENTER_KE=cd.LANE_CENTER_KE)
-OLD = dict(LANE_CENTER_KI=0.03e-3, LANE_CENTER_I_CAP=0.15e-3, LANE_CENTER_KE=[0.0, 0.0, 0.0])
+OLD = dict(LANE_CENTER_KI=0.03e-3, LANE_CENTER_I_CAP=0.15e-3, LANE_CENTER_KE=[0.0] * len(cd.LANE_CENTER_KE_SPEED_MS))
 for t0, t1 in zip(sys.argv[3::2], sys.argv[4::2]):
   t0, t1 = float(t0), float(t1); out = {}
   for nm, c in (("old", OLD), ("new", NEW)):

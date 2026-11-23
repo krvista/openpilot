@@ -45,7 +45,7 @@ def params():
 def cdk():
   names = ("LANE_CENTER_WEIGHT", "LANE_CENTER_KI", "LANE_CENTER_I_CAP", "LANE_CENTER_KE")
   saved = {k: getattr(cd, k) for k in names}
-  cd.LANE_CENTER_KI, cd.LANE_CENTER_I_CAP, cd.LANE_CENTER_KE = 0.03e-3, 0.15e-3, [0.0, 0.0, 0.0]   # the Phase 73 values
+  cd.LANE_CENTER_KI, cd.LANE_CENTER_I_CAP, cd.LANE_CENTER_KE = 0.03e-3, 0.15e-3, [0.0] * len(cd.LANE_CENTER_KE_SPEED_MS)   # the Phase 73 values
   yield cd
   for k, v in saved.items():
     setattr(cd, k, v)

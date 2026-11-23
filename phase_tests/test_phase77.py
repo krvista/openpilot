@@ -13,8 +13,10 @@ KPH = 1 / 3.6
 
 @pytest.fixture
 def keep():
-  names = ("LANE_CENTER_KE", "LANE_CENTER_KI", "LANE_CENTER_I_CAP", "LANE_CENTER_WEIGHT")
+  names = ("LANE_CENTER_KE", "LANE_CENTER_KE_SPEED_MS", "LANE_CENTER_KI", "LANE_CENTER_I_CAP", "LANE_CENTER_WEIGHT")
   saved = {k: getattr(cd, k) for k in names}; t = P.ENGAGE_TAPER_DRIVER_START_DPS
+  cd.LANE_CENTER_KE_SPEED_MS = [45 * KPH, 60 * KPH, 80 * KPH]         # the Phase 77 schedule (Phase 79 trimmed it)
+  cd.LANE_CENTER_KE = [0.0, 0.5e-3, 0.8e-3]
   yield
   for k, v in saved.items():
     setattr(cd, k, v)
@@ -23,8 +25,7 @@ def keep():
 
 def test_shipped_values():
   assert cd.LANE_CENTER_KI == 0.06e-3 and cd.LANE_CENTER_I_CAP == 0.30e-3
-  assert cd.LANE_CENTER_KE == [0.0, 0.5e-3, 0.8e-3]
-  assert cd.LANE_CENTER_KE_SPEED_MS == pytest.approx([45 * KPH, 60 * KPH, 80 * KPH])
+  assert len(cd.LANE_CENTER_KE) == len(cd.LANE_CENTER_KE_SPEED_MS)    # values: test_phase79
   assert P.ENGAGE_TAPER_DRIVER_START_DPS == 10.0
 
 
