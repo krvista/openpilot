@@ -400,6 +400,9 @@ struct CarControlSP @0xa5cd762cd951a455 {
   # the car controller sends passive frames and keeps its request on the wheel. Default true: a message without the
   # field (old logs, replay) behaves as before.
   latGranted @8 :Bool = true;
+  # i6n Phase 76: GPS has had a fix since openpilot started (controlsd, latched). False = not yet: with low speed that is
+  # a parking-mode signature (underground car park / cold start). Default true: old logs carry no such signature.
+  gpsFixSeen @9 :Bool = true;
 
   struct Param {
     key @0 :Text;

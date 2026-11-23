@@ -25,6 +25,15 @@ KPH = 1 / 3.6
 
 
 @pytest.fixture
+def old_parking():
+  """the pre-76 parking rules (boot / creep / door signatures, 33 km/h exit): these tests describe them"""
+  keep = P.PARKING_V2
+  P.PARKING_V2 = False
+  yield
+  P.PARKING_V2 = keep
+
+
+@pytest.fixture
 def params():
   saved = {k: getattr(P, k) for k in ("ROAD_STOP_NO_PARKING", "ENGAGE_TAPER_FRAMES", "ENGAGE_TAPER_RATE_DPS")}
   yield P
@@ -73,6 +82,7 @@ def test_traffic_light_stop_does_not_arm_the_parking_latch_in_solo():
   assert solo.effective_lat_active() and not leg.effective_lat_active()
 
 
+@pytest.mark.usefixtures("old_parking")
 def test_a_real_parking_signature_clears_the_road_context():
   sim = road_then_stop(True, stop_frames=100)
   assert sim.cc.road_context
@@ -83,12 +93,14 @@ def test_a_real_parking_signature_clears_the_road_context():
   assert not sim2.cc.road_context and sim2.cc.parking_mode_active
 
 
+@pytest.mark.usefixtures("old_parking")
 def test_from_boot_the_lot_crawl_still_arms():
   sim = Sim(solo=True)
   drive(sim, 1500, 6.0)                                              # never been on the road: lot crawl as before
   assert not sim.cc.road_context and sim.cc.parking_mode_active
 
 
+@pytest.mark.usefixtures("old_parking")
 def test_road_stop_kill_switch(params):
   params.ROAD_STOP_NO_PARKING = False
   assert road_then_stop(True).cc.parking_mode_active

@@ -148,6 +148,7 @@ class CarControlSP:
   laneLineProbMin: float = auto_field()          # Phase 45: min inner lane-line prob (0.0 = unknown)
   stockLfaWithOp: bool = auto_field()            # Phase 72: True = pre-72 behaviour (factory LFA follows MADS, old stack)
   latGranted: bool = True                        # Phase 75e: the panda allows lateral control (absent / default = True)
+  gpsFixSeen: bool = True                        # Phase 76: GPS has had a fix since start (absent / default = True)
 
   @auto_dataclass
   class Param:

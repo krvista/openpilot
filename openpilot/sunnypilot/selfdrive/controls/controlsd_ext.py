@@ -55,7 +55,9 @@ class ControlsExt(ModelStateBase):
     self.CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
     cloudlog.info("controlsd_ext got CarParamsSP")
 
-    self.sm_services_ext = ['radarState', 'selfdriveStateSP', 'pandaStates', 'carStateSP']   # Phase 75: + the last two
+    self.sm_services_ext = ['radarState', 'selfdriveStateSP', 'pandaStates', 'carStateSP',   # Phase 75: + pandaStates, carStateSP
+                            'gpsLocationExternal']                                        # Phase 76
+    self._gps_fix_seen = False
     self.pm_services_ext = ['carControlSP']
 
   def initialize_lateral_control(self, lac, CI, dt):
@@ -162,6 +164,14 @@ class ControlsExt(ModelStateBase):
 
     # Phase 75l: the panda's lateral permission (see LAT_GRANT_FROM_PANDA)
     CC_SP.latGranted = self.get_lat_granted(sm)
+
+    # Phase 76: latched 'GPS has had a fix since start' for the parking-mode signature
+    try:
+      if sm.seen['gpsLocationExternal'] and sm['gpsLocationExternal'].hasFix:
+        self._gps_fix_seen = True
+    except Exception:  # noqa: BLE001 - a missing service leaves the signature on until the latch's own exits
+      pass
+    CC_SP.gpsFixSeen = bool(getattr(self, '_gps_fix_seen', False))
 
     return CC_SP
 

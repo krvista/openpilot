@@ -83,7 +83,8 @@ def mk():
 
 @pytest.fixture
 def lik():
-  yield from _restore(li, ("PAUSED_PROMPT", "PAUSED_PROMPT_PARKING_MIN_KPH", "FACTORY_LFA_INFO"))
+  yield from _restore(li, ("PAUSED_PROMPT", "PAUSED_PROMPT_PARKING_MIN_KPH", "FACTORY_LFA_INFO", "PAUSED_PROMPT_PARKING_NEEDS_CRUISE",
+                           "PAUSED_PROMPT_SKIP_REASONS"))
 
 
 @pytest.fixture
@@ -324,9 +325,9 @@ def test_controlsd_hands_the_paused_flag_to_the_lateral_controller():
 def test_car_controller_passive_states_reach_the_saturation_gate():
   """the real car controller under the parking latch on the road -> card's mirror -> controlsd's gate"""
   sim = Sim(solo=True)
-  for _ in range(1500):
-    sim.step(v=6.0 * KPH, lfa_state=0)                                # lot crawl from boot: parking latch
-  for _ in range(300):
+  for _ in range(400):
+    sim.step(v=6.0 * KPH, wheel=305.0, cmd=305.0, lfa_state=0)        # tight turn at low speed: parking latch
+  for _ in range(250):
     sim.step(v=25.0 * KPH, cmd=20.0, wheel=5.0, lfa_state=0)
   assert sim.cc.parking_mode_active and not sim.effective_lat_active()
   sp = cs_sp(paused=sim.cc.lat_passive_indicated, reason=sim.cc.lat_passive_reason, gw=sim.cc.gw_flags)
@@ -803,6 +804,9 @@ def test_one_prompt_per_episode_and_rate_limited():
 def test_parking_latch_needs_cruise_or_road_speed(lik):
   park = dict(paused=True, reason=ccmod.PR_PARKING)
   assert prompts([(1000, dict(park, v_kph=19.0))]) == []              # inside the car park
+  assert prompts([(300, dict(park, v_kph=19.0)), (300, dict(park, v_kph=27.0))]) == []          # Phase 76: cruise only
+  assert prompts([(300, dict(park, v_kph=19.0)), (300, dict(park, v_kph=19.0, cruise=True))]) == [300 + 149]
+  lik.PAUSED_PROMPT_PARKING_NEEDS_CRUISE = False                      # the Phase 75 behaviour
   assert prompts([(300, dict(park, v_kph=19.0)), (300, dict(park, v_kph=27.0))]) == [300 + 99]
   assert prompts([(300, dict(park, v_kph=19.0)), (300, dict(park, v_kph=19.0, cruise=True))]) == [300 + 9]
   lik.PAUSED_PROMPT_PARKING_MIN_KPH = 15.0
@@ -875,18 +879,20 @@ def test_real_car_controller_parking_latch_on_the_road_with_cruise_prompts():
   """the logged case: left the car park under the parking latch, cruise engaged at 25 km/h, nobody steers"""
   sim = Sim(solo=True); L = li.LateralInfo(); ev = []
 
-  def go(n, v_kph, cruise):
+  def go(n, v_kph, cruise, wheel=0.0, cmd=None):
     for _ in range(n):
-      sim.step(v=v_kph * KPH, lfa_state=0, cruise_enabled=cruise)
+      sim.step(v=v_kph * KPH, lfa_state=0, cruise_enabled=cruise, wheel=wheel, cmd=wheel if cmd is None else cmd)
       sp = cs_sp(paused=sim.cc.lat_passive_indicated, reason=sim.cc.lat_passive_reason, gw=sim.cc.gw_flags)
       for e in L.update(info_cs(v_kph, cruise=cruise), sp, True):
         ev.append((e, sim.cc.lat_passive_reason))
-  go(1500, 6.0, False); go(600, 19.0, False)                          # the lot: latched, no prompt
+  go(400, 6.0, False, wheel=305.0); go(600, 19.0, False)              # the lot: latched, no prompt
   assert sim.cc.parking_mode_active and ev == []
-  go(300, 25.0, True)                                                 # on the road, cruise engaged
+  go(300, 25.0, True, wheel=0.0, cmd=20.0)                            # cruise engaged, request far from the wheel: stays latched
   assert sim.cc.parking_mode_active and not sim.effective_lat_active()
   assert ev == [(EventNameSP.lateralPaused, ccmod.PR_PARKING)]
-  go(900, 60.0, True)                                                 # the latch releases: steering, nothing more
+  go(200, 25.0, True)                                                 # Phase 76: straight wheel with cruise -> released after 1 s
+  assert not sim.cc.parking_mode_active
+  go(600, 60.0, True)
   assert sim.effective_lat_active() and len(ev) == 1
 
 

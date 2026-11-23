@@ -39,6 +39,15 @@ SWITCHES = ("TX_GOVERNOR_MIRROR", "TX_GOVERNOR_MIRROR_MIN_KPH", "WHEEL_OUTRUN_MA
 
 
 @pytest.fixture
+def old_parking():
+  """the pre-76 parking rules (boot / creep / door signatures, 33 km/h exit): these tests describe them"""
+  keep = P.PARKING_V2
+  P.PARKING_V2 = False
+  yield
+  P.PARKING_V2 = keep
+
+
+@pytest.fixture
 def params():
   saved = {k: getattr(P, k) for k in SWITCHES}
   yield P
@@ -386,6 +395,7 @@ def boot_through_30(solo=True):
   return sim, on_road
 
 
+@pytest.mark.usefixtures("old_parking")
 def test_signature_that_never_armed_the_latch_is_dropped_on_the_road(params):
   sim, on_road = boot_through_30()
   assert on_road is False and not sim.cc.parking_mode_active and sim.cc.road_context
@@ -399,6 +409,7 @@ def test_signature_that_never_armed_the_latch_is_dropped_on_the_road(params):
   assert boot_through_30(solo=False)[0].cc.parking_mode_active        # legacy profile untouched
 
 
+@pytest.mark.usefixtures("old_parking")
 def test_real_signatures_still_arm_and_release_as_before():
   sim = Sim(solo=True)
   for _ in range(400):

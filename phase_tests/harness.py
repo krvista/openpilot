@@ -100,7 +100,7 @@ class Sim:
            door=False, belt=False, standstill=None, cruise_available=True,
            v_raw=None, enabled=None, bs_l=False, bs_r=False, wheel_rate=0.0,
            wiper=False, wiper_stale=False, blinker_right=False, cc_blinker_left=False, cc_blinker_right=False, cc_lc_active=False, mdps_angle_2=None, tx_rejected=False, mdps_step_can=None, a_ego=0.0, gas=False, lane_prob_min=0.0,
-           lfa_state=-1, gw_req_angle=None, gw_req_lvl2=2, cam_lfa_button=0, lat_granted=True, cruise_enabled=False,
+           lfa_state=-1, gw_req_angle=None, gw_req_lvl2=2, cam_lfa_button=0, lat_granted=True, cruise_enabled=False, gps_fix_seen=True,
            fault_lfa=0):
     """Run one 100 Hz control frame through the real create_canfd_msgs."""
     cc = self.cc
@@ -163,6 +163,7 @@ class Sim:
     cc._cc_sp.lateralLaneChangeActive = bool(cc_lc_active)
     cc._cc_sp.laneLineProbMin = float(lane_prob_min)   # Phase 45
     cc._cc_sp.latGranted = bool(lat_granted)           # Phase 75e
+    cc._cc_sp.gpsFixSeen = bool(gps_fix_seen)          # Phase 76
 
     # lead data (LeadDataCarController outputs)
     cc.lead_visible = lead_dist is not None

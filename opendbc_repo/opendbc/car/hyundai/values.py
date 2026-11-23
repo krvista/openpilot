@@ -650,6 +650,20 @@ class CarControllerParams:
   LFA_HOLD_OFF_CLEAR_FRAMES      = 20                   # 0.2 s of icon 0 (4 cluster samples)
   LFA_HOLD_OFF_CLEAR_MAX         = 2
   PARKING_STALE_SIGNATURE_CLEAR  = True
+  # Phase 76 (route a7 + 14 departures / arrivals, report 105) - parking mode, solo profile. Kill: PARKING_V2 = False.
+  #   enter  below 30 km/h for 3 s with a signature: |wheel| >= 300 deg, reverse, park, or no GPS fix yet since start
+  #          (one-shot: gone after the first fix or the first release). The creep, door / belt and boot signatures are
+  #          dropped - they armed the latch at traffic lights and held it on slow roads.
+  #   exit   30 km/h or more for 3 s; or lane lines >= 0.5 with |wheel| < 30 deg at >= 15 km/h for 3 s (was 0.8: median
+  #          time on the road until release 27 -> 10 s, no early release in 12 departures); or the driver's cruise
+  #          engaged for 1 s at >= 15 km/h with |wheel| < 30 deg and the request within 10 deg of the wheel.
+  PARKING_V2                   = True
+  PARKING_V2_WHEEL_DEG         = 300.0
+  PARKING_V2_GPS_SIGNATURE     = True
+  PARKING_V2_EXIT_MS           = 30.0 / 3.6
+  PARKING_V2_EXIT_FRAMES       = 300
+  PARKING_V2_LANE_PROB         = 0.5
+  PARKING_V2_CRUISE_FRAMES     = 100      # 0 = cruise engagement does not release
   FIRST_FRAME_ANCHOR             = True
   ACI_HOLD_ZERO_UNRELAYED        = True
   ACI_HOLD_ZERO_REJECT_FRAMES    = 3                    # consecutive rejected frames before the gain is zeroed

@@ -729,6 +729,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.parking_road_frames = 0     # Phase 45: consecutive marked-road frames while latched
     self.parking_creep_holdoff = 0   # Phase 45 review: frames left in which the creep signature cannot arm
     self.parking_exit_frames = 0
+    self.parking_cruise_frames = 0   # Phase 76: cruise-engaged frames that qualify for the release
+    self.parking_gps_sig = True      # Phase 76: no GPS fix yet since start (cleared by the first fix / release)
     # Phase 14-4 S1b: cold-start-at-low-speed departure signature (decided once).
     self.boot_parking_pending = True
 
@@ -1647,11 +1649,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # almost always a lot/departure context — decide once, ~0.5 s in (CAN
     # settled). A mid-drive device reboot on a slow road is the only false
     # path and costs one passive stretch until the 33 km/h exit.
+    park_v2 = solo and CarControllerParams.PARKING_V2     # Phase 76
     if self.boot_parking_pending and self.frame >= 50:
       self.boot_parking_pending = False
-      if v_ego_safe <= PARKING_MODE_ENTER_MS:
+      if v_ego_safe <= PARKING_MODE_ENTER_MS and not park_v2:
         self.parking_signature_seen = True
-    if v_ego_safe <= PARKING_MODE_ENTER_MS:
+    # Phase 76: 'no GPS fix yet since start' is a signature until the first fix or the first release
+    if bool(getattr(self._cc_sp, 'gpsFixSeen', True)):
+      self.parking_gps_sig = False
+    if park_v2:
+      if v_ego_safe < PARKING_MODE_ENTER_MS:
+        self.parking_low_speed_frames = min(self.parking_low_speed_frames + 1, PARKING_MODE_ENTER_SUSTAIN_FRAMES)
+        if (abs(steer_angle_safe) >= CarControllerParams.PARKING_V2_WHEEL_DEG
+            or CS.out.gearShifter in (structs.CarState.GearShifter.reverse, structs.CarState.GearShifter.park)):
+          self.parking_signature_seen = True
+      else:
+        self.parking_low_speed_frames = 0
+        if not self.parking_mode_active:
+          self.parking_signature_seen = False       # a signature belongs to its own low-speed stretch
+    elif v_ego_safe <= PARKING_MODE_ENTER_MS:
       self.parking_low_speed_frames = min(self.parking_low_speed_frames + 1,
                                           PARKING_MODE_ENTER_SUSTAIN_FRAMES)
       if (abs(steer_angle_safe) >= PARKING_MODE_ENTER_WHEEL_DEG
@@ -1686,7 +1702,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # Phase 73a: a stop on the road (first car at a light) is not a lot crawl - no creep arming while road_context
     road_stop = solo and CarControllerParams.ROAD_STOP_NO_PARKING and self.road_context
     if (v_ego_safe < PARKING_CREEP_MAX_MS and not lead_near and self.parking_creep_holdoff == 0 and not road_lanes_clear
-        and not road_stop):
+        and not road_stop and not park_v2):
       self.creep_frames += 1
       self.creep_min = min(self.creep_min, v_ego_safe)
       self.creep_sum += v_ego_safe
@@ -1698,27 +1714,44 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.creep_frames = 0
       self.creep_min = float('inf')
       self.creep_sum = 0.0
+    park_gps_now = park_v2 and CarControllerParams.PARKING_V2_GPS_SIGNATURE and self.parking_gps_sig   # level, not latched
     if (self.parking_low_speed_frames >= PARKING_MODE_ENTER_SUSTAIN_FRAMES
-        and self.parking_signature_seen):
+        and (self.parking_signature_seen or park_gps_now)):
       self.parking_mode_active = True
-    if v_ego_safe > PARKING_MODE_EXIT_MS:
-      self.parking_exit_frames = min(self.parking_exit_frames + 1,
-                                     PARKING_MODE_EXIT_SUSTAIN_FRAMES)
+    park_exit_sustain = CarControllerParams.PARKING_V2_EXIT_FRAMES if park_v2 else PARKING_MODE_EXIT_SUSTAIN_FRAMES
+    if (v_ego_safe >= CarControllerParams.PARKING_V2_EXIT_MS) if park_v2 else (v_ego_safe > PARKING_MODE_EXIT_MS):
+      self.parking_exit_frames = min(self.parking_exit_frames + 1, park_exit_sustain)
     else:
       self.parking_exit_frames = 0
-    if self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
+    # Phase 76: the driver's cruise engagement on a straight wheel releases the latch
+    park_cruise_n = CarControllerParams.PARKING_V2_CRUISE_FRAMES if park_v2 else 0
+    if (park_cruise_n > 0 and self.parking_mode_active and CS.out.cruiseState.enabled
+        and v_ego_safe >= PARKING_RELEASE_MIN_MS and abs(steer_angle_safe) < PARKING_RELEASE_WHEEL_DEG
+        and math.isfinite(op_curv_raw) and abs(op_curv_raw - steer_angle_safe) < PARKING_RELEASE_CMD_GAP_DEG):
+      self.parking_cruise_frames += 1
+    else:
+      self.parking_cruise_frames = 0
+    if park_cruise_n > 0 and self.parking_cruise_frames >= park_cruise_n:
+      self.road_context = True
+      self.parking_mode_active = False
+      self.parking_signature_seen = False
+      self.parking_gps_sig = False
+      self.parking_cruise_frames = 0
+    if self.parking_exit_frames >= park_exit_sustain:
       self.road_context = True        # Phase 73a: above the latch's exit speed for its sustain time = on the road
       # Phase 75c: a signature that never armed the latch is stale here (none can be set above the entry speed)
       if solo and CarControllerParams.PARKING_STALE_SIGNATURE_CLEAR and not self.parking_mode_active:
         self.parking_signature_seen = False
-    if self.parking_mode_active and self.parking_exit_frames >= PARKING_MODE_EXIT_SUSTAIN_FRAMES:
+    if self.parking_mode_active and self.parking_exit_frames >= park_exit_sustain:
       self.parking_mode_active = False
       self.parking_signature_seen = False
       self.parking_low_speed_frames = 0
+      self.parking_gps_sig = False
     # Phase 45: marked-road release (see PARKING_RELEASE_*)
     lane_p = float(getattr(self._cc_sp, 'laneLineProbMin', 0.0) or 0.0)
     if (self.parking_mode_active and PARKING_RELEASE_FRAMES > 0 and math.isfinite(lane_p)
-        and lane_p >= PARKING_RELEASE_LANE_PROB and v_ego_safe >= PARKING_RELEASE_MIN_MS
+        and lane_p >= (CarControllerParams.PARKING_V2_LANE_PROB if park_v2 else PARKING_RELEASE_LANE_PROB)
+        and v_ego_safe >= PARKING_RELEASE_MIN_MS
         and math.isfinite(CS.out.steeringAngleDeg) and abs(steer_angle_safe) < PARKING_RELEASE_WHEEL_DEG
         and math.isfinite(op_curv_raw) and abs(op_curv_raw - steer_angle_safe) < PARKING_RELEASE_CMD_GAP_DEG):
       self.parking_road_frames += 1
@@ -1728,6 +1761,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.road_context = True        # Phase 73a: the marked-road release counts as well
       self.parking_mode_active = False
       self.parking_signature_seen = False
+      self.parking_gps_sig = False
       # parking_low_speed_frames is kept: a tight turn / R / P / door right after the release re-arms at once
       self.parking_road_frames = 0
       # the creep window that may have armed this latch must not re-arm it on the next frame

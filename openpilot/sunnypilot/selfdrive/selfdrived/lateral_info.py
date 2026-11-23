@@ -39,6 +39,12 @@ GW_LFA_ACTIVE = 1 << 2   # carStateSP.gatewayFlags bits (opendbc hyundai carcont
 GW_SOLO = 1 << 4         # (in the legacy profile the factory LFA is meant to be active)
 GW_GAVE_UP = 1 << 7
 PR_PARKING = 4           # carStateSP.lateralPausedReason (opendbc hyundai carcontroller.py PR_PARKING)
+# Phase 76 (a7: 4 of 8 prompts came 0.6-1.4 s after the driver had turned the wheel through a junction): no prompt for
+# the driver-made reasons (angle-passive 5, low-speed grip 6, wheel-outrun 10), and under the parking latch only with
+# cruise engaged. Kill: PAUSED_PROMPT_SKIP_REASONS = () / PAUSED_PROMPT_PARKING_NEEDS_CRUISE = False.
+PAUSED_PROMPT_SKIP_REASONS = (5, 6, 10)
+PAUSED_PROMPT_PARKING_NEEDS_CRUISE = True
+PAUSED_PROMPT_DWELL_PARKING_S = 1.5   # longer than the car controller's cruise release (1 s): prompt only if that did not come
 
 
 class LateralInfo:
@@ -72,9 +78,15 @@ class LateralInfo:
     min_kph = PAUSED_PROMPT_MIN_KPH
     if paused and int(cs_sp.lateralPausedReason) == PR_PARKING and not CS.cruiseState.enabled:
       min_kph = max(min_kph, PAUSED_PROMPT_PARKING_MIN_KPH)
+    reason = int(cs_sp.lateralPausedReason) if paused else 0
     cond = paused and CS.vEgo * CV.MS_TO_KPH > min_kph and not CS.steeringPressed
+    if reason in PAUSED_PROMPT_SKIP_REASONS or (reason == PR_PARKING and PAUSED_PROMPT_PARKING_NEEDS_CRUISE
+                                                and not CS.cruiseState.enabled):
+      cond = False
     self.cond_time = self.cond_time + dt if cond else 0.0
     dwell = PAUSED_PROMPT_DWELL_CRUISE_S if CS.cruiseState.enabled else PAUSED_PROMPT_DWELL_S
+    if reason == PR_PARKING and PAUSED_PROMPT_PARKING_NEEDS_CRUISE:
+      dwell = max(dwell, PAUSED_PROMPT_DWELL_PARKING_S)
     if (PAUSED_PROMPT and cond and self.cond_time >= dwell - 1e-6
         and self.since_press >= PAUSED_PROMPT_HANDS_OFF_S - 1e-6 and not self.episode_prompted
         and self.since_prompt >= PAUSED_PROMPT_MIN_GAP_S):
