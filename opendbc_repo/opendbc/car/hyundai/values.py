@@ -605,6 +605,10 @@ class CarControllerParams:
   ROAD_STOP_NO_PARKING        = True
   ENGAGE_TAPER_FRAMES         = 150                     # 1.5 s
   ENGAGE_TAPER_RATE_DPS       = [4.0, 30.0]
+  # Phase 77: after the driver's own hand held the request on the wheel (grip anchor / angle-passive) the taper starts
+  # at 10 deg/s - the wheel is already moving with the driver, and the gain ramp limits the authority anyway
+  # (a7: 2.3 deg median gap at release). Kill: ENGAGE_TAPER_DRIVER_START_DPS = 4.0.
+  ENGAGE_TAPER_DRIVER_START_DPS = 10.0
   # Phase 75 (report §103, audit of who commands the MDPS), car-controller side. All of it in the solo profile only;
   # the legacy profile is unchanged.
   # 75a  TX GOVERNOR = THE PANDA'S LIMIT, ONE UNIT INSIDE: the governor allowed int(delta(v) * 10) - 1 CAN units per

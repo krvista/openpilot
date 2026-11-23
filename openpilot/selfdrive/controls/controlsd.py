@@ -400,8 +400,8 @@ LANE_CENTER_T_S = 2.0
 LANE_CENTER_L_M = (12.0, 80.0)
 LANE_CENTER_ACC = 0.4
 LANE_CENTER_TAU_S = 0.3
-LANE_CENTER_KI = 0.03e-3
-LANE_CENTER_I_CAP = 0.15e-3
+LANE_CENTER_KI = 0.06e-3       # Phase 77 (was 0.03e-3)
+LANE_CENTER_I_CAP = 0.30e-3    # Phase 77 (was 0.15e-3)
 LANE_CENTER_I_MAX_K = 1.0e-3
 LANE_CENTER_I_BLEED_S = 20.0
 LANE_CENTER_PROB = [0.5, 0.8]
@@ -409,6 +409,16 @@ LANE_CENTER_SPEED_MS = [30.0 / 3.6, 45.0 / 3.6]
 LANE_CENTER_WIDTH_M = (2.5, 4.6)
 LANE_CENTER_WIDTH_RATIO = 0.25
 LANE_CENTER_BIAS_M = -0.034
+# Phase 77 (route a7, report 107): the first drive with the term sat +5 cm right of the target on straights and still
+# cut curves 15 cm inside. On straights the term was pushing -0.12e-3 on average (road crown + the model's own
+# preference) with its integral at the 0.15e-3 cap and 25 s slow -> KI and the cap doubled. In curves the integral
+# is frozen and the proportional part only sees the plan 2 s ahead, which the model keeps inside -> a second
+# proportional part on the car's own offset from the target, by speed (none at 45 km/h, where the plan part is already
+# as stiff as the model: the loop simulation overshoots there). Simulation at 60 / 80 / 110 km/h: curve cut
+# 15.5 / 22.4 / 27.5 -> 10.4 / 11.7 / 13.9 cm, straight error after 20 s 8.5-10.7 -> 4.4-5.1 cm, step overshoot
+# <= 22 %. Kill: LANE_CENTER_KE = [0.0, 0.0, 0.0] (and the two values above back to 0.03e-3 / 0.15e-3).
+LANE_CENTER_KE_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6, 80.0 / 3.6]
+LANE_CENTER_KE = [0.0, 0.5e-3, 0.8e-3]      # 1/m per m of offset
 
 # Phase 75 (report §103), controls side:
 # 75j  While the model action is non-finite the held command (MODEL_NONFINITE_*) already contains the lane-centre
@@ -569,6 +579,7 @@ class Controls(ControlsExt):
     self._steer_legacy = self._steer_profile.legacy
     self._lc_p = 0.0   # Phase 73c lane-centre term: low-passed proportional part
     self._lc_i = 0.0   #                             integral part
+    self._lc_e = 0.0   # Phase 77: low-passed proportional part on the car's own offset
     self._lat_speed_ok = False   # Phase 75n: above the minimum steer speed on the last frame
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.CP_SP)
@@ -678,7 +689,8 @@ class Controls(ControlsExt):
     """Phase 73c: curvature added on the direct path to bring the plan (and the car) to the lane centre."""
     v = max(float(CS.vEgo), 1.0)
     p = getattr(self, "_lc_p", 0.0); integ = getattr(self, "_lc_i", 0.0)
-    w = 0.0; raw = 0.0; e0 = 0.0
+    w = 0.0; raw = 0.0; e0 = 0.0; raw_e = 0.0
+    pe = getattr(self, "_lc_e", 0.0)
     if usable_ctx and LANE_CENTER_WEIGHT > 0.0 and math.isfinite(v):
       dist = float(_clip(v * LANE_CENTER_T_S, LANE_CENTER_L_M[0], LANE_CENTER_L_M[1]))
       pv = mf.lane_preview(dist)
@@ -691,16 +703,19 @@ class Controls(ControlsExt):
           cap = LANE_CENTER_ACC / v ** 2
           raw = float(_clip(LANE_CENTER_WEIGHT * w * 2.0 * ((cd_ + LANE_CENTER_BIAS_M) - pd) / dist ** 2, -cap, cap))
           e0 = c0 + LANE_CENTER_BIAS_M
+          ke = float(_interp(v, LANE_CENTER_KE_SPEED_MS, LANE_CENTER_KE))     # Phase 77: the car's own offset
+          raw_e = float(_clip(ke * w * e0, -cap - raw, cap - raw)) if ke > 0.0 else 0.0   # both parts share the cap
     p += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw - p)
+    pe += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_e - pe)
     if w > 0.0:
       if abs(k_action) < LANE_CENTER_I_MAX_K and LANE_CENTER_KI > 0.0:
         integ = float(_clip(integ + LANE_CENTER_KI * w * e0 * DT_CTRL, -LANE_CENTER_I_CAP, LANE_CENTER_I_CAP))
     else:
       integ *= max(1.0 - DT_CTRL / LANE_CENTER_I_BLEED_S, 0.0)
-    if not (math.isfinite(p) and math.isfinite(integ)):
-      p = integ = 0.0
-    self._lc_p, self._lc_i = p, integ
-    return p + integ
+    if not (math.isfinite(p) and math.isfinite(integ) and math.isfinite(pe)):
+      p = integ = pe = 0.0
+    self._lc_p, self._lc_i, self._lc_e = p, integ, pe
+    return p + integ + pe
 
   def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
     """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
@@ -984,6 +999,7 @@ class Controls(ControlsExt):
     else:
       self._lc_p = 0.0
       self._lc_i = 0.0
+      self._lc_e = 0.0
 
     # Phase 7c geometry entry assist (constants above).
     if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None and not steer_direct:   # (lane-line read failed -> skip, as before; Phase 72: not on the direct path)

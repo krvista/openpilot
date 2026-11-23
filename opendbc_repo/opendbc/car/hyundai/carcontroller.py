@@ -652,6 +652,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.stall_kick_deg = 0.0     # offset applied this frame (for logging/tests)
     # Phase 35b: frames since apply was last pinned to the wheel
     self.frames_since_apply_anchor = 10**6
+    self.taper_driver = False        # Phase 77: the last anchor was the driver's hand
     # Phase 36: asymmetric EMA (rise 0.15 s / fall 0.5 s) of |commanded angle|
     # driving the curve ceiling ramp
     self.curve_meas_lp = 0.0
@@ -1792,13 +1793,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.tx_angle_last = meas_angle_for_panda
-        self.frames_since_apply_anchor = 0
+        self.frames_since_apply_anchor = 0; self.taper_driver = False
       self.first_ctrl_frame = False
       if heavy_grip_anchor:
         self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
-        self.frames_since_apply_anchor = 0
+        self.frames_since_apply_anchor = 0; self.taper_driver = True
       elif (self.reanchor_arm >= CarControllerParams.REANCHOR_ARM_FRAMES
             and self.anchor_recent_frames > 0
             and self.reanchor_ready
@@ -1824,7 +1825,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
-        self.frames_since_apply_anchor = 0
+        self.frames_since_apply_anchor = 0; self.taper_driver = False
         self.reanchor_ready = False
         self.curve_trim = 0.0
         self.trim_resid_lp = 0.0
@@ -1982,7 +1983,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle = _bound
       elif (self.gw_band_prev and self.gw_bound_prev and solo and CC.latActive
             and CarControllerParams.GW_FOLLOW_EXIT_TAPER):
-        self.frames_since_apply_anchor = 0
+        self.frames_since_apply_anchor = 0; self.taper_driver = False
       self.gw_band_prev = _band_on
       self.gw_bound_prev = self.gw_follow
 
@@ -2042,8 +2043,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # Phase 73b: engage taper - right after the request was anchored to the wheel (a passive state just ended) its
         # rate is capped, so the MDPS - which now follows at once - does not jump to the command
         if solo and self.frames_since_apply_anchor < CarControllerParams.ENGAGE_TAPER_FRAMES:
-          _er = float(_interp(self.frames_since_apply_anchor, [0, CarControllerParams.ENGAGE_TAPER_FRAMES],
-                              CarControllerParams.ENGAGE_TAPER_RATE_DPS)) * DT_CTRL
+          _tr = list(CarControllerParams.ENGAGE_TAPER_RATE_DPS)
+          if self.taper_driver:      # Phase 77
+            _tr[0] = max(_tr[0], min(CarControllerParams.ENGAGE_TAPER_DRIVER_START_DPS, _tr[1]))
+          _er = float(_interp(self.frames_since_apply_anchor, [0, CarControllerParams.ENGAGE_TAPER_FRAMES], _tr)) * DT_CTRL
           apply_angle = float(_clip(apply_angle, self.apply_angle_last - _er, self.apply_angle_last + _er))
         self.apply_angle_last = apply_angle
         self.alert_vm_limit_frames = max(self.alert_vm_limit_frames - 2, 0)
@@ -2052,7 +2055,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
-        self.frames_since_apply_anchor = 0
+        self.frames_since_apply_anchor = 0; self.taper_driver = False
 
     # MADS-driven LKA_ICON for the LKAS_ALT message:
     # MADS enabled → green icon (2), ACC main available → off-but-visible (0),
@@ -2246,6 +2249,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                              self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
       self.frames_since_apply_anchor = 0
+      # Phase 77: held by the driver's hand only (not parking / low-speed gate / grant wait) -> the faster taper start
+      self.taper_driver = bool((self.angle_passive_active or heavy_grip_anchor) and not self.parking_mode_active
+                               and not in_passthrough and not self.lat_ungranted)
     if ccnc_lka_alt:
       # Phase 6d adds angle_passive_active to the false-reason chain
       # alongside vm_reject_persistent (Phase 5e). STEER_REQ=0 in this

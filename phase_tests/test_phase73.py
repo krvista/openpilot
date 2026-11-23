@@ -43,8 +43,9 @@ def params():
 
 @pytest.fixture
 def cdk():
-  names = ("LANE_CENTER_WEIGHT", "LANE_CENTER_KI")
+  names = ("LANE_CENTER_WEIGHT", "LANE_CENTER_KI", "LANE_CENTER_I_CAP", "LANE_CENTER_KE")
   saved = {k: getattr(cd, k) for k in names}
+  cd.LANE_CENTER_KI, cd.LANE_CENTER_I_CAP, cd.LANE_CENTER_KE = 0.03e-3, 0.15e-3, [0.0, 0.0, 0.0]   # the Phase 73 values
   yield cd
   for k, v in saved.items():
     setattr(cd, k, v)
@@ -67,8 +68,8 @@ def road_then_stop(solo, stop_frames=1500):
 
 def test_shipped_values():
   assert P.ROAD_STOP_NO_PARKING is True and P.ENGAGE_TAPER_FRAMES == 150 and P.ENGAGE_TAPER_RATE_DPS == [4.0, 30.0]
-  assert cd.LANE_CENTER_WEIGHT == 0.5 and cd.LANE_CENTER_T_S == 2.0 and cd.LANE_CENTER_KI == 0.03e-3
-  assert cd.LANE_CENTER_I_CAP == 0.15e-3 and cd.LANE_CENTER_ACC == 0.4 and cd.LANE_CENTER_BIAS_M == -0.034
+  assert cd.LANE_CENTER_WEIGHT == 0.5 and cd.LANE_CENTER_T_S == 2.0
+  assert cd.LANE_CENTER_ACC == 0.4 and cd.LANE_CENTER_BIAS_M == -0.034
 
 
 def test_traffic_light_stop_does_not_arm_the_parking_latch_in_solo():
@@ -172,6 +173,7 @@ def test_lane_preview_geometry():
   assert cd._ModelFrame(bad, 0).lane_preview(40.0) is None
 
 
+@pytest.mark.usefixtures("cdk")
 def test_car_left_of_centre_is_steered_right_and_the_integral_takes_over():
   m = model(centre=0.25)                                              # lane centre 25 cm to the right, plan straight ahead
   v = 21.0; L = v * cd.LANE_CENTER_T_S

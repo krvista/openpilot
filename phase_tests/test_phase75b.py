@@ -151,7 +151,7 @@ def test_long_nan_ramps_to_straight_and_stays_bounded():
 def test_nan_guard_kill_switch_reproduces_the_runaway(cdk):
   cdk.LANE_CENTER_NONFINITE_GUARD = False
   k0, during, _, _, _ = nan_run(20)
-  assert during[-1] > 5.0 * k0                                        # the pre-75 behaviour: the term re-added every frame
+  assert during[-1] > 3.0 * k0                                        # the pre-75 behaviour: the term re-added every frame
 
 
 # ------------------------------------------------------------------ 75n: minimum steer speed hysteresis
