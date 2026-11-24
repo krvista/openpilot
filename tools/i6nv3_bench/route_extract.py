@@ -33,6 +33,10 @@ Saved (carState-rate grid, T relative to the first log message):
   granted, 10 wheel outrun; 0 = not passive / pre-75); cb_esa / cb_esa_gain = FCA_ESA_ActvSta / FCA_ESA_TqBstGainVal of
   ADAS_CMD_35_10ms (emergency steering assist state and torque boost gain); version = 6 (absent before v6).
   The camera's own LKAS_ALT active / gain / byte 13 are cam_active / cam_gain / cam_b13 (since v3).
+  v7 (11-24): fcam_l / fcam_r = the factory camera's own lane-line positions (FR_CMR_03_50ms 0x1B5 Info_LftLnPosVal /
+  Info_RtLnPosVal, m from the car; bus 1 preferred) with fcam_ql / fcam_qr (quality 0-7; -1 = no message) - the car's real
+  lane position is -(fcam_l + fcam_r) / 2 (+ = right of centre, as E163); lp_sr / lp_ao / lp_aoa = liveParameters steerRatio /
+  angleOffsetDeg / angleOffsetAverageDeg; cal_roll / cal_pitch / cal_yaw = liveCalibration rpyCalib (rad).
   Fields a log does not have keep their defaults. extract(msgs) / parse_* are importable (phase_tests/test_phase75_extract.py).
 Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz> [log dir]
 """
@@ -43,7 +47,7 @@ import numpy as np
 
 from openpilot.tools.lib.logreader import LogReader
 
-VERSION = 6
+VERSION = 7
 LOG_DIR = "/home/user/drivelog/drivelog"
 NO_CAR_SAFETY = ("silent", "noOutput")   # pandas in these modes say nothing about the car (as the MADS mismatch check)
 
@@ -58,6 +62,16 @@ def parse_mdps(dd):
   a16 = dd[12] | (dd[13] << 8)
   return (dd[18] & 0x3, (dd[18] >> 5) & 1, ((dd[8] | (dd[9] << 8)) & 0xFFF) * 0.1 - 204.8,
           (a16 - 0x10000 if a16 & 0x8000 else a16) * 0.1, ((dd[10] | (dd[11] << 8)) & 0x1FFF) - 4095)
+
+
+def _sbits(d, start, size):
+  v = (int.from_bytes(d, "little") >> start) & ((1 << size) - 1)
+  return v - (1 << size) if v & (1 << (size - 1)) else v
+
+
+def parse_fcam(dd):
+  """FR_CMR_03_50ms (0x1B5): left / right lane-line position (m), left / right quality."""
+  return _sbits(dd, 29, 14) * 0.0039625, _sbits(dd, 101, 14) * 0.0039625, dd[3] & 7, dd[12] & 7
 
 
 def parse_cb(dd):
@@ -87,6 +101,8 @@ class Extractor:
     (self.cs, self.cc, self.wr, self.ct, self.md, self.lp, self.gp, self.mp, self.rj, self.sd, self.sp, self.cam, self.cbm,
      self.e0m, self.lnc, self.lnt) = ([] for _ in range(16))
     self.mads, self.pnd, self.btn, self.ld, self.ccsp = [], [], [], [], []   # v6
+    self.fcam, self.lpar, self.cal = [], [], []   # v7
+    self.fcam_bus1 = False
     self.passive = False
     self.events = []; self.prev_ev = set()
     self.t0 = None; self.commit = ""
@@ -140,6 +156,13 @@ class Extractor:
         self.gp.append((t, g.latitude, g.longitude))
     elif w == "initData" and not self.commit:
       self.commit = m.initData.gitCommit[:9]
+    elif w in ("liveParameters", "vehicleParameters"):       # the schema's name differs by version
+      lp = getattr(m, w)
+      self.lpar.append((t, lp.steerRatio, lp.angleOffsetDeg, lp.angleOffsetAverageDeg))
+    elif w in ("liveCalibration", "extrinsicsCalibration"):
+      r = list(getattr(m, w).rpyCalib)
+      if len(r) == 3:
+        self.cal.append((t, *r))
     elif w == "carParams":
       self.passive = bool(m.carParams.passive)
     elif w == "can":
@@ -156,6 +179,10 @@ class Extractor:
           self.e0m.append((t, (bits >> 47) & 3, (bits >> 31) & 1))
         elif c.address == 272 and c.src == 2 and len(c.dat) >= 14:
           self.cam.append((t, *parse_lkas_alt(bytes(c.dat))))
+        elif c.address == 437 and c.src in (0, 1, 2) and len(c.dat) >= 20:
+          if c.src == 1 or not self.fcam_bus1:
+            self.fcam_bus1 = self.fcam_bus1 or c.src == 1
+            self.fcam.append((t, *parse_fcam(bytes(c.dat))))
         elif c.address == 866 and c.src == 2 and len(c.dat) >= 8:
           self.lnc.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
       if nrej:
@@ -219,7 +246,12 @@ class Extractor:
       buttons=np.array(self.btn, float).reshape(-1, 3),
       lead=res(self.ld, 1, kind="since") > 0.5, lead_d=res(self.ld, 2, kind="since"), lead_v=res(self.ld, 3, kind="since"),
       lat_granted=res(self.ccsp, 1, 1.0, kind="since") > 0.5, lat_reason=res(sp, 4, kind="since").astype(np.int64),
-      cb_esa=res(cbm, 5, kind="since").astype(np.int64), cb_esa_gain=res(cbm, 6, kind="since"))
+      cb_esa=res(cbm, 5, kind="since").astype(np.int64), cb_esa_gain=res(cbm, 6, kind="since"),
+      # v7
+      fcam_l=res(self.fcam, 1, kind="since"), fcam_r=res(self.fcam, 2, kind="since"),
+      fcam_ql=res(self.fcam, 3, -1.0, kind="since").astype(np.int64), fcam_qr=res(self.fcam, 4, -1.0, kind="since").astype(np.int64),
+      lp_sr=res(self.lpar, 1, kind="since"), lp_ao=res(self.lpar, 2, kind="since"), lp_aoa=res(self.lpar, 3, kind="since"),
+      cal_roll=res(self.cal, 1, kind="since"), cal_pitch=res(self.cal, 2, kind="since"), cal_yaw=res(self.cal, 3, kind="since"))
 
 
 def extract(msgs):

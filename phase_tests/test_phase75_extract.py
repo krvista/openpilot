@@ -103,7 +103,7 @@ def route(tmp_path_factory):
 
 
 def test_version_and_grid(route):
-  assert int(route["version"]) == rx.VERSION == 6
+  assert int(route["version"]) == rx.VERSION == 7
   assert len(route["T"]) == N and str(route["commit"]) == "012345678"
   n = len(route["T"])
   for k in route.files:
@@ -226,3 +226,11 @@ def test_truncated_last_segment_does_not_lose_the_route(tmp_path):
   out = str(tmp_path / "o.npz")
   rx.main("000000fe", out, str(tmp_path))
   assert len(np.load(out, allow_pickle=True)["T"]) >= N
+
+
+def test_v7_factory_camera_lane_lines():
+  d = bytearray(24)
+  raw_l, raw_r = (-454) & 0x3FFF, 430                                  # -1.799 m / +1.704 m
+  v = int.from_bytes(d, "little") | (raw_l << 29) | (raw_r << 101) | (3 << 24) | (2 << 96)
+  left, right, ql, qr = rx.parse_fcam(v.to_bytes(24, "little"))
+  assert left == pytest.approx(-454 * 0.0039625) and right == pytest.approx(430 * 0.0039625) and (ql, qr) == (3, 2)
