@@ -679,7 +679,11 @@ class CarControllerParams:
   PARKING_V2_EXIT_MS           = 30.0 / 3.6
   PARKING_V2_EXIT_FRAMES       = 300
   PARKING_V2_LANE_PROB         = 0.5
-  PARKING_V2_CRUISE_FRAMES     = 100      # 0 = cruise engagement does not release
+  # Phase 81a (routes a7-a9, report 112): 0 - cruise engagement no longer releases. One press turns main and cruise on
+  # together on this car and on 3 of 3 departures it came inside the car park: on a9 the release was followed by 26 s
+  # of openpilot steering on unmarked ground. Release is by 30 km/h for 3 s or lane lines. Phase 76 value: 100.
+  PARKING_V2_CRUISE_FRAMES     = 0
+  PARKING_V2_GPS_CLEAR_ON_ROAD = True     # Phase 81c
   FIRST_FRAME_ANCHOR             = True
   ACI_HOLD_ZERO_UNRELAYED        = True
   ACI_HOLD_ZERO_REJECT_FRAMES    = 3                    # consecutive rejected frames before the gain is zeroed

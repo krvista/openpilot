@@ -1736,6 +1736,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     park_exit_sustain = CarControllerParams.PARKING_V2_EXIT_FRAMES if park_v2 else PARKING_MODE_EXIT_SUSTAIN_FRAMES
     if (v_ego_safe >= CarControllerParams.PARKING_V2_EXIT_MS) if park_v2 else (v_ego_safe > PARKING_MODE_EXIT_MS):
       self.parking_exit_frames = min(self.parking_exit_frames + 1, park_exit_sustain)
+      # Phase 81c: on the road for 3 s without a latch - 'no fix yet' is no parking sign any more (a start above 30 km/h
+      # kept it live until the first fix, ~190 s offline, and the first 3 s below 30 km/h would then latch). Kill: False.
+      if (park_v2 and CarControllerParams.PARKING_V2_GPS_CLEAR_ON_ROAD and self.parking_exit_frames >= park_exit_sustain
+          and not self.parking_mode_active):
+        self.parking_gps_sig = False
     else:
       self.parking_exit_frames = 0
     # Phase 76: the driver's cruise engagement on a straight wheel releases the latch

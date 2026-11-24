@@ -31,7 +31,7 @@ def drive(s, n, **kw):
 def test_shipped_values():
   assert P.PARKING_V2 and P.PARKING_V2_WHEEL_DEG == 300.0 and P.PARKING_V2_GPS_SIGNATURE
   assert abs(P.PARKING_V2_EXIT_MS - 30 * KPH) < 1e-9 and P.PARKING_V2_EXIT_FRAMES == 300
-  assert P.PARKING_V2_LANE_PROB == 0.5 and P.PARKING_V2_CRUISE_FRAMES == 100
+  assert P.PARKING_V2_LANE_PROB == 0.5 and P.PARKING_V2_CRUISE_FRAMES == 0   # Phase 81a (was 100)
 
 
 def test_boot_door_and_creep_no_longer_arm():
@@ -99,6 +99,7 @@ def test_exit_on_lane_lines_at_half_confidence():
 
 
 def test_cruise_engagement_releases_after_one_second():
+  P.PARKING_V2_CRUISE_FRAMES = 100                                    # the Phase 76 rule (off since Phase 81a)
   s = latched()
   assert drive(s, 90, v=18 * KPH, cruise_enabled=True)
   assert not drive(s, 20, v=18 * KPH, cruise_enabled=True)

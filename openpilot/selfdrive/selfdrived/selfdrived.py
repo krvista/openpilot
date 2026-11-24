@@ -51,6 +51,9 @@ INIT_AFTER_MODEL_S = 3.0
 # initialization by 6 s. With initialization at 11-14 s it raised controlsMismatch on every boot (already once
 # today: route 37, 11.7 s, initialized 11.1 s). The grace now also runs from initialization.
 SAFETY_MODE_GRACE_AFTER_INIT_S = 4.0
+# Phase 81b (report 112): the panda's 1 Hz RX check can land on the safety-mode switch at boot (a9 11.64-12.56 s) - same
+# grace as the mode mismatch. Kill: False.
+RX_CHECK_BOOT_GRACE = True
 
 
 def unused_lateral_services(CP) -> list[str]:
@@ -452,7 +455,8 @@ class SelfdriveD(CruiseHelper):
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
 
       # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
-      if (safety_mismatch and self.safety_mode_grace_over()) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
+      rx_invalid = pandaState.safetyRxChecksInvalid and (self.safety_mode_grace_over() or not RX_CHECK_BOOT_GRACE)
+      if (safety_mismatch and self.safety_mode_grace_over()) or rx_invalid or self.mismatch_counter >= 200:
         self.events.add(EventName.controlsMismatch)
 
       if log.PandaState.FaultType.relayMalfunction in pandaState.faults:

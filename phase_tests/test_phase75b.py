@@ -877,6 +877,14 @@ def test_one_frame_prompt_is_shown_for_three_seconds_and_sounds_once():
 
 def test_real_car_controller_parking_latch_on_the_road_with_cruise_prompts():
   """the logged case: left the car park under the parking latch, cruise engaged at 25 km/h, nobody steers"""
+  old_cruise = P.PARKING_V2_CRUISE_FRAMES; P.PARKING_V2_CRUISE_FRAMES = 100   # the Phase 76 release (off since Phase 81a)
+  try:
+    _latch_on_the_road_with_cruise()
+  finally:
+    P.PARKING_V2_CRUISE_FRAMES = old_cruise
+
+
+def _latch_on_the_road_with_cruise():
   sim = Sim(solo=True); L = li.LateralInfo(); ev = []
 
   def go(n, v_kph, cruise, wheel=0.0, cmd=None):
