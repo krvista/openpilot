@@ -40,6 +40,12 @@ TURN_DESIRES = {
   TurnDirection.turnRight: log.Desire.turnRight,
 }
 
+# Phase 80d (route a8 1838.7): a running lane change keeps its desire when the speed falls below the lane-turn speed.
+# Without this the turn desire replaced laneChangeRight for 1 s and the lane-change desire then came back as a second
+# rising edge - the model got a turn pulse and a second lane-change pulse inside one manoeuvre. Kill: False.
+LANE_TURN_NOT_IN_LANE_CHANGE = True
+
+
 class DesireHelper:
   def __init__(self):
     self.lane_change_state = LaneChangeState.off
@@ -120,7 +126,8 @@ class DesireHelper:
 
     self.prev_one_blinker = one_blinker and lateral_active
 
-    if self.lane_turn_direction != TurnDirection.none:
+    if self.lane_turn_direction != TurnDirection.none and not (LANE_TURN_NOT_IN_LANE_CHANGE and
+                                                               self.lane_change_state == LaneChangeState.laneChangeStarting):
       self.desire = TURN_DESIRES[self.lane_turn_direction]
     else:
       self.desire = log.Desire.none

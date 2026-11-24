@@ -288,6 +288,18 @@ class CarControllerParams:
   # own lane change (CC blinker = model direction) points at that side, so
   # the driver can still push op aside (37b-2 review). Kill: False.
   BSM_BLINKER_NO_CONCESSION  = True
+  # Phase 80c (routes a8 / a9, report 111): blinker concession ends once the driver has released during op's own lane
+  # change. Released = no debounced press and driver-domain torque below LC_RELEASE_NM for LC_RELEASE_FRAMES. The level
+  # is above the 150-300 Nm the column still reads after the hands come off (replay of the 12 lane changes of a8 / a9:
+  # hands-off authority 0.00-0.35 -> 0.7-1.0 in 6, unchanged in the rest; at 100 Nm only 3 improved); from there the
+  # normal thresholds (100 / 180 / 350 Nm) yield to a hand exactly as without a blinker. Kill: LC_RELEASE_FRAMES = 0.
+  LC_RELEASE_FRAMES = 30
+  LC_RELEASE_NM = 260.0
+  # Phase 80a: BLINKERS_ALT (0x400) byte 4 bits 0-2 are one state, not two lamp bits: 1 / 2 / 3 = left (first 4 s /
+  # after 4 s / standstill), 4 / 5 / 6 = right (same), checked against the body controller's lamp bits (0x3E3) on every
+  # blinker of a8 / a9. Read as bits, a right blinker became left + right after 4.0 s and a left blinker vanished after
+  # 4.5 s. The state is steady (no flashing), so no lamp hold either: off 0.5 s sooner. Kill: False (bits + 50-frame hold).
+  BLINKERS_ALT_STATE = True
   # Phase 13a: low-speed (<20 km/h) scenario gate + offset-proof grip signal.
   # Routes 0x2a-0x2d (first build with Phase 11): below 20 km/h the passthrough
   # latch keyed on `hands_off` (override_factor <= 0.5), whose low-V full-override

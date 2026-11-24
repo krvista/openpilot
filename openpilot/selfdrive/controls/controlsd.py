@@ -537,6 +537,8 @@ LANE_DROPOUT_EXIT_S = 0.5         # continuous frames above LANE_HI to release
 LANE_DROPOUT_MAX_S = 3.0          # hand back to the 6g blend after this long
 LANE_DROPOUT_REARM_S = 1.0        # lines back above LANE_HI this long before a new latch may start
 LANE_DROPOUT_LC_HOLDOFF_S = 1.0   # no latch this long after a lane change ends
+CONF_BLEND_LC_EXEMPT = True       # Phase 80b: no low-confidence blend during op's own lane change. Kill: False
+CONF_BLEND_LC_AFTER_S = 1.0       # ... and this long after it
 # Phase 49 (i6nv3 routes 3d-42, 10-07..10-12, CD210, report §39/§40): the latch fired 39 times / 64 s in 1.9 h of
 # lateral control ("Lane Lines Lost" repeating). 12 had the OTHER inner line clear at 0.71-0.98 — every one the
 # curb/wall-side right line weak in the rightmost lane (Namsan tunnel 1: right 0.14-0.19, left 0.97, four alerts in one
@@ -1159,10 +1161,18 @@ class Controls(ControlsExt):
             self.lane_dropout = False                 # max duration: back to the 6g blend, no re-latch until the lines return
             self.lane_dropout_armed = False; self.lane_dropout_rearm_frames = 0
             self.lane_dropout_k_hist.clear()
+      # Phase 80b: op's own lane change (model laneChangeStarting) and CONF_BLEND_LC_AFTER_S after it are not blended:
+      # the lane lines vanish by design there, and the blend held the turn-in while the model was already unwinding
+      # (a9 503.4-504.1: +18e-4 held, model +11.6 -> -12.8e-4). Not on a bare blinker / preLaneChange.
+      if CONF_BLEND_LC_EXEMPT and mf.lane_change_state == LaneChangeState.laneChangeStarting:
+        self._conf_blend_lc_frames = int(CONF_BLEND_LC_AFTER_S / DT_CTRL)
+      else:
+        self._conf_blend_lc_frames = max(getattr(self, "_conf_blend_lc_frames", 0) - 1, 0)
+      conf_blend_lc = CONF_BLEND_LC_EXEMPT and self._conf_blend_lc_frames > 0
       if self.lane_dropout:
         new_desired_curvature = self.lane_dropout_hold_k
         self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
-      elif confidence < 1.0 and not (TURN_EXIT_SOFT_EXEMPT and turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)):
+      elif confidence < 1.0 and not conf_blend_lc and not (TURN_EXIT_SOFT_EXEMPT and turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)):
         # (Phase 56d: unwinding out of a turn is not frozen by the low-confidence blend — it only ever moves toward straight)
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
         steer_flags |= STEER_FLAG_CONF_BLEND

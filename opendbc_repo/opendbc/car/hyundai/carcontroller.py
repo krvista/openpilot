@@ -594,6 +594,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.blind_right_hold = 0
     self.blind_caution_on = False
     self.blinker_concession = False
+    self.lc_release_frames = 0     # Phase 80c: frames released during op's own lane change
+    self.lc_released = False
     self.tx_angle_last = 0.0   # Phase 38: last TRANSMITTED angle (panda desired_angle_last mirror)
     self.tx_sat_frames = 0     # Phase 38: consecutive frames the governor clipped by > RESYNC_DEG
     self.wheel_outrun_passive = False   # Phase 38-3: wheel moving faster than the panda allows an active command to follow
@@ -1384,6 +1386,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                          or (bool(CC.rightBlinker) and self.blind_right_hold > 0))
     blinker_concession = blinker_on and not (CarControllerParams.BSM_BLINKER_NO_CONCESSION
                                              and blinker_toward_bsm and not op_lc_toward_bsm)
+    # Phase 80c: during op's OWN lane change (model laneChangeStarting) the concession is for the driver's push, not for
+    # the rest of the manoeuvre: once the driver has let go (no press and driver torque below LC_RELEASE_NM for
+    # LC_RELEASE_FRAMES) the normal override thresholds and gain ceiling apply again, so op can finish / settle in the
+    # new lane instead of following the wheel at 0.45 (a9 377.3-379.1: transmitted angle = wheel angle for 1.75 s after
+    # the release). A press or torque above the level restores the concession at once. Not in preLaneChange (there op
+    # still steers for the old lane), not toward a BSM-occupied side (37b-2 keeps the concession there).
+    lc_released_raw = (CarControllerParams.LC_RELEASE_FRAMES > 0 and blinker_concession and op_lc_active and not op_lc_toward_bsm
+                       and not bool(CS.out.steeringPressed) and driver_tq < CarControllerParams.LC_RELEASE_NM)
+    self.lc_release_frames = min(self.lc_release_frames + 1, 10**6) if lc_released_raw else 0
+    self.lc_released = lc_released_raw and self.lc_release_frames >= CarControllerParams.LC_RELEASE_FRAMES
+    if self.lc_released:
+      blinker_concession = False
     self.blinker_concession = blinker_concession
     # Phase 37a rain mode: front-wiper switch (CCNC_WIPER) -> debounced flag
     # -> ramped weight. Unknown/stale input counts as OFF (conservative).
