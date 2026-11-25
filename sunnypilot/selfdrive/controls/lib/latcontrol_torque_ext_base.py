@@ -104,8 +104,9 @@ class LatControlTorqueExtBase:
   def update_lateral_lag(self, lag):
     self.desired_lat_jerk_time = max(0.01, lag) + LATERAL_LAG_MOD
 
-  def update_friction_input(self, val_1, val_2):
-    _error = val_1 - val_2
+  def update_friction_input(self, val_1, val_2, error_blend=1.0):
+    # error_blend: weight of the tracking-error part (LatControl.error_ff_blend, yields during driver overrides)
+    _error = (val_1 - val_2) * error_blend
     _value = self.lat_accel_friction_factor * _error + self.lat_jerk_friction_factor * self.lookahead_lateral_jerk
 
     return _value

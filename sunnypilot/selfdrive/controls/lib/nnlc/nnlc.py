@@ -152,7 +152,9 @@ class NeuralNetworkLateralControl(LatControlTorqueExtBase):
 
     # compute feedforward (same as nn setpoint output)
     friction_input = self.update_friction_input(self._setpoint, self._measurement)
-    nn_input = [CS.vEgo, self._desired_lateral_accel, friction_input, roll] \
+    # the NN's error input is a correction against the error like P: it yields with it during a driver override
+    ff_friction_input = self.update_friction_input(self._setpoint, self._measurement, self.lac_torque.error_ff_blend())
+    nn_input = [CS.vEgo, self._desired_lateral_accel, ff_friction_input, roll] \
                + past_lateral_accels_desired + future_planned_lateral_accels \
                + past_rolls + future_rolls
     self._ff = self.model.evaluate(nn_input)

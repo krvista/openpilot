@@ -83,7 +83,7 @@ class TestLatControl:
     assert run(controller, VM, False, 10)[-1] == 1.
     b = run(controller, VM, True, 40)
     assert abs(b[14] - 0.5) < 0.02 and b[-1] == 0.
-    assert all(x >= y for x, y in zip(b, b[1:]))
+    assert all(x >= y for x, y in zip(b, b[1:], strict=False))
     b = run(controller, VM, False, 50)
     assert abs(b[19] - 0.5) < 0.02 and b[-1] == 1.
     # a 0.1 s blip only dips the weight and recovers without a step to 0
@@ -94,6 +94,76 @@ class TestLatControl:
     assert set(run(controller, VM, True, 40)) == {1.}
     b = run(controller, VM, False, 41)
     assert b[0] == 0. and b[-1] == 1.
+
+  @parameterized.expand([(LatControlTorque,), (LatControlTorqueV0,)])
+  def test_friction_ff_error_yields_while_pressed(self, controller_cls):
+    def make(car_name):
+      CarInterface = interfaces[car_name]
+      CP = CarInterface.get_non_essential_params(car_name)
+      CarInterface.configure_torque_tune(car_name, CP.lateralTuning)
+      CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+      CI = CarInterface(CP, CP_SP)
+      sunnypilot_interfaces.setup_interfaces(CI)
+      return controller_cls(CP.as_reader(), convert_to_capnp(CP_SP).as_reader(), CI, DT_CTRL), VehicleModel(CP)
+
+    params = log.LiveParametersData.new_message()
+    pose = Pose.from_live_pose(generate_livePose().livePose)
+
+    def ff_while_pressed(car_name, angle):
+      controller, VM = make(car_name)
+      for pressed, frames in ((False, 50), (True, 60)):
+        CS = car.CarState.new_message(vEgo=25, steeringPressed=pressed, steeringTorque=150 if pressed else 0,
+                                      steeringAngleDeg=angle if pressed else 0.)
+        for _ in range(frames):
+          _, _, lac_log = controller.update(True, CS, VM, params, False, 0., pose, False, 0.2)
+      return lac_log.f
+
+    # Chrysler: a driver holding the wheel off the request gets no friction push back from the error either
+    assert abs(ff_while_pressed(CHRYSLER.JEEP_GRAND_CHEROKEE_2019, 3.) - ff_while_pressed(CHRYSLER.JEEP_GRAND_CHEROKEE_2019, 0.)) < 1e-6
+    # other brands: unchanged, the friction term still answers the error
+    assert abs(ff_while_pressed(TOYOTA.TOYOTA_RAV4, 3.) - ff_while_pressed(TOYOTA.TOYOTA_RAV4, 0.)) > 1e-3
+
+  def test_nnlc_ff_error_yields_while_pressed(self):
+    import numpy as np
+    from cereal import messaging
+    from openpilot.common.params import Params
+    from openpilot.selfdrive.modeld.constants import ModelConstants
+
+    car_name = CHRYSLER.JEEP_GRAND_CHEROKEE_2019
+    v = 25.
+    T = np.array(ModelConstants.T_IDXS)
+    m = messaging.new_message('modelV2').modelV2
+    zeros = [0.] * len(T)
+    m.position = log.XYZTData.new_message(x=[float(x) for x in v * T], y=zeros, z=zeros)
+    m.orientation = log.XYZTData.new_message(x=zeros, y=zeros, z=zeros)
+    m.orientationRate = log.XYZTData.new_message(x=zeros, y=zeros, z=zeros)
+    m.velocity = log.XYZTData.new_message(x=[v] * len(T), y=zeros, z=zeros)
+    m.acceleration = log.XYZTData.new_message(x=zeros, y=zeros, z=zeros)
+    params = log.LiveParametersData.new_message()
+    pose = Pose.from_live_pose(generate_livePose().livePose)
+
+    def ff_while_pressed(angle):
+      p = Params()
+      p.put_bool("NeuralNetworkLateralControl", True)
+      CarInterface = interfaces[car_name]
+      CP = CarInterface.get_non_essential_params(car_name)
+      CP_SP = CarInterface.get_non_essential_params_sp(CP, car_name)
+      CI = CarInterface(CP, CP_SP)
+      sunnypilot_interfaces.setup_interfaces(CI, p)
+      controller = LatControlTorqueV0(CP.as_reader(), convert_to_capnp(CP_SP).as_reader(), CI, DT_CTRL)
+      VM = VehicleModel(CP)
+      for pressed, frames in ((False, 100), (True, 60)):
+        CS = car.CarState.new_message(vEgo=v, steeringPressed=pressed, steeringTorque=150 if pressed else 0,
+                                      steeringAngleDeg=angle if pressed else 0.)
+        for _ in range(frames):
+          controller.extension.update_model_v2(m)
+          controller.extension.update_lateral_lag(0.3)
+          _, _, lac_log = controller.update(True, CS, VM, params, False, 0., pose, False, 0.3)
+      assert controller.extension._nnlc_enabled and controller.release_blend == 0.
+      return lac_log.f
+
+    # WK2 with NNLC: the NN's error input yields with P, so holding the wheel 10 deg off does not change the push
+    assert abs(ff_while_pressed(-10.) - ff_while_pressed(0.)) < 0.01
 
   @parameterized.expand([(LatControlTorque,), (LatControlTorqueV0,)])
   def test_driver_torque_holds_integrator(self, controller_cls):

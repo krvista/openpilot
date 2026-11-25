@@ -20,7 +20,8 @@ from openpilot.common.swaglog import cloudlog
 # (gain = sum(applied * motor) / sum(applied^2), ~255 on the WK2 at every speed measured). A steer fault on a
 # trial, or a gain below MIN_GAIN (the EPS ignoring the request without a fault), sends that value back to the
 # confirmed one for the rest of the drive; after MAX_FAILS such failures the search stops there for good. A
-# fault on a confirmed value (not during a driver override) raises it one STEP and stops the search too.
+# fault on a confirmed value (not during a driver override, and only within STEP of it) raises it one STEP and stops
+# the search too. A fault on a trial while the driver is overriding is no verdict: the trial is off for the drive.
 # State lives in STATE_FILE (delete it to start over). Turn the whole thing off: echo 0 > /data/params/d/LowSpeedReengage
 # (read every 5 s; missing = on; off = hold to minSteerSpeed - 3.0, entry at minSteerSpeed).
 PARAM = "LowSpeedReengage"
@@ -40,10 +41,16 @@ ENTRY_EVIDENCE_FRAMES = 50   # per entry, within FAULT_WINDOW
 MIN_VISIT_FRAMES = 10     # frames below the confirmed hold floor for a dip to count as a use
 MIN_GAIN = 100.           # motor torque units per unit of applied torque; below = the EPS is not following
 EVIDENCE_MIN_TORQUE = 0.05   # |applied torque| for a frame to be usable evidence
-EVIDENCE_MAX_DRIVER = 40.    # |driver torque| (column units) for a frame to be usable evidence
+# |driver torque| (column units) for a frame to be usable evidence. Driver torque mostly opposes the command, so
+# hand torque pushes the gain estimate down, never up. WK2 drivelog G/H/I: at 40 only 38-49% of low entries got a
+# verdict and the hold descended ~1.8 km/h per moving hour; at 80, 70-79% and ~3.5 km/h/h, gain still 243-257.
+EVIDENCE_MAX_DRIVER = 80.
 FAULT_WINDOW = 3.0        # s after a low-speed entry in which a steer fault counts as the EPS refusing it
 HOLD_FAULT_WINDOW = 1.0   # s after lateral was last active (the wind-down) in which a fault still counts
-PRESSED_WINDOW = 2.0      # s after steeringPressed in which a fault on a confirmed value is the driver's
+PRESSED_WINDOW = 2.0      # s after steeringPressed in which a fault is the driver's, not the EPS refusing
+# s an entry may wait for its first applied torque: the carcontroller holds the LKAS bit (and torque) down for 2 s
+# after it fell, so a quick re-entry reaches the EPS later, and faster, than the latActive edge says.
+ENTRY_LOCKOUT_WAIT = 2.5
 # Torque is ramped in after a low-speed entry. Routes 7e-87 (77a1df4, 59 entries, no faults): the request reached
 # 0.39 of full scale (p90 0.76) within 0.5 s of the entry and the car moved 0.12 m in 2 s, usually with the driver
 # still holding the wheel from steering by hand (pressed within 2 s on 76%).
@@ -110,6 +117,8 @@ class LowSpeedReengage:
     self.entry_timer = 0.     # s since the last low-speed entry, while inside FAULT_WINDOW
     self.entry_speed = 0.
     self.entry_ev = Evidence()
+    self.entry_wait = 0.      # s the current entry has waited for its first applied torque
+    self.entry_torque_seen = False
     self.visit_frames = 0     # frames active below the confirmed hold floor in the current dip
     self.torque_scale = 1.    # multiplies the lateral torque request; ramps 0 -> 1 after a low-speed entry
     self.since_active = 1e3   # s since lateral was last active
@@ -247,19 +256,30 @@ class LowSpeedReengage:
     entry_fault = False
     if lat_active and not self.lat_active_prev and v_ego < self.min_steer_speed:
       self.entry_timer, self.entry_speed, self.entry_ev = DT_CTRL, v_ego, Evidence()
+      self.entry_wait, self.entry_torque_seen = 0., False
       self.torque_scale = 0.
     elif self.entry_timer > 0.:
       if fault_edge:
         entry_fault = True
         self.entry_timer = 0.
-        if searching:
-          if self.entry_speed < self.entry - EPS_:
-            self._entry_trial_failed("steer fault")
+        driver = self.since_pressed <= PRESSED_WINDOW
+        if searching and self.entry_speed < self.entry - EPS_:
+          if driver:
+            self.entry_trial_ok = False  # driver override: back to the confirmed entry for this drive, no verdict
           else:
-            self._entry_confirmed_failed()
+            self._entry_trial_failed("steer fault")
+        elif searching and self.entry_speed < self.entry + STEP and not driver:
+          # only a fault right at the confirmed entry says something about it: one at 55-63 km/h, where the LKAS
+          # bit usually never fell, or one the driver caused, must not ratchet the entry up for good
+          self._entry_confirmed_failed()
       elif not lat_active:
         self.entry_timer = 0.  # dropped out by itself: no verdict
+      elif not self.entry_torque_seen and abs(applied_torque) < EPS_ and self.entry_wait < ENTRY_LOCKOUT_WAIT:
+        # nothing has reached the EPS yet (LKAS bit re-enable lockout): the entry happens where the torque starts
+        self.entry_wait += DT_CTRL
+        self.entry_speed = max(self.entry_speed, v_ego)
       else:
+        self.entry_torque_seen = True
         self.entry_ev.add(applied_torque, motor_torque, driver_torque)
         self.entry_timer += DT_CTRL
         if self.entry_timer >= FAULT_WINDOW:
@@ -276,7 +296,10 @@ class LowSpeedReengage:
     if fault_edge and not entry_fault and searching and self.since_active < HOLD_FAULT_WINDOW and v_ego < self.min_steer_speed:
       if self.visit_frames > 0:
         self.visit_frames = 0
-        self._hold_trial_failed("steer fault")
+        if self.since_pressed > PRESSED_WINDOW:
+          self._hold_trial_failed("steer fault")
+        else:
+          self.hold_trial_ok = False  # driver override: back to the confirmed floor for this drive, no verdict
       elif v_ego < self.hold + STEP and self.since_pressed > PRESSED_WINDOW:
         self._hold_confirmed_failed()
     elif self.visit_frames > 0 and not in_trial and (self.since_active >= HOLD_FAULT_WINDOW or v_ego >= self.hold + STEP):

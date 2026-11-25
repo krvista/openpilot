@@ -60,6 +60,13 @@ class LatControl(ABC):
     self.steering_pressed_prev = pressed
     return self.release_blend
 
+  def error_ff_blend(self) -> float:
+    """Weight for the tracking-error part of the friction feedforward. It is a correction against the error like P,
+    so on PRESS_YIELD_BRANDS it yields with the error term. Other brands keep it at full weight as before.
+    WK2 drivelog 8f-94 (1af62ef, NNLC): with P fully yielded the NN's error input still pushed against the driver in
+    95-97% of pressed frames, 0.134 of full scale on average (~35 units), ~90% of op's remaining opposing torque."""
+    return self.release_blend if self.press_yield else 1.
+
   def driver_steering(self, CS) -> bool:
     """Hand torque the integrator should not learn against, even while it is below steeringPressed."""
     return abs(CS.steeringTorque) > self.driver_torque_hold
