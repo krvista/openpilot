@@ -5,7 +5,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import get_curvature_from_pl
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 # Unwind a little earlier on curve exits. The model's curvature already looks lat_delay + 1.5 frames
-# ahead (0.355 s), which matches the WK2 yaw response on average (best-fit 0.34-0.36 s on entry,
+# ahead (0.355 s; callers add any model look-ahead modeld uses, sunnypilot/livedelay/helpers.py),
+# which matches the WK2 yaw response on average (best-fit 0.34-0.36 s on entry,
 # exit and steady, routes 51-5b), but on exits the car still ends up closer to the inside: routes
 # 43-4d (no centering) sat 0.32 m inside on exits vs 0.20 m mid-curve, and the target curvature on
 # exits stayed 0.07-0.10 m/s^2 above the lane-line road curvature. While the plan is unwinding, take

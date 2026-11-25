@@ -163,7 +163,7 @@ class TestLowSpeedReengage:
     run(lsr, ENTRY0 + 0.1, fault=True)
     assert abs(lsr.entry - (ENTRY0 + STEP)) < 1e-6 and lsr.entry_fails == MAX_FAILS
 
-  def test_override_faults_on_trials_back_off_without_a_verdict(self):
+  def test_trial_faults_count_even_with_the_driver_on_the_wheel(self):
     lsr = LowSpeedReengage(WK2)
     lsr.hold = HOLD0 - 3 * STEP                        # room for entry trials
     trial = ENTRY0 - STEP + 0.05
@@ -171,15 +171,29 @@ class TestLowSpeedReengage:
     assert run(lsr, trial)
     run(lsr, trial, frames=50, pressed=True)
     run(lsr, trial, fault=True, pressed=True)
-    assert lsr.entry_fails == 0 and not lsr.entry_trial_ok
-    run(lsr, 3.0, frames=400)
-    assert not run(lsr, trial)                         # off for the rest of the drive
+    assert lsr.entry_fails == 1 and not lsr.entry_trial_ok and abs(lsr.entry - ENTRY0) < 1e-6
     lsr = LowSpeedReengage(WK2)
     htrial = HOLD0 - STEP + 0.05
     run(lsr, 17.6)
     run(lsr, htrial, frames=20, pressed=True)
     run(lsr, htrial, fault=True, pressed=True)
-    assert lsr.hold_fails == 0 and not lsr.hold_trial_ok and abs(lsr.hold - HOLD0) < 1e-6
+    assert lsr.hold_fails == 1 and not lsr.hold_trial_ok and abs(lsr.hold - HOLD0) < 1e-6
+
+  def test_fault_in_an_entry_window_below_the_hold_floor_fails_the_hold_trial(self):
+    # re-engage a little above the entry, slow into the hold trial band within the entry's fault window, fault
+    lsr = LowSpeedReengage(WK2)
+    v = ENTRY0 + 1.3 / 3.6
+    run(lsr, 3.0, frames=150)
+    assert run(lsr, v, frames=20)
+    while v > HOLD0 - STEP + 0.1:
+      v -= 2. / 3.6 * 0.01                             # 2 km/h per s
+      run(lsr, v)
+    assert lsr.entry_timer > 0. and lsr.visit_frames > 0
+    run(lsr, v, fault=True)
+    run(lsr, 3.0, frames=150)
+    # a failed hold trial, not a clean use of it (and the entry, 1.3 km/h above its confirmed value, is no verdict)
+    assert lsr.hold_fails == 1 and lsr.hold_ok == 0 and abs(lsr.hold - HOLD0) < 1e-6
+    assert lsr.entry_fails == 0 and abs(lsr.entry - ENTRY0) < 1e-6
 
   def test_entry_counts_from_the_first_applied_torque(self):
     # the carcontroller holds the LKAS bit down for 2 s after it fell: the EPS sees the entry where torque starts
@@ -207,12 +221,14 @@ class TestLowSpeedReengage:
   def test_moderate_hand_torque_still_counts_as_evidence(self):
     lsr = LowSpeedReengage(WK2)
     for _ in range(CONFIRMS):
-      dip(lsr, HOLD0 - STEP + 0.05, frames=60, drv=60.)
+      dip(lsr, HOLD0 - STEP + 0.05, frames=60, drv=-60.)  # resting against the request
     assert abs(lsr.hold - (HOLD0 - STEP)) < 1e-6
-    lsr = LowSpeedReengage(WK2)
-    for _ in range(CONFIRMS + 2):
-      dip(lsr, HOLD0 - STEP + 0.05, frames=60, drv=100.)  # the driver is steering: no evidence
-    assert abs(lsr.hold - HOLD0) < 1e-6
+    # hand torque with the request (the motor assists it) or a driver steering hard is no evidence
+    for drv in (60., -100.):
+      lsr = LowSpeedReengage(WK2)
+      for _ in range(CONFIRMS + 2):
+        dip(lsr, HOLD0 - STEP + 0.05, frames=60, drv=drv)
+      assert abs(lsr.hold - HOLD0) < 1e-6
 
   def test_never_below_abs_floor(self):
     lsr = LowSpeedReengage(WK2)

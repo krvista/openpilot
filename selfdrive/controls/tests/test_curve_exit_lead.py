@@ -11,8 +11,9 @@ LAT_DELAY = 0.28
 T = np.array(ModelConstants.T_IDXS)
 
 
-def plan(curv_fn):
-  """Model plan whose curvature at time t is curv_fn(t); returns (model, curvature the model would act on)."""
+def plan(curv_fn, lead=0.):
+  """Model plan whose curvature at time t is curv_fn(t); returns (model, curvature the model would act on).
+  lead: extra model look-ahead modeld adds (sunnypilot/livedelay/helpers.py MODEL_LAT_LEAD)."""
   md = log.ModelDataV2.new_message()
   k = np.array([curv_fn(t) for t in T])
   yaw_rate = k * V
@@ -21,7 +22,7 @@ def plan(curv_fn):
   md.orientation.z = yaw.tolist()
   md.orientationRate.t = T.tolist()
   md.orientationRate.z = yaw_rate.tolist()
-  action = get_curvature_from_plan(yaw, yaw_rate, T, V, LAT_DELAY + 1.5 * DT_MDL)
+  action = get_curvature_from_plan(yaw, yaw_rate, T, V, LAT_DELAY + lead + 1.5 * DT_MDL)
   return md, action
 
 
@@ -35,6 +36,14 @@ class TestCurveExitLead:
     out = CurveExitLead().update(md, V, k, LAT_DELAY)
     assert 0 < out < k
     assert abs(lat(k - out) - 1.5 * EXIT_LEAD_T) < 0.06
+
+  def test_exit_with_model_lead(self):
+    # modeld samples the plan `lead` later on the WK2: controls pass the same lead, and the exit still unwinds
+    lead = 0.12
+    md, k = plan(lambda t: max(0., 1.5 - 0.8 * t) / V ** 2, lead)
+    assert CurveExitLead().update(md, V, k, LAT_DELAY) == k   # without it the lead looks behind the action
+    out = CurveExitLead().update(md, V, k, LAT_DELAY + lead)
+    assert 0 < out < k and abs(lat(k - out) - 0.8 * EXIT_LEAD_T) < 0.03
 
   def test_entry_and_steady_untouched(self):
     for fn in (lambda t: min(1.5, 0.6 + 1.5 * t) / V ** 2, lambda t: 1.0 / V ** 2):

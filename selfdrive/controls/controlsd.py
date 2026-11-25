@@ -13,6 +13,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.curve_centering import CurveCentering, read_camera_offset, read_enabled as curve_centering_enabled
 from openpilot.selfdrive.controls.lib.curve_exit_lead import CurveExitLead
+from openpilot.sunnypilot.livedelay.helpers import get_model_lat_lead
 from openpilot.selfdrive.controls.lib.low_speed_reengage import LowSpeedReengage, read_toggle as read_low_speed_reengage, \
                                                                default_state_path as low_speed_state_path
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
@@ -61,6 +62,7 @@ class Controls(ControlsExt):
 
     self.curve_centering = CurveCentering(curve_centering_enabled(self.params), read_camera_offset(self.params))
     self.curve_exit_lead = CurveExitLead(curve_centering_enabled(self.params, "CurveExitLead"))
+    self.model_lat_lead = get_model_lat_lead(self.CP.carFingerprint)  # modeld samples the plan this much later
     self.low_speed_reengage = LowSpeedReengage(self.CP, read_low_speed_reengage(self.params), low_speed_state_path())
     self.LoC = LongControl(self.CP, self.CP_SP)
     self.VM = VehicleModel(self.CP)
@@ -165,7 +167,8 @@ class Controls(ControlsExt):
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       curve_centering = self.curve_centering.update(CC.latActive, model_v2, self.sm.updated['modelV2'], CS)
-      model_curvature = self.curve_exit_lead.update(model_v2, CS.vEgo, model_v2.action.desiredCurvature, self.lat_delay)
+      model_curvature = self.curve_exit_lead.update(model_v2, CS.vEgo, model_v2.action.desiredCurvature,
+                                                    self.lat_delay + self.model_lat_lead)
       new_desired_curvature = model_curvature + curve_centering if CC.latActive else self.curvature
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS

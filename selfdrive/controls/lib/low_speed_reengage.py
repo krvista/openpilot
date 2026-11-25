@@ -21,7 +21,8 @@ from openpilot.common.swaglog import cloudlog
 # trial, or a gain below MIN_GAIN (the EPS ignoring the request without a fault), sends that value back to the
 # confirmed one for the rest of the drive; after MAX_FAILS such failures the search stops there for good. A
 # fault on a confirmed value (not during a driver override, and only within STEP of it) raises it one STEP and stops
-# the search too. A fault on a trial while the driver is overriding is no verdict: the trial is off for the drive.
+# the search too. A fault on a trial counts even with the driver overriding (most low entries are made with a hand on
+# the wheel; a refusal there must not repeat every drive), it only costs the search, never the confirmed values.
 # State lives in STATE_FILE (delete it to start over). Turn the whole thing off: echo 0 > /data/params/d/LowSpeedReengage
 # (read every 5 s; missing = on; off = hold to minSteerSpeed - 3.0, entry at minSteerSpeed).
 PARAM = "LowSpeedReengage"
@@ -41,9 +42,10 @@ ENTRY_EVIDENCE_FRAMES = 50   # per entry, within FAULT_WINDOW
 MIN_VISIT_FRAMES = 10     # frames below the confirmed hold floor for a dip to count as a use
 MIN_GAIN = 100.           # motor torque units per unit of applied torque; below = the EPS is not following
 EVIDENCE_MIN_TORQUE = 0.05   # |applied torque| for a frame to be usable evidence
-# |driver torque| (column units) for a frame to be usable evidence. Driver torque mostly opposes the command, so
-# hand torque pushes the gain estimate down, never up. WK2 drivelog G/H/I: at 40 only 38-49% of low entries got a
-# verdict and the hold descended ~1.8 km/h per moving hour; at 80, 70-79% and ~3.5 km/h/h, gain still 243-257.
+# |driver torque| (column units) for a frame to be usable evidence. WK2 drivelog G/H/I: at 40 only 38-49% of low
+# entries got a verdict and the hold descended ~1.8 km/h per moving hour; at 80, 70-79% and ~3.5 km/h/h, gain still
+# 243-257. Between the two only hand torque opposing the request counts (see Evidence.add).
+EVIDENCE_QUIET_DRIVER = 40.
 EVIDENCE_MAX_DRIVER = 80.
 FAULT_WINDOW = 3.0        # s after a low-speed entry in which a steer fault counts as the EPS refusing it
 HOLD_FAULT_WINDOW = 1.0   # s after lateral was last active (the wind-down) in which a fault still counts
@@ -83,6 +85,10 @@ class Evidence:
     self.n, self.sxy, self.sxx = 0, 0., 0.
 
   def add(self, applied: float, motor: float, driver: float):
+    # above EVIDENCE_QUIET_DRIVER only hand torque against the request counts: the motor also assists the driver,
+    # so hand torque in the request's direction (G/H/I: +4..+9 motor units at 40-80) could fake a following EPS
+    if abs(driver) > EVIDENCE_QUIET_DRIVER and driver * applied > 0.:
+      return
     if abs(applied) > EVIDENCE_MIN_TORQUE and abs(driver) < EVIDENCE_MAX_DRIVER:
       self.n += 1
       self.sxy += applied * motor
@@ -262,13 +268,9 @@ class LowSpeedReengage:
       if fault_edge:
         entry_fault = True
         self.entry_timer = 0.
-        driver = self.since_pressed <= PRESSED_WINDOW
         if searching and self.entry_speed < self.entry - EPS_:
-          if driver:
-            self.entry_trial_ok = False  # driver override: back to the confirmed entry for this drive, no verdict
-          else:
-            self._entry_trial_failed("steer fault")
-        elif searching and self.entry_speed < self.entry + STEP and not driver:
+          self._entry_trial_failed("steer fault")
+        elif searching and self.entry_speed < self.entry + STEP and self.since_pressed > PRESSED_WINDOW:
           # only a fault right at the confirmed entry says something about it: one at 55-63 km/h, where the LKAS
           # bit usually never fell, or one the driver caused, must not ratchet the entry up for good
           self._entry_confirmed_failed()
@@ -293,13 +295,12 @@ class LowSpeedReengage:
     if in_trial:
       self.visit_frames += 1
       self.hold_ev.add(applied_torque, motor_torque, driver_torque)
-    if fault_edge and not entry_fault and searching and self.since_active < HOLD_FAULT_WINDOW and v_ego < self.min_steer_speed:
+    # a fault inside an entry's window that lands below the confirmed hold floor still fails the hold trial,
+    # otherwise the visit it ended would be counted as a clean use
+    if fault_edge and (not entry_fault or self.visit_frames > 0) and searching and self.since_active < HOLD_FAULT_WINDOW and v_ego < self.min_steer_speed:
       if self.visit_frames > 0:
         self.visit_frames = 0
-        if self.since_pressed > PRESSED_WINDOW:
-          self._hold_trial_failed("steer fault")
-        else:
-          self.hold_trial_ok = False  # driver override: back to the confirmed floor for this drive, no verdict
+        self._hold_trial_failed("steer fault")
       elif v_ego < self.hold + STEP and self.since_pressed > PRESSED_WINDOW:
         self._hold_confirmed_failed()
     elif self.visit_frames > 0 and not in_trial and (self.since_active >= HOLD_FAULT_WINDOW or v_ego >= self.hold + STEP):
