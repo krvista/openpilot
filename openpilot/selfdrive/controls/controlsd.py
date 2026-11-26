@@ -414,6 +414,8 @@ STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55b orient lead clipped by the jer
 STEER_FLAG_DIRECT = 1 << 11           # Phase 72 direct path in use (solo profile) while lateral is active
 STEER_FLAG_ENTRY_LEAD = 1 << 13       # Phase 78 entry lead is adding curvature
 STEER_FLAG_LANE_CENTER = 1 << 12      # Phase 73c lane-centre term is adding curvature
+STEER_FLAG_LANE_FIT = 1 << 14         # Phase 82 lane-fit part is adding curvature
+STEER_FLAG_LANE_AVOID = 1 << 15       # Phase 83 lane terms (partly) released for an avoidance
 
 # i6n Phase 73c (report §101, first solo drive a1): LANE-CENTRE term on the direct path. Steering alone, the model keeps
 # the car parallel to the lane but hardly pulls it to the middle: its action fits  K = 0.77 k_lane + 0.048 psi +
@@ -513,6 +515,14 @@ LANE_AVOID_USUAL_S = 10.0
 LANE_AVOID_RECOVER_S = 1.5
 LANE_AVOID_RESET_S = 5.0
 LANE_AVOID_WARMUP_S = 3.0
+# Phase 84 (report 116, consistency audit): the Phase 80b / 82 / 83 states are cleared wherever the older lane-term states
+# already were - lateral off cleared _lc_p/_lc_i/_lc_e but left the fit part (0.1e-3 on the first frame after 5 s off),
+# the usual spot of the road before (lane terms at a quarter for seconds) and the 1 s blend exemption; a lane change
+# kept or forgot the usual spot of the OLD lane depending on whether it lasted more or less than LANE_AVOID_RESET_S
+# (logged lane changes: 5.0-7.9 s, half within 0.6 s of the limit) - now always forgotten, i.e. 3 s of warm-up in the
+# new lane. A non-finite lane probability no longer wipes every lane-term state in one frame (weight 0 instead).
+# Kill: LANE_STATE_RESET = False.
+LANE_STATE_RESET = True
 LANE_FIT_GAIN = 0.35
 LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6]
 LANE_FIT_T_S = 1.5
@@ -667,7 +677,8 @@ LOWCONF_CURVE_K = [1.5e-3, 3.0e-3]   # 1/m: |model action| at which the low-conf
 # target is ramped to straight — same "bleed, not hold" rule the Phase 7a trim
 # uses for its anti-windup. Kill switch: RAMP_END_S = HOLD_S = large -> pure hold.
 MODEL_NONFINITE_HOLD_S = 0.20      # pure hold (identical to the last command)
-MODEL_NONFINITE_RAMP_END_S = 2.20  # target fully ramped to 0 by here
+MODEL_NONFINITE_RAMP_END_S = 2.20  # ramp factor reaches 0 here; it multiplies the previous output every frame, so the
+                                   # command is at 0.76 / 0.09 / 0.00 of the held value 0.3 / 0.5 / 0.7 s into the gap
 
 
 class Controls(ControlsExt):
@@ -807,6 +818,8 @@ class Controls(ControlsExt):
             and abs(wd / w0 - 1.0) <= LANE_CENTER_WIDTH_RATIO):
           w = (float(_interp(mf.lane_min_p, LANE_CENTER_PROB, [0.0, 1.0]))
                * float(_interp(v, LANE_CENTER_SPEED_MS, [0.0, 1.0])))
+          if LANE_STATE_RESET and not math.isfinite(w):
+            w = 0.0
           if LANE_AVOID_RELEASE and w > 0.0 and math.isfinite(k_action):          # Phase 83
             off = pd - cd_
             if usual is None:
@@ -1134,6 +1147,8 @@ class Controls(ControlsExt):
       self.lane_dropout_low_frames = 0
       self.lane_dropout_k_hist.clear()      # 39-2 review: a stale command must never become the hold value
       self.lane_dropout_lc_holdoff = 0
+      if LANE_STATE_RESET:
+        self._conf_blend_lc_frames = 0   # Phase 84
       # lane_dropout_armed is deliberately NOT reset: a one-frame steer fault must not grant a second hold
     if not CC.longActive:
       self.LoC.reset()
@@ -1155,6 +1170,8 @@ class Controls(ControlsExt):
     if steer_direct and CC.latActive:
       lc_ok = (mf.lane_change_state == LaneChangeState.off and not (CS.leftBlinker or CS.rightBlinker)
                and not CS.steeringPressed and not self.lane_dropout)
+      if LANE_STATE_RESET and mf.lane_change_state != LaneChangeState.off:
+        self._lc_usual = None   # Phase 84: the new lane has its own usual spot
       if LANE_CENTER_NONFINITE_GUARD and self._model_nonfinite_frames > 0:
         lc_add = 0.0   # Phase 75j: the held command already contains the term; states kept as they are
       else:
@@ -1164,6 +1181,10 @@ class Controls(ControlsExt):
         if abs(el_add) > 2e-5:
           steer_flags |= STEER_FLAG_ENTRY_LEAD
         lc_add += el_add
+        if abs(getattr(self, "_lc_f", 0.0)) > 2e-5:
+          steer_flags |= STEER_FLAG_LANE_FIT
+        if lc_ok and getattr(self, "_lc_wa", 1.0) < 0.99:
+          steer_flags |= STEER_FLAG_LANE_AVOID
       new_desired_curvature = new_desired_curvature + lc_add
       if abs(lc_add) > 2e-5:
         steer_flags |= STEER_FLAG_LANE_CENTER
@@ -1171,6 +1192,9 @@ class Controls(ControlsExt):
       self._lc_p = 0.0
       self._lc_i = 0.0
       self._lc_e = 0.0
+      if LANE_STATE_RESET:   # Phase 84
+        self._lc_f = 0.0
+        self._lc_usual = None; self._lc_wa = 1.0; self._lc_usual_n = 0; self._lc_avoid_gap = 0
       self._entry_lead_lp = 0.0
       self._entry_lead_wo = 0.0
 
