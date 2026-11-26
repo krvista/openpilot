@@ -66,7 +66,7 @@ class _ModelFrame:
   disengaged frame — which never reads them — pays nothing (review: eager computation made
   disengaged frames slower than before)."""
   __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
-               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient", "_lanes", "_psi")
+               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient", "_lanes", "_psi", "_lfit")
   _UNSET = object()
 
   def __init__(self, model_v2, key):
@@ -76,6 +76,7 @@ class _ModelFrame:
     self._pos = None
     self._fit12 = self._fit24 = self._klane = self._bsm = self._orient = self._lanes = _ModelFrame._UNSET
     self._psi = _ModelFrame._UNSET   # Phase 78
+    self._lfit = _ModelFrame._UNSET  # Phase 82
     probs = getattr(model_v2, "laneLineProbs", [])
     self.lane_min = min(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0
     self.lane_max = max(float(probs[1]), float(probs[2])) if len(probs) >= 4 else 1.0   # Phase 49
@@ -178,6 +179,29 @@ class _ModelFrame:
     l0, r0 = float(np.interp(0.0, xl, yl)), float(np.interp(0.0, xr, yr))
     ld, rd = float(np.interp(dist, xl, yl)), float(np.interp(dist, xr, yr))
     return 0.5 * (l0 + r0), 0.5 * (ld + rd), float(np.interp(dist, px, py)), r0 - l0, rd - ld
+
+  def lane_fit(self, xf):
+    """Phase 82: (lane-centre y at the car, heading, curvature) of a quadratic through the lane centre (two inner lines)
+    over 0..xf m; None = unreadable / fewer than 3 points."""
+    self.lane_preview(0.0)                 # reads and checks the lines once
+    if self._lanes is None:
+      return None
+    key = int(round(xf))
+    if self._lfit is _ModelFrame._UNSET:
+      self._lfit = {}
+    if key not in self._lfit:
+      xl, yl, xr, yr = self._lanes[:4]
+      m = xl <= key + 1e-6
+      out = None
+      if int(np.count_nonzero(m)) >= 3 and xr[-1] >= xl[m][-1]:
+        try:
+          c = np.polyfit(xl[m], 0.5 * (yl[m] + np.interp(xl[m], xr, yr)), 2)
+          if np.all(np.isfinite(c)):
+            out = (float(c[2]), float(c[1]), float(2.0 * c[0]))
+        except (np.linalg.LinAlgError, ValueError):
+          out = None
+      self._lfit[key] = out
+    return self._lfit[key]
 
   @property
   def bsm_lane(self):
@@ -456,8 +480,30 @@ ENTRY_LEAD_FRAME_S = 0.075     # modeld: frame delay + half a model interval on 
 # margin 0.33 / 0.27 / 0.22 / 0.13 s, about half of the simulated scatter gain kept. The integral (straight offset) is
 # untouched. Kill: LANE_CENTER_KE = [0.0, 0.0, 0.0, 0.0]. Phase 77 values: speeds 45 / 60 / 80 / 110, [0, 0.5e-3,
 # 0.8e-3, 0.8e-3].
+# Phase 82 (report 114): LANE FIT - the offset part above is replaced by a fit to the lane itself. A quadratic through
+# the lane centre over the next LANE_FIT_RANGE_S gives the car's offset, the lane's heading and the lane's curvature;
+# the curvature that would put the car on the centre over 0.5-1.5 x v * LANE_FIT_T_S ahead is
+#   1.432 e / L^2 + 1.653 psi / L + k_lane        (least squares of e + psi x + k x^2 / 2 against dk x^2 / 2)
+# and LANE_FIT_GAIN of its difference to the model action is added (>= 45 km/h, same weight / cap / low-pass as the
+# other parts, own target LANE_CENTER_BIAS_M). The heading is corrected for the camera sitting LANE_FIT_ARM_M ahead of
+# the rear axle (in a steady curve the lane heading at the camera is arm x curvature: measured median 1.6-2.0 m; without
+# the correction the heading part pushes 0.2-0.5e-3 to the INSIDE and cancels the rest). The lane curvature is read
+# near the car on purpose: fitted 1.5 s ahead (as upstream's Blendful does) the simulation turned in early (peak
+# inside 18 -> 26 cm at 65 km/h) and swung out at the exit (5 -> 20 cm).
+# Simulation with the measured fit noise, 0.5 s of lead and +-1 m of arm error, 7 model variants x both bias signs,
+# R 400 m at 65 km/h, against Phase 79: steady inside 10.4 -> 6.5 cm (4.0-9.0 over the arm error), peak inside at the
+# entry 17.5 -> 12.6, exit swing 4.9 -> 4.8, S-curve swing 30 -> 21, 20 cm step overshoot 14 -> 13 %, worst delay
+# margin 0.50 -> 0.44 s (0.37 -> 0.40 at 85, 0.29 -> 0.35 at 100 km/h), straight scatter 8.4 -> 6.7 cm, wheel activity
+# unchanged. On the logs (a1 / a7 / a8 / a9) the term changes 0.018e-3 per 0.5 s on straights (current additions
+# 0.034e-3, model action 0.115e-3). Kill: LANE_FIT_GAIN = 0.0 and LANE_CENTER_KE back to [0, 0.3e-3, 0.3e-3, 0.15e-3].
+LANE_FIT_GAIN = 0.35
+LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6]
+LANE_FIT_T_S = 1.5
+LANE_FIT_RANGE_S = 1.0
+LANE_FIT_RANGE_M = (15.0, 45.0)
+LANE_FIT_ARM_M = 1.8
 LANE_CENTER_KE_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6, 80.0 / 3.6, 110.0 / 3.6]
-LANE_CENTER_KE = [0.0, 0.3e-3, 0.3e-3, 0.15e-3]      # 1/m per m of offset
+LANE_CENTER_KE = [0.0, 0.0, 0.0, 0.0]      # 1/m per m of offset. Phase 79: [0, 0.3e-3, 0.3e-3, 0.15e-3]; off since Phase 82
 
 # Phase 75 (report §103), controls side:
 # 75j  While the model action is non-finite the held command (MODEL_NONFINITE_*) already contains the lane-centre
@@ -732,6 +778,7 @@ class Controls(ControlsExt):
     p = getattr(self, "_lc_p", 0.0); integ = getattr(self, "_lc_i", 0.0)
     w = 0.0; raw = 0.0; e0 = 0.0; raw_e = 0.0
     pe = getattr(self, "_lc_e", 0.0)
+    pf = getattr(self, "_lc_f", 0.0); raw_f = 0.0
     if usable_ctx and LANE_CENTER_WEIGHT > 0.0 and math.isfinite(v):
       dist = float(_clip(v * LANE_CENTER_T_S, LANE_CENTER_L_M[0], LANE_CENTER_L_M[1]))
       pv = mf.lane_preview(dist)
@@ -746,17 +793,26 @@ class Controls(ControlsExt):
           e0 = c0 + LANE_CENTER_BIAS_M
           ke = float(_interp(v, LANE_CENTER_KE_SPEED_MS, LANE_CENTER_KE))     # Phase 77: the car's own offset
           raw_e = float(_clip(ke * w * e0, -cap - raw, cap - raw)) if ke > 0.0 else 0.0   # both parts share the cap
+          wf = w * float(_interp(v, LANE_FIT_SPEED_MS, [0.0, 1.0])) if LANE_FIT_GAIN > 0.0 else 0.0
+          if wf > 0.0 and math.isfinite(k_action):                              # Phase 82: fit to the lane near the car
+            ft = mf.lane_fit(float(_clip(v * LANE_FIT_RANGE_S, LANE_FIT_RANGE_M[0], LANE_FIT_RANGE_M[1])))
+            if ft is not None:
+              _, psi_l, k_l = ft
+              lf = max(v * LANE_FIT_T_S, 10.0)
+              fit = 1.432 * e0 / lf ** 2 + 1.653 * (psi_l - LANE_FIT_ARM_M * k_l) / lf + k_l
+              raw_f = float(_clip(LANE_FIT_GAIN * wf * (fit - k_action), -cap - raw - raw_e, cap - raw - raw_e))
     p += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw - p)
     pe += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_e - pe)
+    pf += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_f - pf)
     if w > 0.0:
       if abs(k_action) < LANE_CENTER_I_MAX_K and LANE_CENTER_KI > 0.0:
         integ = float(_clip(integ + LANE_CENTER_KI * w * e0 * DT_CTRL, -LANE_CENTER_I_CAP, LANE_CENTER_I_CAP))
     else:
       integ *= max(1.0 - DT_CTRL / LANE_CENTER_I_BLEED_S, 0.0)
-    if not (math.isfinite(p) and math.isfinite(integ) and math.isfinite(pe)):
-      p = integ = pe = 0.0
-    self._lc_p, self._lc_i, self._lc_e = p, integ, pe
-    return p + integ + pe
+    if not (math.isfinite(p) and math.isfinite(integ) and math.isfinite(pe) and math.isfinite(pf)):
+      p = integ = pe = pf = 0.0
+    self._lc_p, self._lc_i, self._lc_e, self._lc_f = p, integ, pe, pf
+    return p + integ + pe + pf
 
   def _entry_lead(self, mf, CS, k_action, usable_ctx):
     """Phase 78: curvature that starts the wheel ENTRY_LEAD_S earlier while a curve builds up (see ENTRY_LEAD_*)."""

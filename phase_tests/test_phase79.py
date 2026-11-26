@@ -9,14 +9,15 @@ KPH = 1 / 3.6
 
 @pytest.fixture
 def keep():
-  saved = (cd.LANE_CENTER_KE, cd.LANE_CENTER_KI)
+  saved = (cd.LANE_CENTER_KE, cd.LANE_CENTER_KI, cd.LANE_FIT_GAIN)
+  cd.LANE_CENTER_KE = [0.0, 0.3e-3, 0.3e-3, 0.15e-3]; cd.LANE_FIT_GAIN = 0.0     # the Phase 79 schedule (Phase 82 replaced it)
   yield
-  cd.LANE_CENTER_KE, cd.LANE_CENTER_KI = saved
+  cd.LANE_CENTER_KE, cd.LANE_CENTER_KI, cd.LANE_FIT_GAIN = saved
 
 
 def test_shipped_schedule():
   assert cd.LANE_CENTER_KE_SPEED_MS == pytest.approx([45 * KPH, 60 * KPH, 80 * KPH, 110 * KPH])
-  assert cd.LANE_CENTER_KE == [0.0, 0.3e-3, 0.3e-3, 0.15e-3]
+  assert cd.LANE_CENTER_KE == [0.0, 0.0, 0.0, 0.0]                             # Phase 82 (was [0, 0.3e-3, 0.3e-3, 0.15e-3])
   assert cd.LANE_CENTER_KI == 0.06e-3 and cd.LANE_CENTER_I_CAP == 0.30e-3     # the integral is not touched
 
 

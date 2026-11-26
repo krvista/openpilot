@@ -13,8 +13,9 @@ KPH = 1 / 3.6
 
 @pytest.fixture
 def keep():
-  names = ("LANE_CENTER_KE", "LANE_CENTER_KE_SPEED_MS", "LANE_CENTER_KI", "LANE_CENTER_I_CAP", "LANE_CENTER_WEIGHT")
+  names = ("LANE_CENTER_KE", "LANE_CENTER_KE_SPEED_MS", "LANE_CENTER_KI", "LANE_CENTER_I_CAP", "LANE_CENTER_WEIGHT", "LANE_FIT_GAIN")
   saved = {k: getattr(cd, k) for k in names}; t = P.ENGAGE_TAPER_DRIVER_START_DPS
+  cd.LANE_FIT_GAIN = 0.0                                              # Phase 82 part off
   cd.LANE_CENTER_KE_SPEED_MS = [45 * KPH, 60 * KPH, 80 * KPH]         # the Phase 77 schedule (Phase 79 trimmed it)
   cd.LANE_CENTER_KE = [0.0, 0.5e-3, 0.8e-3]
   yield
