@@ -496,6 +496,23 @@ ENTRY_LEAD_FRAME_S = 0.075     # modeld: frame delay + half a model interval on 
 # margin 0.50 -> 0.44 s (0.37 -> 0.40 at 85, 0.29 -> 0.35 at 100 km/h), straight scatter 8.4 -> 6.7 cm, wheel activity
 # unchanged. On the logs (a1 / a7 / a8 / a9) the term changes 0.018e-3 per 0.5 s on straights (current additions
 # 0.034e-3, model action 0.115e-3). Kill: LANE_FIT_GAIN = 0.0 and LANE_CENTER_KE back to [0, 0.3e-3, 0.3e-3, 0.15e-3].
+# Phase 83 (report 115): AVOIDANCE RELEASE - when the model deliberately plans away from where it usually drives in the
+# lane (works, a parked car in the lane, a cyclist) the lane terms must not pull it back. 'usual' = slow average
+# (LANE_AVOID_USUAL_S) of plan - lane centre at the preview distance; the plan's distance from it, less an allowance for
+# curves (LANE_AVOID_CURVE x |action| L^2 / 2: the plan cuts curves by itself), takes the weight of all three parts from
+# 1 at LANE_AVOID_DEV_M[0] to 0 at [1] - at once on the way down, LANE_AVOID_RECOVER_S back up - and holds the integral.
+# While released the average learns half as fast, so a long diversion is taken over slowly; LANE_AVOID_RESET_S without a
+# usable lane forgets it; after that the first LANE_AVOID_WARMUP_S only average (one frame is no 'usual'). 60 routes,
+# 8.1 h hands-off with both lines: fully released 0.45 % of the time (3.4 episodes of >= 0.5 s per hour, 40 % of them with
+# the driver's hand on the wheel against 7 % overall). Real controlsd replayed on a7 / a8 / a9: mean weight 0.978-0.987,
+# fully released 0-0.4 %, curve correction of Phase 82 3-9 % smaller. Kill: LANE_AVOID_RELEASE = False.
+LANE_AVOID_RELEASE = True
+LANE_AVOID_DEV_M = [0.20, 0.45]
+LANE_AVOID_CURVE = 0.25
+LANE_AVOID_USUAL_S = 10.0
+LANE_AVOID_RECOVER_S = 1.5
+LANE_AVOID_RESET_S = 5.0
+LANE_AVOID_WARMUP_S = 3.0
 LANE_FIT_GAIN = 0.35
 LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6]
 LANE_FIT_T_S = 1.5
@@ -779,6 +796,8 @@ class Controls(ControlsExt):
     w = 0.0; raw = 0.0; e0 = 0.0; raw_e = 0.0
     pe = getattr(self, "_lc_e", 0.0)
     pf = getattr(self, "_lc_f", 0.0); raw_f = 0.0
+    usual = getattr(self, "_lc_usual", None); wa = getattr(self, "_lc_wa", 1.0); seen = False; w_i = 0.0
+    n_us = getattr(self, "_lc_usual_n", 0)
     if usable_ctx and LANE_CENTER_WEIGHT > 0.0 and math.isfinite(v):
       dist = float(_clip(v * LANE_CENTER_T_S, LANE_CENTER_L_M[0], LANE_CENTER_L_M[1]))
       pv = mf.lane_preview(dist)
@@ -788,6 +807,23 @@ class Controls(ControlsExt):
             and abs(wd / w0 - 1.0) <= LANE_CENTER_WIDTH_RATIO):
           w = (float(_interp(mf.lane_min_p, LANE_CENTER_PROB, [0.0, 1.0]))
                * float(_interp(v, LANE_CENTER_SPEED_MS, [0.0, 1.0])))
+          if LANE_AVOID_RELEASE and w > 0.0 and math.isfinite(k_action):          # Phase 83
+            off = pd - cd_
+            if usual is None:
+              usual = off; n_us = 0
+            # the usual spot is a plain average for the first LANE_AVOID_WARMUP_S (one frame is no 'usual'); no release yet
+            warm = n_us * DT_CTRL >= LANE_AVOID_WARMUP_S
+            dev = abs(off - usual) - LANE_AVOID_CURVE * abs(k_action) * dist ** 2 / 2.0
+            wa_t = float(_interp(dev, LANE_AVOID_DEV_M, [1.0, 0.0])) if warm else 1.0
+            wa = wa_t if wa_t < wa else wa + DT_CTRL / (LANE_AVOID_RECOVER_S + DT_CTRL) * (wa_t - wa)
+            a_us = DT_CTRL / (LANE_AVOID_USUAL_S * (1.0 if wa >= 1.0 - 1e-6 else 2.0) + DT_CTRL)
+            usual += max(a_us, 1.0 / (n_us + 1.0)) * (off - usual)
+            n_us = min(n_us + 1, 10 ** 6)
+            seen = True
+            w *= wa
+            w_i = w if wa >= 0.5 else 0.0                                          # mostly released: the integral is held
+          else:
+            w_i = w
           cap = LANE_CENTER_ACC / v ** 2
           raw = float(_clip(LANE_CENTER_WEIGHT * w * 2.0 * ((cd_ + LANE_CENTER_BIAS_M) - pd) / dist ** 2, -cap, cap))
           e0 = c0 + LANE_CENTER_BIAS_M
@@ -804,11 +840,20 @@ class Controls(ControlsExt):
     p += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw - p)
     pe += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_e - pe)
     pf += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_f - pf)
-    if w > 0.0:
+    if w_i > 0.0:
       if abs(k_action) < LANE_CENTER_I_MAX_K and LANE_CENTER_KI > 0.0:
-        integ = float(_clip(integ + LANE_CENTER_KI * w * e0 * DT_CTRL, -LANE_CENTER_I_CAP, LANE_CENTER_I_CAP))
-    else:
+        integ = float(_clip(integ + LANE_CENTER_KI * w_i * e0 * DT_CTRL, -LANE_CENTER_I_CAP, LANE_CENTER_I_CAP))
+    elif not seen or wa >= 0.5:                           # released for an avoidance: held, not bled
       integ *= max(1.0 - DT_CTRL / LANE_CENTER_I_BLEED_S, 0.0)
+    # Phase 83 bookkeeping: no usable lane for LANE_AVOID_RESET_S forgets the usual spot (another road)
+    gap = 0 if seen else getattr(self, "_lc_avoid_gap", 0) + 1
+    if gap * DT_CTRL >= LANE_AVOID_RESET_S:
+      usual = None
+    if not seen:
+      wa += DT_CTRL / (LANE_AVOID_RECOVER_S + DT_CTRL) * (1.0 - wa)
+    if usual is not None and not math.isfinite(usual) or not math.isfinite(wa):
+      usual = None; wa = 1.0
+    self._lc_usual, self._lc_wa, self._lc_avoid_gap, self._lc_usual_n = usual, wa, gap, n_us
     if not (math.isfinite(p) and math.isfinite(integ) and math.isfinite(pe) and math.isfinite(pf)):
       p = integ = pe = pf = 0.0
     self._lc_p, self._lc_i, self._lc_e, self._lc_f = p, integ, pe, pf
