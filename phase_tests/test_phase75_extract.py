@@ -38,11 +38,14 @@ def frame(name, src, values):
   return addr, dat, src
 
 
-def build(v6=True):
+def build(v6=True, v8=True):
   """3 s: MADS enables at 1 s, the panda grants lateral at 1.2 s (latGranted follows), LFA button at 0.5 s, a lead from
   2 s, FCA_ESA active for 2.0-2.5 s, passive reason 9 (not granted) for 1.0-1.2 s, gear park -> drive at 0.3 s."""
   msgs = []
-  e, x = ev(T0 - 0.005, "initData"); x.gitCommit = "0123456789abcdef"; msgs.append(e)
+  e, x = ev(T0 - 0.005, "initData"); x.gitCommit = "0123456789abcdef"; x.gitBranch = "i6nv3"; x.dirty = False
+  pr = x.params.init("entries", 2)
+  pr[0].key = "GitDiff"; pr[0].value = b""; pr[1].key = "UpdaterCurrentDescription"; pr[1].value = b"v / i6nv3 / 0123456 / Nov 26"
+  msgs.append(e)
   for i in range(N):
     t = T0 + i * 0.01; rel = i * 0.01
     e, s = ev(t, "carState")
@@ -52,6 +55,7 @@ def build(v6=True):
       b = s.init("buttonEvents", 1); b[0].type = "lkas"; b[0].pressed = i == 50
     if i == 80:
       b = s.init("buttonEvents", 2); b[0].type = "mainCruise"; b[0].pressed = True; b[1].type = "mainCruise"; b[1].pressed = False
+    s.canValid = rel >= 0.05
     msgs.append(e)
     e, c = ev(t + 0.001, "carControl"); c.latActive = rel >= 1.0; c.actuators.steeringAngleDeg = 3.0; msgs.append(e)
     e, sp = ev(t + 0.002, "carStateSP"); sp.gatewayFlags = 17; sp.steerFlags = 4
@@ -59,13 +63,14 @@ def build(v6=True):
       sp.lateralPausedReason = 9 if 1.0 <= rel < 1.2 else 0
     msgs.append(e)
     if v6:
-      e, cs = ev(t + 0.001, "carControlSP"); cs.latGranted = rel >= 1.2; msgs.append(e)
+      e, cs = ev(t + 0.001, "carControlSP"); cs.latGranted = rel >= 1.2; cs.gpsFixSeen = rel >= 2.1; msgs.append(e)
       e, ss = ev(t + 0.003, "selfdriveStateSP")
       ss.mads.state = "enabled" if rel >= 1.0 else "disabled"; ss.mads.enabled = rel >= 1.0; ss.mads.active = rel >= 1.2
       ss.mads.available = True; msgs.append(e)
       if i % 10 == 5:   # 10 Hz, first one at 0.05 s
         e, ps = ev(t, "pandaStates", 2)
         ps[0].safetyModel = "hyundaiCanfd"; ps[0].controlsAllowed = rel >= 2.0; ps[0].controlsAllowedLateral = rel >= 1.2
+        ps[0].safetyRxChecksInvalid = 0.3 <= rel < 0.5
         ps[1].safetyModel = "silent"   # says nothing about the car
         msgs.append(e)
       if i % 5 == 2:    # 20 Hz
@@ -81,7 +86,33 @@ def build(v6=True):
     e, cn = ev(t + 0.004, "can", len(fr)); can_frames(cn, fr); msgs.append(e)
     fr = [frame("LKAS_ALT", 0, {"ADAS_StrAnglReqVal": -7.0, "ADAS_ACIAnglTqRedcGainVal": 1.0, "LKAS_ANGLE_ACTIVE": 2})]
     e, sc = ev(t + 0.005, "sendcan", 1); can_frames(sc, fr); msgs.append(e)
+    if v8:
+      # v8: 0x400 state (left 1 -> 2 at 1 s, off at 2 s, hazard-like 7 from 2.5 s) on buses 1 and 0, the lamps (0x3E3) flashing
+      st = 1 if 0.5 <= rel < 1.0 else 2 if 1.0 <= rel < 2.0 else 7 if rel >= 2.5 else 0
+      blk = bytearray(8); blk[4] = st | 0x10; lamp = bytearray(16); lamp[11] = (0x20 if st and i % 100 < 50 else 0) | (0x80 if st == 7 else 0)
+      fr = [(0x400, bytes(blk), 1), (0x400, bytes(blk), 0), (0x3E3, bytes(lamp), 0)]
+      if i == 0:
+        fr = fr[:1]   # the first frame only on bus 1: the lower bus still wins afterwards
+      e, cn = ev(t + 0.006, "can", len(fr)); can_frames(cn, fr); msgs.append(e)
+      if i % 5 == 0:   # 20 Hz model, one late frame at 2 s
+        e, md = ev(t + (0.03 if i == 200 else 0.0), "modelV2"); md.frameDropPerc = 3.0 if i == 200 else 0.0
+        md.meta.desireState = [0.1, 0.0, 0.2, 0.6, 0.1, 0.0, 0.0, 0.0] if rel >= 1.0 else [1.0] + [0.0] * 7
+        md.meta.laneChangeDirection = "left" if rel >= 1.0 else "none"; md.meta.laneChangeState = "laneChangeStarting" if rel >= 1.0 else "off"
+        msgs.append(e)
+      if i % 50 == 10:
+        e, dv = ev(t, "deviceState"); dv.freeSpacePercent = 12.5 - rel; dv.cpuTempC = [50.0, 61.0]; dv.memoryUsagePercent = 60
+        msgs.append(e)
+        e, g = ev(t, "gpsLocationExternal"); g.hasFix = rel >= 2.0; g.latitude = 37.0; msgs.append(e)
+      if i % 10 == 0:
+        e, ss = ev(t, "selfdriveState"); ss.active = True
+        if 1.5 <= rel < 2.0:
+          ss.alertText1 = "Steering Paused"; ss.alertText2 = "Parking Mode"; ss.alertStatus = "userPrompt"
+        msgs.append(e)
   return msgs
+
+
+V8_NOT_SERIES = ("alerts", "events_sp", "invalid", "commits", "segs", "seg_err", "commit_full", "branch", "dirty",
+                 "git_diff_len", "build_desc", "lane_turn")
 
 
 def at(d, key, rel):
@@ -103,11 +134,11 @@ def route(tmp_path_factory):
 
 
 def test_version_and_grid(route):
-  assert int(route["version"]) == rx.VERSION == 7
+  assert int(route["version"]) == rx.VERSION == 8
   assert len(route["T"]) == N and str(route["commit"]) == "012345678"
   n = len(route["T"])
   for k in route.files:
-    if k not in ("commit", "passive", "events", "buttons", "version"):
+    if k not in ("commit", "passive", "events", "buttons", "version", *V8_NOT_SERIES):
       assert route[k].shape == (n,), k
 
 
@@ -188,8 +219,12 @@ def test_parsers_agree_with_the_dbc(name, values, parse, want):
 
 
 def test_log_without_the_new_messages_keeps_defaults():
-  d = rx.extract(m.as_reader() for m in build(v6=False))
+  d = rx.extract(m.as_reader() for m in build(v6=False, v8=False))
   n = len(d["T"])
+  # v8 defaults: no 0x400 / 0x3E3 / deviceState / GPS / model message
+  assert (d["blink_state"] == -1).all() and (d["lamp_l"] == -1).all() and (d["free_pct"] == -1).all()
+  assert (d["gps_fix"] == -1).all() and (d["gps_seen"] == -1).all() and (d["rx_invalid"] == -1).all()
+  assert not d["des_lc"].any() and d["alerts"].shape == (0, 4) and d["events_sp"].shape == (0, 2) and len(d["segs"]) == 0
   assert n == N
   assert (d["mads_state"] == -1).all() and not d["mads_enabled"].any() and not d["mads_active"].any()
   assert (d["panda_ctrl"] == -1).all() and (d["panda_lat"] == -1).all()
@@ -234,3 +269,47 @@ def test_v7_factory_camera_lane_lines():
   v = int.from_bytes(d, "little") | (raw_l << 29) | (raw_r << 101) | (3 << 24) | (2 << 96)
   left, right, ql, qr = rx.parse_fcam(v.to_bytes(24, "little"))
   assert left == pytest.approx(-454 * 0.0039625) and right == pytest.approx(430 * 0.0039625) and (ql, qr) == (3, 2)
+
+
+def test_v8_blinker_state_and_lamps(route):
+  """0x400 BLINKER_STATE from the lowest bus that carries it, the 0x3E3 lamp bits as they flash."""
+  assert at(route, "blink_state", 0.2) == 0 and at(route, "blink_state", 0.7) == 1 and at(route, "blink_state", 1.5) == 2
+  assert at(route, "blink_state", 2.2) == 0 and at(route, "blink_state", 2.7) == 7
+  assert at(route, "lamp_l", 1.2) == 1 and at(route, "lamp_l", 1.7) == 0 and at(route, "lamp_l", 2.2) == 0   # flashing / off
+  assert at(route, "lamp_r", 1.2) == 0 and at(route, "lamp_r", 2.7) == 1
+  assert set(np.unique(route["blink_state"])) <= {-1, 0, 1, 2, 7}   # bit 4 of the byte is not part of the state
+
+
+def test_v8_model_desire_and_timing(route):
+  assert at(route, "des_lc", 0.5) == 0.0 and at(route, "des_lc", 1.5) == pytest.approx(0.7)
+  assert at(route, "des_turn", 1.5) == pytest.approx(0.2) and at(route, "lc_dir", 1.5) == 1 and at(route, "lcs", 1.5) == 2
+  assert route["frame_drop"].max() == pytest.approx(3.0) and route["model_dt"].max() == pytest.approx(0.08, abs=1e-6)
+  assert at(route, "model_dt", 1.0) == pytest.approx(0.05, abs=1e-6)
+
+
+def test_v8_health_series(route):
+  assert not route["can_valid"][0] and route["can_valid"][10:].all()
+  assert at(route, "free_pct", 0.05) == -1 and at(route, "free_pct", 0.2) == pytest.approx(12.4)
+  assert at(route, "cpu_temp", 1.0) == pytest.approx(61.0) and at(route, "mem_pct", 1.0) == 60
+  assert at(route, "gps_fix", 1.0) == 0 and at(route, "gps_fix", 2.2) == 1
+  assert at(route, "gps_seen", 2.0) == 0 and at(route, "gps_seen", 2.2) == 1
+  assert at(route, "rx_invalid", 0.2) == 0 and at(route, "rx_invalid", 0.4) == 1 and at(route, "rx_invalid", 0.6) == 0
+
+
+def test_v8_alert_texts_and_build_identity(route):
+  a = route["alerts"]
+  assert a.shape == (1, 4) and a[0][0] == pytest.approx(1.505, abs=1e-6)
+  assert tuple(a[0][1:]) == ("Steering Paused", "Parking Mode", "userPrompt")
+  assert str(route["commit_full"]) == "0123456789abcdef" and str(route["branch"]) == "i6nv3" and int(route["dirty"]) == 0
+  assert int(route["git_diff_len"]) == 0 and str(route["build_desc"]).endswith("Nov 26")
+  assert list(route["commits"]) == ["0123456789abcdef"] and list(route["segs"]) == [0, 1] and len(route["seg_err"]) == 0
+
+
+def test_v8_truncated_segment_is_listed(tmp_path):
+  plain = b"".join(m.to_bytes() for m in build())
+  (tmp_path / "000_000000fd--abc--0--rlog.zst").write_bytes(zstandard.compress(plain))
+  (tmp_path / "000_000000fd--abc--1--rlog.zst").write_bytes(zstandard.compress(plain[:len(plain) // 3 + 5]))   # cut inside a message
+  out = str(tmp_path / "o.npz")
+  rx.main("000000fd", out, str(tmp_path))
+  d = np.load(out, allow_pickle=True)
+  assert list(d["segs"]) == [0, 1] and list(d["seg_err"]) == [1]

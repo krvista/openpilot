@@ -1,4 +1,4 @@
-"""One-pass route extractor (09-23; v2 10-02; v6 11-23): read a route's rlogs ONCE and save every 100 Hz series the i6nv3 probes
+"""One-pass route extractor (09-23; v2 10-02; v6 11-23; v8 11-26): read a route's rlogs ONCE and save every 100 Hz series the i6nv3 probes
 need, so routes can be deleted from the disk-limited container right after extraction and analysed offline.
 
 Saved (carState-rate grid, T relative to the first log message):
@@ -37,17 +37,31 @@ Saved (carState-rate grid, T relative to the first log message):
   Info_RtLnPosVal, m from the car; bus 1 preferred) with fcam_ql / fcam_qr (quality 0-7; -1 = no message) - the car's real
   lane position is -(fcam_l + fcam_r) / 2 (+ = right of centre, as E163); lp_sr / lp_ao / lp_aoa = liveParameters steerRatio /
   angleOffsetDeg / angleOffsetAverageDeg; cal_roll / cal_pitch / cal_yaw = liveCalibration rpyCalib (rad).
+  v8 (11-26, next-drive check E179 / report 117): blink_state = BLINKERS_ALT (0x400, lowest bus seen) BLINKER_STATE (byte 4
+  bits 0-2: 0 off, 1-3 left, 4-6 right; -1 = no message), lamp_l / lamp_r = body controller 0x3E3 byte 11 bit 5 / bit 7
+  (the lamps themselves, flashing; -1 = no message); des_turn / des_lc = modelV2.meta.desireState turn (1 + 2) / lane change
+  (3 + 4) share, lc_dir = meta.laneChangeDirection (0 none, 1 left, 2 right), frame_drop = modelV2.frameDropPerc,
+  model_dt = time since the previous modelV2 (s); can_valid = carState.canValid; free_pct = deviceState.freeSpacePercent
+  (-1 = no message), cpu_temp (max core, C), mem_pct; gps_fix = gpsLocationExternal.hasFix, gps_seen =
+  carControlSP.gpsFixSeen (both -1 = no message; the schema default of gps_seen is True, so pre-76 logs read 1);
+  rx_invalid = any panda safetyRxChecksInvalid (-1 = no message); alerts = rows (t, alertText1, alertText2, status) of
+  selfdriveState alert text changes (non-empty), events_sp = (t, name) of onroadEventsSP transitions; invalid = rows
+  (service, frames with valid False, first t, last t); build: commit_full / branch / dirty (-1 unknown) / git_diff_len
+  (length of the GitDiff param, -1 unknown) / build_desc (UpdaterCurrentDescription) from the FIRST initData, commits = every
+  distinct gitCommit over all initData (a route that spans a reboot), lane_turn = "LaneTurnDesire,LaneTurnValue" params;
+  segs = segment numbers read by main() (empty from extract()), seg_err = those that raised (truncated).
   Fields a log does not have keep their defaults. extract(msgs) / parse_* are importable (phase_tests/test_phase75_extract.py).
 Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz> [log dir]
 """
 import glob
 import sys
+import warnings
 
 import numpy as np
 
 from openpilot.tools.lib.logreader import LogReader
 
-VERSION = 7
+VERSION = 8
 LOG_DIR = "/home/user/drivelog/drivelog"
 NO_CAR_SAFETY = ("silent", "noOutput")   # pandas in these modes say nothing about the car (as the MADS mismatch check)
 
@@ -103,6 +117,11 @@ class Extractor:
     self.mads, self.pnd, self.btn, self.ld, self.ccsp = [], [], [], [], []   # v6
     self.fcam, self.lpar, self.cal = [], [], []   # v7
     self.fcam_bus1 = False
+    # v8
+    self.blk, self.lamp, self.mdl, self.dev, self.fix, self.rx, self.alerts, self.events_sp = ([] for _ in range(8))
+    self.blk_bus = None; self.prev_alert = None; self.prev_ev_sp = set(); self.last_model = None
+    self.invalid = {}; self.commits = []; self.build = dict(commit_full="", branch="", dirty=-1, git_diff_len=-1, build_desc="", lane_turn="")
+    self.segs, self.seg_err = [], []
     self.passive = False
     self.events = []; self.prev_ev = set()
     self.t0 = None; self.commit = ""
@@ -111,11 +130,14 @@ class Extractor:
     w = m.which(); t = m.logMonoTime * 1e-9
     if self.t0 is None:
       self.t0 = t
+    if not getattr(m, "valid", True):
+      c = self.invalid.setdefault(w, [0, t - self.t0, t - self.t0]); c[0] += 1; c[2] = t - self.t0
     if w == "carState":
       s = m.carState
       self.cs.append((t, s.vEgo * 3.6, s.aEgo, s.steeringAngleDeg, s.steeringRateDeg, s.steeringPressed, s.steeringTorque,
                       s.steeringTorqueEps, s.leftBlinker, s.rightBlinker, s.gasPressed, s.brakePressed, s.leftBlindspot,
-                      s.rightBlindspot, s.cruiseState.enabled, s.cruiseState.available, int(s.gearShifter.raw)))
+                      s.rightBlindspot, s.cruiseState.enabled, s.cruiseState.available, int(s.gearShifter.raw),
+                      getattr(s, "canValid", True)))
       for b in s.buttonEvents:
         self.btn.append((t - self.t0, int(b.type.raw), bool(b.pressed)))
     elif w == "carControl":
@@ -128,12 +150,13 @@ class Extractor:
       self.sp.append((t, getattr(m.carStateSP, "steerFlags", 0), getattr(m.carStateSP, "gatewayFlags", 0),
                       getattr(m.carStateSP, "lateralControlPaused", False), getattr(m.carStateSP, "lateralPausedReason", 0)))
     elif w == "carControlSP":
-      self.ccsp.append((t, getattr(m.carControlSP, "latGranted", True)))
+      self.ccsp.append((t, getattr(m.carControlSP, "latGranted", True), getattr(m.carControlSP, "gpsFixSeen", -1)))
     elif w == "selfdriveStateSP":
       x = m.selfdriveStateSP.mads
       self.mads.append((t, int(x.state.raw), x.enabled, x.active, x.available))
     elif w == "pandaStates":
       self.pnd.append((t, *panda_allowed(m.pandaStates)))
+      self.rx.append((t, any(getattr(ps, "safetyRxChecksInvalid", False) for ps in m.pandaStates)))
     elif w == "radarState":
       x = m.radarState.leadOne
       self.ld.append((t, x.present, x.dRel, x.vRel))
@@ -141,10 +164,27 @@ class Extractor:
       d = m.modelV2
       lm = min(d.laneLineProbs[1], d.laneLineProbs[2]) if len(d.laneLineProbs) >= 4 else 1.0
       self.md.append((t, d.action.desiredCurvature, lm, int(d.meta.laneChangeState.raw)))
+      ds = list(d.meta.desireState)
+      self.mdl.append((t, ds[1] + ds[2] if len(ds) > 4 else 0.0, ds[3] + ds[4] if len(ds) > 4 else 0.0,
+                       int(d.meta.laneChangeDirection.raw), d.frameDropPerc, t - self.last_model if self.last_model else 0.0))
+      self.last_model = t
     elif w == "livePose":
       self.lp.append((t, np.degrees(m.livePose.angularVelocityDevice.z)))
     elif w == "selfdriveState":
       self.sd.append((t, m.selfdriveState.active))
+      a = (m.selfdriveState.alertText1, m.selfdriveState.alertText2, str(m.selfdriveState.alertStatus))
+      if a != self.prev_alert:
+        if a[0] or a[1]:
+          self.alerts.append((t - self.t0, *a))
+        self.prev_alert = a
+    elif w == "onroadEventsSP":
+      cur = {str(e.name) for e in m.onroadEventsSP.events}
+      for nm in cur - self.prev_ev_sp:
+        self.events_sp.append((t - self.t0, nm))
+      self.prev_ev_sp = cur
+    elif w == "deviceState":
+      x = m.deviceState
+      self.dev.append((t, x.freeSpacePercent, max(list(x.cpuTempC) + [0.0]), x.memoryUsagePercent))
     elif w == "onroadEvents":
       cur = {str(e.name) for e in m.onroadEvents}
       for nm in cur - self.prev_ev:
@@ -154,8 +194,22 @@ class Extractor:
       g = getattr(m, w)
       if g.latitude != 0.0:
         self.gp.append((t, g.latitude, g.longitude))
-    elif w == "initData" and not self.commit:
-      self.commit = m.initData.gitCommit[:9]
+      if w == "gpsLocationExternal":
+        self.fix.append((t, bool(getattr(g, "hasFix", False))))
+    elif w == "initData":
+      x = m.initData
+      if x.gitCommit not in self.commits:
+        self.commits.append(x.gitCommit)
+      if not self.commit:
+        self.commit = x.gitCommit[:9]
+        b = self.build; b["commit_full"] = x.gitCommit; b["branch"] = x.gitBranch; b["dirty"] = int(bool(x.dirty))
+        try:
+          P = {e.key: bytes(e.value) for e in x.params.entries}
+          b["git_diff_len"] = len(P["GitDiff"]) if "GitDiff" in P else -1
+          b["build_desc"] = P.get("UpdaterCurrentDescription", b"").decode(errors="replace")
+          b["lane_turn"] = ",".join(P.get(k, b"").decode(errors="replace") for k in ("LaneTurnDesire", "LaneTurnValue"))
+        except Exception:  # noqa: BLE001 - params are optional
+          pass
     elif w in ("liveParameters", "vehicleParameters"):       # the schema's name differs by version
       lp = getattr(m, w)
       self.lpar.append((t, lp.steerRatio, lp.angleOffsetDeg, lp.angleOffsetAverageDeg))
@@ -185,6 +239,13 @@ class Extractor:
             self.fcam.append((t, *parse_fcam(bytes(c.dat))))
         elif c.address == 866 and c.src == 2 and len(c.dat) >= 8:
           self.lnc.append((t, c.dat[7] & 3, (c.dat[7] >> 4) & 3))
+        elif c.address == 0x400 and c.src in (0, 1) and len(c.dat) >= 5:
+          if self.blk_bus is None or c.src < self.blk_bus:
+            self.blk_bus = c.src
+          if c.src == self.blk_bus:
+            self.blk.append((t, c.dat[4] & 7))
+        elif c.address == 0x3E3 and c.src < 128 and len(c.dat) >= 12:
+          self.lamp.append((t, (c.dat[11] >> 5) & 1, (c.dat[11] >> 7) & 1))
       if nrej:
         self.rj.append((t, nrej))
     elif w == "sendcan":
@@ -251,7 +312,21 @@ class Extractor:
       fcam_l=res(self.fcam, 1, kind="since"), fcam_r=res(self.fcam, 2, kind="since"),
       fcam_ql=res(self.fcam, 3, -1.0, kind="since").astype(np.int64), fcam_qr=res(self.fcam, 4, -1.0, kind="since").astype(np.int64),
       lp_sr=res(self.lpar, 1, kind="since"), lp_ao=res(self.lpar, 2, kind="since"), lp_aoa=res(self.lpar, 3, kind="since"),
-      cal_roll=res(self.cal, 1, kind="since"), cal_pitch=res(self.cal, 2, kind="since"), cal_yaw=res(self.cal, 3, kind="since"))
+      cal_roll=res(self.cal, 1, kind="since"), cal_pitch=res(self.cal, 2, kind="since"), cal_yaw=res(self.cal, 3, kind="since"),
+      # v8
+      blink_state=res(self.blk, 1, -1.0, kind="since").astype(np.int64),
+      lamp_l=res(self.lamp, 1, -1.0, kind="since").astype(np.int64), lamp_r=res(self.lamp, 2, -1.0, kind="since").astype(np.int64),
+      des_turn=res(self.mdl, 1, kind="since"), des_lc=res(self.mdl, 2, kind="since"),
+      lc_dir=res(self.mdl, 3, kind="since").astype(np.int64), frame_drop=res(self.mdl, 4, kind="since"),
+      model_dt=res(self.mdl, 5, kind="since"), can_valid=CS[:, 17] > 0.5,
+      free_pct=res(self.dev, 1, -1.0, kind="since"), cpu_temp=res(self.dev, 2, kind="since"), mem_pct=res(self.dev, 3, kind="since"),
+      gps_fix=res(self.fix, 1, -1.0, kind="since").astype(np.int64),
+      gps_seen=res(self.ccsp, 2, -1.0, kind="since").astype(np.int64),
+      rx_invalid=res(self.rx, 1, -1.0, kind="since").astype(np.int64),
+      alerts=np.array(self.alerts, dtype=object).reshape(-1, 4), events_sp=np.array(self.events_sp, dtype=object).reshape(-1, 2),
+      invalid=np.array([(k, *c) for k, c in sorted(self.invalid.items())], dtype=object).reshape(-1, 4),
+      commits=np.array(self.commits, dtype=str), segs=np.array(self.segs, np.int64), seg_err=np.array(self.seg_err, np.int64),
+      **{k: np.array(x) for k, x in self.build.items()})
 
 
 def extract(msgs):
@@ -265,17 +340,23 @@ def main(r, out, log_dir=LOG_DIR):
   files = sorted(glob.glob(f"{log_dir}/*_{r}--*--rlog.zst"), key=lambda f: int(f.split("--")[-2]))
   ex = Extractor()
   for f in files:
+    ex.segs.append(int(f.split("--")[-2]))
     try:
-      for m in LogReader(f):
-        ex.feed(m)
+      with warnings.catch_warnings(record=True) as wn:   # LogReader only warns on a truncated segment
+        warnings.simplefilter("always")
+        for m in LogReader(f):
+          ex.feed(m)
+      if any("Corrupted" in str(x.message) for x in wn):
+        ex.seg_err.append(ex.segs[-1])
     except Exception as e:  # noqa: BLE001 - a truncated last segment must not lose the route
+      ex.seg_err.append(ex.segs[-1])
       print(f"  {f.split('/')[-1]}: {type(e).__name__}: {e}")
   d = ex.result()
   if d is None:
     print(f"== {r}: no carState"); return
   np.savez_compressed(out, **d)
-  print(f"== {r}: {len(d['T']) / 6000:.1f} min, commit {ex.commit}, lat active {np.mean(d['lat']) * 100:.0f}%, "
-        f"events {len(d['events'])}")
+  print(f"== {r}: {len(d['T']) / 6000:.1f} min, commit {ex.commit} ({ex.build['branch']}, dirty {ex.build['dirty']}), "
+        f"segments {len(ex.segs)} (truncated {ex.seg_err}), lat active {np.mean(d['lat']) * 100:.0f}%, events {len(d['events'])}")
 
 
 if __name__ == "__main__":
