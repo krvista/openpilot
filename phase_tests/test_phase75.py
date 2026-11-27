@@ -156,7 +156,7 @@ def outrun(v_kph, step_can, n=40):
   for _ in range(250):
     sim.step(v=v, lfa_state=0, lead_dist=6.0)
   for _ in range(n):
-    sim.step(v=v, lfa_state=0, lead_dist=6.0, mdps_step_can=step_can)
+    sim.step(v=v, lfa_state=0, lead_dist=6.0, mdps_step_can=step_can, tq=200.0)   # Phase 85: a wheel the driver moves
   return sim.cc.wheel_outrun_passive
 
 
@@ -932,7 +932,7 @@ def test_reason_codes():
   assert sim.cc.lat_passive_reason == ccmod.PR_REVERSE
   sim = road()
   for _ in range(20):
-    sim.step(v=80.0 * KPH, lfa_state=0, mdps_step_can=30)
+    sim.step(v=80.0 * KPH, lfa_state=0, mdps_step_can=30, tq=200.0)   # Phase 85: a wheel the driver moves
   assert sim.cc.wheel_outrun_passive and sim.cc.lat_passive_reason == ccmod.PR_WHEEL_OUTRUN
   assert not sim.cc.lat_passive_indicated                             # not a 'paused' state for the display, as before
   sim.step(v=80.0 * KPH, lfa_state=0, lat_active=False)

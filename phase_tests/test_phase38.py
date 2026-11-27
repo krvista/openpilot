@@ -116,6 +116,8 @@ class TestPhase38_3WheelOutrunPassive:
     active0, _ = _frame_active(sim); assert active0
     dmax = _panda_delta(sim, v); step = dmax + 0.3 + 0.05          # clearly above allowance + 2 CAN margin
     passive_frames = 0; w = 8.0
+    for i in range(8):                                             # Phase 85: the driver's torque is there for 80 ms first
+      sim.step(v=v, wheel=w, cmd=8.0, tq=190.0, pressed=False, mdps_angle_2=w)
     for i in range(12):                                            # wheel yanked back by the driver
       w -= step
       sim.step(v=v, wheel=w, cmd=8.0, tq=190.0, pressed=False, mdps_angle_2=w)
@@ -194,6 +196,8 @@ class TestPhase38_3WheelOutrunPassive:
       v = 25.3; sim = Sim(); settle(sim, v=v)
       run_signal(sim, 50, v=v, wheel=8.0, cmd=8.0, tq=0.0, mdps_angle_2=8.0)
       w = 8.0
+      for _ in range(8):                                           # Phase 85: 80 ms of driver torque first
+        sim.step(v=v, wheel=w, cmd=8.0, tq=190.0, mdps_angle_2=w)
       for _ in range(4):
         w -= _panda_delta(sim, v) + 0.35
         sim.step(v=v, wheel=w, cmd=8.0, tq=190.0, mdps_angle_2=w)

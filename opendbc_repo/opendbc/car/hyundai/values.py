@@ -825,6 +825,19 @@ class CarControllerParams:
   WHEEL_OUTRUN_ENTRY_FRAMES = 2      # consecutive over-allowance frames before going passive (review: no single-frame trigger)
   WHEEL_OUTRUN_EXIT_FRAMES  = 5      # consecutive frames within the allowance before going active again
   WHEEL_OUTRUN_MAX_FRAMES   = 100    # passive dwell cap (1 s): then active resumes from the wheel and must re-qualify
+  # Phase 85 (routes b4 1463 s / b6 4981 s, report 118): hands off in a curve at 75 km/h, a road impact moved the MDPS
+  # angle 0.3 deg per sample for two samples -> passive frame -> no torque -> the wheel ran from 17 deg to 0 in 0.25 s
+  # (which is itself 'fast', so the passive state held 0.4-0.75 s) and the car left its line by 30-80 cm. The passive
+  # frame exists for a wheel the driver moves: it is now entered only if the driver had a part in the last
+  # DRIVER_RECENT_FRAMES - debounced grip, EPS pressed flag, authority already below DRIVER_GAIN (a clear yield,
+  # blinker concession or ramp), or column torque above DRIVER_NM with one sign for DRIVER_NM_FRAMES (the impacts alternate
+  # sign within 2-3 samples: +233 +428 +336 -25 -331 -351). 73 routes: 99 of 1432 entries (21 of them with the wheel running to centre) had none of these
+  # and no panda rejection near them; the other 1333 are unchanged. Kill: WHEEL_OUTRUN_NEEDS_DRIVER = False.
+  WHEEL_OUTRUN_NEEDS_DRIVER = True
+  WHEEL_OUTRUN_DRIVER_GAIN  = 0.5     # hands-off authority itself sits below 0.85 for 8-21 % of the time (routes b4 / b6)
+  WHEEL_OUTRUN_DRIVER_RECENT_FRAMES = 10
+  WHEEL_OUTRUN_DRIVER_NM    = 150.0
+  WHEEL_OUTRUN_DRIVER_NM_FRAMES = 8
   # the step is measured per MDPS CAN SAMPLE (carstate mdps_angle_2_step_can), not per control frame: card's
   # loop and the 100 Hz MDPS drift and a frame that swallows two samples would double a frame-differenced step
   # Phase 37a: high-speed RECOVERY softening ("correct the error over a longer

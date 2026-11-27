@@ -602,6 +602,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.wheel_outrun_quiet = 0
     self.wheel_outrun_hot = 0           # consecutive over-allowance frames (entry debounce)
     self.wheel_outrun_frames = 0        # frames spent passive in this episode (dwell cap)
+    self.wheel_outrun_driver_age = 10 ** 6   # Phase 85: frames since the driver last had a part in the wheel's motion
+    self.wheel_outrun_tq_run = 0             # Phase 85: consecutive frames of column torque above DRIVER_NM, signed
     self.meas_can_prev = None
     # Phase 37a rain mode: wiper debounce counters and the ramped weight 0..1
     self.wiper_on_frames = 0
@@ -2534,8 +2536,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       if CarControllerParams.WHEEL_OUTRUN_PASSIVE:
         _over = _wheel_step > _d_can + _outrun_margin
         self.wheel_outrun_hot = self.wheel_outrun_hot + 1 if _over else 0
+        # Phase 85: the passive frame is for a wheel the DRIVER moves. With full authority and no grip the fast samples
+        # are a road impact; going passive there drops the torque in mid-curve and the wheel runs to centre.
+        _tq_sign = (0 if abs(steer_torque_safe) < CarControllerParams.WHEEL_OUTRUN_DRIVER_NM
+                    else (1 if steer_torque_safe > 0 else -1))
+        self.wheel_outrun_tq_run = (self.wheel_outrun_tq_run + _tq_sign if _tq_sign * self.wheel_outrun_tq_run > 0
+                                    else _tq_sign)   # an impact alternates within 2-3 samples, a hand does not
+        if (self.driver_pressed or bool(CS.out.steeringPressed)
+            or self.aci_gain_last < CarControllerParams.WHEEL_OUTRUN_DRIVER_GAIN
+            or abs(self.wheel_outrun_tq_run) >= CarControllerParams.WHEEL_OUTRUN_DRIVER_NM_FRAMES):
+          self.wheel_outrun_driver_age = 0
+        else:
+          self.wheel_outrun_driver_age = min(self.wheel_outrun_driver_age + 1, 10 ** 6)
+        _driver = (not CarControllerParams.WHEEL_OUTRUN_NEEDS_DRIVER
+                   or self.wheel_outrun_driver_age <= CarControllerParams.WHEEL_OUTRUN_DRIVER_RECENT_FRAMES)
         if not self.wheel_outrun_passive:
-          if self.wheel_outrun_hot >= CarControllerParams.WHEEL_OUTRUN_ENTRY_FRAMES:
+          if self.wheel_outrun_hot >= CarControllerParams.WHEEL_OUTRUN_ENTRY_FRAMES and _driver:
             self.wheel_outrun_passive = True
             self.wheel_outrun_quiet = 0
             self.wheel_outrun_frames = 0
