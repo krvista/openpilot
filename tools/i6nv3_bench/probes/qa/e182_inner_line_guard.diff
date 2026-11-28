@@ -1,0 +1,196 @@
+diff --git a/openpilot/selfdrive/controls/controlsd.py b/openpilot/selfdrive/controls/controlsd.py
+index 176842aa..44c07c3f 100755
+--- a/openpilot/selfdrive/controls/controlsd.py
++++ b/openpilot/selfdrive/controls/controlsd.py
+@@ -535,6 +535,12 @@ LANE_STATE_RESET = True
+ # Kill: LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6].
+ LANE_FIT_GAIN = 0.35
+ LANE_FIT_SPEED_MS = [40.0 / 3.6, 55.0 / 3.6]   # Phase 88 (was 45-60 km/h)
++LANE_GUARD_GAIN = 0.7
++LANE_GUARD_INNER_M = 1.45
++LANE_GUARD_CENTER_M = 0.10
++LANE_GUARD_FADE_M = 0.15
++LANE_GUARD_K = [5.0e-3, 8.0e-3]
++LANE_GUARD_SPEED_MS = [30.0 / 3.6, 35.0 / 3.6, 55.0 / 3.6, 60.0 / 3.6]
+ LANE_FIT_T_S = 1.5
+ LANE_FIT_RANGE_S = 1.0
+ LANE_FIT_RANGE_M = (15.0, 45.0)
+@@ -826,10 +832,11 @@ class Controls(ControlsExt):
+         c0, cd_, pd, w0, wd = pv
+         if (LANE_CENTER_WIDTH_M[0] <= w0 <= LANE_CENTER_WIDTH_M[1] and LANE_CENTER_WIDTH_M[0] <= wd <= LANE_CENTER_WIDTH_M[1]
+             and abs(wd / w0 - 1.0) <= LANE_CENTER_WIDTH_RATIO):
+-          w = (float(_interp(mf.lane_min_p, LANE_CENTER_PROB, [0.0, 1.0]))
+-               * float(_interp(v, LANE_CENTER_SPEED_MS, [0.0, 1.0])))
++          wp = float(_interp(mf.lane_min_p, LANE_CENTER_PROB, [0.0, 1.0]))
++          w = wp * float(_interp(v, LANE_CENTER_SPEED_MS, [0.0, 1.0]))
+           if LANE_STATE_RESET and not math.isfinite(w):
+             w = 0.0
++          wg = wp if w > 0.0 else 0.0                                              # Phase 89
+           if LANE_AVOID_RELEASE and w > 0.0 and math.isfinite(k_action):          # Phase 83
+             off = pd - cd_
+             if usual is None:
+@@ -844,6 +851,7 @@ class Controls(ControlsExt):
+             n_us = min(n_us + 1, 10 ** 6)
+             seen = True
+             w *= wa
++            wg *= wa
+             w_i = w if wa >= 0.5 else 0.0                                          # mostly released: the integral is held
+           else:
+             w_i = w
+@@ -860,6 +868,22 @@ class Controls(ControlsExt):
+               lf = max(v * LANE_FIT_T_S, 10.0)
+               fit = 1.432 * e0 / lf ** 2 + 1.653 * (psi_l - LANE_FIT_ARM_M * k_l) / lf + k_l
+               raw_f = float(_clip(LANE_FIT_GAIN * wf * (fit - k_action), -cap - raw - raw_e, cap - raw - raw_e))
++          if LANE_GUARD_GAIN > 0.0 and wg > 0.0 and math.isfinite(k_action):       # Phase 89: inner-line guard
++            wg *= (float(_interp(v, LANE_GUARD_SPEED_MS, [0.0, 1.0, 1.0, 0.0]))
++                   * float(_interp(abs(k_action), LANE_GUARD_K, [0.0, 1.0])))
++            sgn = 1.0 if k_action > 0.0 else -1.0
++            # how much nearer the car is to the curve's inner line than it should be (> 0 = too near)
++            x_in = min(LANE_GUARD_INNER_M, 0.5 * w0 - LANE_GUARD_CENTER_M) - (0.5 * w0 + sgn * c0)
++            x_in = max(x_in, -LANE_GUARD_FADE_M)
++            if wg > 0.0:
++              ft = mf.lane_fit(float(_clip(v * LANE_FIT_RANGE_S, LANE_FIT_RANGE_M[0], LANE_FIT_RANGE_M[1])))
++              if ft is not None:
++                _, psi_l, k_l = ft
++                lf = max(v * LANE_FIT_T_S, 10.0)
++                fit_g = -1.432 * sgn * x_in / lf ** 2 + 1.653 * (psi_l - LANE_FIT_ARM_M * k_l) / lf + k_l
++                raw_g = float(_clip(LANE_GUARD_GAIN * wg * (fit_g - k_action), -cap - raw - raw_e, cap - raw - raw_e))
++                if math.isfinite(raw_g) and sgn * raw_g < sgn * raw_f:            # only ever further to the outside
++                  raw_f = raw_g
+     p += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw - p)
+     pe += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_e - pe)
+     pf += DT_CTRL / (LANE_CENTER_TAU_S + DT_CTRL) * (raw_f - pf)
+diff --git a/tools/i6nv3_bench/sim/roadsim.py b/tools/i6nv3_bench/sim/roadsim.py
+index d01f0b94..5c6be578 100644
+--- a/tools/i6nv3_bench/sim/roadsim.py
++++ b/tools/i6nv3_bench/sim/roadsim.py
+@@ -58,6 +58,7 @@ HEAD_NAMES = (
+   "LANE_FIT_GAIN", "LANE_FIT_SPEED_MS", "LANE_FIT_T_S", "LANE_FIT_RANGE_S", "LANE_FIT_RANGE_M", "LANE_FIT_ARM_M",
+   "LANE_AVOID_RELEASE", "LANE_AVOID_DEV_M", "LANE_AVOID_CURVE", "LANE_AVOID_USUAL_S", "LANE_AVOID_RECOVER_S",
+   "LANE_AVOID_RESET_S", "LANE_AVOID_WARMUP_S",
++  "LANE_GUARD_GAIN", "LANE_GUARD_INNER_M", "LANE_GUARD_CENTER_M", "LANE_GUARD_FADE_M", "LANE_GUARD_K", "LANE_GUARD_SPEED_MS",
+ )
+ # used only when controlsd.py is not there (the file copied out of the repository): the values of Phase 88 (b385a975)
+ FALLBACK = dict(
+@@ -71,6 +72,8 @@ FALLBACK = dict(
+   LANE_FIT_RANGE_M=(15.0, 45.0), LANE_FIT_ARM_M=1.8,
+   LANE_AVOID_RELEASE=True, LANE_AVOID_DEV_M=(0.20, 0.45), LANE_AVOID_CURVE=0.25, LANE_AVOID_USUAL_S=10.0,
+   LANE_AVOID_RECOVER_S=1.5, LANE_AVOID_RESET_S=5.0, LANE_AVOID_WARMUP_S=3.0,
++  LANE_GUARD_GAIN=0.7, LANE_GUARD_INNER_M=1.45, LANE_GUARD_CENTER_M=0.10, LANE_GUARD_FADE_M=0.15, LANE_GUARD_K=(5.0e-3, 8.0e-3),
++  LANE_GUARD_SPEED_MS=(30.0 / 3.6, 35.0 / 3.6, 55.0 / 3.6, 60.0 / 3.6),
+ )
+ 
+ 
+@@ -164,7 +167,7 @@ DRIVES = dict(
+ def params(**kw):
+   P = dict(DEFAULTS)
+   for k, v in kw.items():
+-    if k not in P:
++    if k not in P and not k.startswith("_"):
+       raise KeyError(f"unknown parameter {k}")
+     P[k] = v
+   return P
+@@ -261,9 +264,10 @@ class Obs:
+     wheel_deg       wheel angle in curvature-sign degrees
+     k_prev          the previous frame's final command
+     plan_off        plan(L) - centre(L), m (Phase 83 watches it against its usual value); = -cL_minus_plan
++    lane_w          lane width at the car, m (scenario key lane_w, default 3.4) - the Phase 89 guard measures to the inner line
+   """
+   __slots__ = ("t", "v", "new_frame", "k_action", "k_lead", "c0", "cL_minus_plan", "L", "psi_lane", "k_lane",
+-               "k_lane_ahead", "lane_prob", "usable", "k_meas", "wheel_deg", "k_prev", "plan_off")
++               "k_lane_ahead", "lane_prob", "usable", "k_meas", "wheel_deg", "k_prev", "plan_off", "lane_w")
+ 
+ 
+ def fit_lead_s(v, P):
+@@ -284,6 +288,8 @@ def head_controller(P):
+   FG = P["LANE_FIT_GAIN"]; FSPD = P["LANE_FIT_SPEED_MS"]; FT = P["LANE_FIT_T_S"]; DA = P["FIT_ARM_ERR_M"]; NZ = P["FIT_NOISE"]
+   AV = bool(P["LANE_AVOID_RELEASE"]); ADEV = P["LANE_AVOID_DEV_M"]; ACRV = P["LANE_AVOID_CURVE"]; AUS = P["LANE_AVOID_USUAL_S"]
+   AREC = P["LANE_AVOID_RECOVER_S"]; ARST = P["LANE_AVOID_RESET_S"]; AWARM = P["LANE_AVOID_WARMUP_S"]
++  GG = P["LANE_GUARD_GAIN"]; GIN = P["LANE_GUARD_INNER_M"]; GCEN = P["LANE_GUARD_CENTER_M"]; GFADE = P["LANE_GUARD_FADE_M"]
++  GK = P["LANE_GUARD_K"]; GSPD = P["LANE_GUARD_SPEED_MS"]
+   a_lp = DT / (TAU + DT); a_wo = DT / (ELWO + DT); a_el = DT / (ELTAU + DT); a_rec = DT / (AREC + DT)
+   s = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]     # p, integ, pe, entry-lead lp, washout, fit
+   av = [None, 1.0, 0, 0]                 # usual, wa, gap, n_us
+@@ -297,7 +303,9 @@ def head_controller(P):
+       nz[1] += 0.05 / 0.55 * (-nz[1]) + rng.normal() * 1.5e-3 * NZ * math.sqrt(2 * 0.05 / 0.55)
+     if o.usable and W > 0.0:
+       dist = o.L
+-      w = _interp(o.lane_prob, PROB, (0.0, 1.0)) * _interp(v, SPD, (0.0, 1.0))
++      wp = _interp(o.lane_prob, PROB, (0.0, 1.0))
++      w = wp * _interp(v, SPD, (0.0, 1.0))
++      wg = wp if w > 0.0 else 0.0                                                # Phase 89
+       if AV and w > 0.0:                                                         # Phase 83
+         off = o.plan_off
+         if usual is None:
+@@ -311,6 +319,7 @@ def head_controller(P):
+         n_us = min(n_us + 1, 10 ** 6)
+         seen = True
+         w *= wa
++        wg *= wa
+         w_i = w if wa >= 0.5 else 0.0
+       else:
+         w_i = w
+@@ -324,16 +333,34 @@ def head_controller(P):
+         lo, hi = -cap - raw, cap - raw
+         raw_e = lo if raw_e < lo else (hi if raw_e > hi else raw_e)
+       wf = w * _interp(v, FSPD, (0.0, 1.0)) if FG > 0.0 else 0.0
+-      if wf > 0.0:                                                               # Phase 82 / 88
++      if GG > 0.0 and wg > 0.0:                                                  # Phase 89: weight of the inner-line guard
++        sgn = 1.0 if o.k_action > 0.0 else -1.0
++        lw = getattr(o, "lane_w", 3.4)
++        x_in = min(GIN, 0.5 * lw - GCEN) - (0.5 * lw + sgn * o.c0)
++        wg *= _interp(v, GSPD, (0.0, 1.0, 1.0, 0.0)) * _interp(abs(o.k_action), GK, (0.0, 1.0))
++        if P.get("_GMODE", "w") == "w":
++          wg *= _interp(x_in, (-GFADE, 0.0), (0.0, 1.0))
++        else:
++          x_in = max(x_in, -GFADE)
++      else:
++        wg = 0.0
++      if wf > 0.0 or wg > 0.0:                                                   # Phase 82 / 88 / 89
+         tl = fit_lead_s(v, P)            # the quadratic's curvature is the lane's about half its range ahead
+         f = min(max((tl - 0.5) / 0.5, 0.0), 1.0)
+         k_l = (1.0 - f) * o.k_lane_ahead[0] + f * o.k_lane_ahead[1] + nz[0]
+         psi_c = o.psi_lane + nz[1] + DA * k_l          # heading at the car = controlsd's (psi_l - LANE_FIT_ARM_M * k_l)
+         lf = max(v * FT, 10.0)
+-        fit = 1.432 * e0 / (lf * lf) + 1.653 * psi_c / lf + k_l
+-        raw_f = FG * wf * (fit - o.k_action)
+         lo, hi = -cap - raw - raw_e, cap - raw - raw_e
+-        raw_f = lo if raw_f < lo else (hi if raw_f > hi else raw_f)
++        if wf > 0.0:
++          fit = 1.432 * e0 / (lf * lf) + 1.653 * psi_c / lf + k_l
++          raw_f = FG * wf * (fit - o.k_action)
++          raw_f = lo if raw_f < lo else (hi if raw_f > hi else raw_f)
++        if wg > 0.0:
++          fit_g = -1.432 * sgn * x_in / (lf * lf) + P.get("_GD", 1.0) * 1.653 * psi_c / lf + k_l
++          raw_g = GG * wg * (fit_g - o.k_action) if P.get("_GMODE", "w") != "p" else GG * wg * (fit_g - k_l)
++          raw_g = lo if raw_g < lo else (hi if raw_g > hi else raw_g)
++          if sgn * raw_g < sgn * raw_f:                # only ever further to the outside
++            raw_f = raw_g
+     s[0] += a_lp * (raw - s[0]); s[2] += a_lp * (raw_e - s[2]); s[5] += a_lp * (raw_f - s[5])
+     if w_i > 0.0:
+       if abs(o.k_action) < IMAXK and KI > 0.0:
+@@ -381,6 +408,7 @@ def simulate(scn, P=None, controller=None, ens="nominal", drive="none", seed=0,
+   rng = np.random.default_rng(seed)
+   prob = np.asarray(scn.get("prob", np.ones(n)), float); usable = np.asarray(scn.get("usable", np.ones(n, bool)), bool)
+   shift = np.asarray(scn.get("lane_shift", np.zeros(n)), float)
++  LWl = (np.zeros(n) + np.asarray(scn.get("lane_w", 3.4), float)).tolist()
+   vk = V * 3.6
+   BE = np.interp(vk, M["BE_KPH"], M["BE"]) * M["be_scale"]
+   DEGK = np.interp(vk, P["DEG_PER_K_KPH"], P["DEG_PER_K"])
+@@ -422,7 +450,7 @@ def simulate(scn, P=None, controller=None, ens="nominal", drive="none", seed=0,
+   E = [0.0] * n; EM = [0.0] * n; PS = [0.0] * n; KM = [0.0] * n; KC = [0.0] * n; KCAR = [0.0] * n; WH = [0.0] * n; RQ = [0.0] * n
+   PARTS = [None] * n
+   o = Obs(); o.k_action = k0; o.k_lead = 0.0; o.c0 = -(e - shl[0]); o.cL_minus_plan = 0.0; o.plan_off = 0.0; o.L = 30.0; o.psi_lane = -psi
+-  o.k_prev = k0; o.k_lane = KSl[0]; o.k_lane_ahead = (KA0[0], KA1[0], KA2[0])
++  o.k_prev = k0; o.k_lane = KSl[0]; o.k_lane_ahead = (KA0[0], KA1[0], KA2[0]); o.lane_w = LWl[0]
+   em = e - shl[0]; kmodel = k0
+   exp = math.exp
+   for i in range(n):
+@@ -444,6 +472,7 @@ def simulate(scn, P=None, controller=None, ens="nominal", drive="none", seed=0,
+       plan_rel = pst + (em - pst) * (1.0 + wn * tL) * ex + pm * L * ex + NPl[i]
+       o.k_action = kmodel; o.k_lead = KLl[j]; o.c0 = -em; o.cL_minus_plan = -plan_rel; o.plan_off = plan_rel; o.L = L; o.psi_lane = -pm
+       o.k_lane = KSl[j]; o.k_lane_ahead = (KA0[j], KA1[j], KA2[j])
++    o.lane_w = LWl[i]
+     o.t = i * DT; o.v = v; o.new_frame = nf; o.lane_prob = probl[i]; o.usable = usl[i]
+     o.k_meas = gain * GVl[i] * kveh + Dl[i]; o.wheel_deg = wheel; o.k_prev = kprev
+     out = ctrl(o)
