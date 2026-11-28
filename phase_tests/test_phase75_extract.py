@@ -38,7 +38,7 @@ def frame(name, src, values):
   return addr, dat, src
 
 
-def build(v6=True, v8=True):
+def build(v6=True, v8=True, v9=True):
   """3 s: MADS enables at 1 s, the panda grants lateral at 1.2 s (latGranted follows), LFA button at 0.5 s, a lead from
   2 s, FCA_ESA active for 2.0-2.5 s, passive reason 9 (not granted) for 1.0-1.2 s, gear park -> drive at 0.3 s."""
   msgs = []
@@ -98,7 +98,23 @@ def build(v6=True, v8=True):
         e, md = ev(t + (0.03 if i == 200 else 0.0), "modelV2"); md.frameDropPerc = 3.0 if i == 200 else 0.0
         md.meta.desireState = [0.1, 0.0, 0.2, 0.6, 0.1, 0.0, 0.0, 0.0] if rel >= 1.0 else [1.0] + [0.0] * 7
         md.meta.laneChangeDirection = "left" if rel >= 1.0 else "none"; md.meta.laneChangeState = "laneChangeStarting" if rel >= 1.0 else "off"
+        if v9:   # lane lines at the car -1.7 / +1.8 m (right line 0.1 m further out from 2 s), stds, probs, road edges, frame id
+          md.frameId = 700 + i // 5; ll = md.init("laneLines", 4); re = md.init("roadEdges", 2)
+          for ln, y in zip(ll, (-5.0, -1.7, 1.8 if rel < 2.0 else 1.9, 5.2), strict=True):
+            ln.y = [y, y + 0.5]
+          re[0].y = [-6.0, -6.5]; re[1].y = [7.0, 7.5]
+          md.laneLineStds = [0.5, 0.05, 0.07, 0.6]; md.laneLineProbs = [0.2, 0.9, 0.8, 0.3]; md.roadEdgeStds = [0.9, 1.1]
         msgs.append(e)
+        if v9:
+          # locationd of this fork: liveLocationKalman (no livePose in the schema). Yaw rate 0.05 rad/s from 1 s, valid from 0.5 s
+          e, k = ev(t + 0.002, "liveLocationKalman")
+          k.angularVelocityCalibrated.value = [0.001, -0.002, 0.05 if rel >= 1.0 else 0.0]; k.angularVelocityCalibrated.valid = rel >= 0.5
+          k.angularVelocityDevice.value = [9.0, 9.0, 9.0]   # the device frame is not what yaw is read from
+          k.calibratedOrientationNED.value = [0.03, -0.01, 1.5]; msgs.append(e)
+          # road camera encoder index: 20 fps, the file changes at 1.5 s (segment 1 starts at frame index 0), shutter 60 ms earlier
+          e, x = ev(t + 0.004, "narrowRoadEncodeIdx"); x.frameId = 700 + i // 5; x.segmentNum = int(rel >= 1.5)
+          x.segmentId = i // 5 - (30 if rel >= 1.5 else 0); x.timestampSof = int(round((t - 0.06) * 1e9)); msgs.append(e)
+          e, vp = ev(t + 0.003, "vehicleParameters"); vp.steerRatio = 15.0; vp.roll = 0.02; vp.stiffnessFactor = 0.97; msgs.append(e)
       if i % 50 == 10:
         e, dv = ev(t, "deviceState"); dv.freeSpacePercent = 12.5 - rel; dv.cpuTempC = [50.0, 61.0]; dv.memoryUsagePercent = 60
         msgs.append(e)
@@ -134,7 +150,7 @@ def route(tmp_path_factory):
 
 
 def test_version_and_grid(route):
-  assert int(route["version"]) == rx.VERSION == 8
+  assert int(route["version"]) == rx.VERSION == 9
   assert len(route["T"]) == N and str(route["commit"]) == "012345678"
   n = len(route["T"])
   for k in route.files:
@@ -221,6 +237,10 @@ def test_parsers_agree_with_the_dbc(name, values, parse, want):
 def test_log_without_the_new_messages_keeps_defaults():
   d = rx.extract(m.as_reader() for m in build(v6=False, v8=False))
   n = len(d["T"])
+  # v9 defaults: no locationd message, no lane lines, no encoder index
+  assert not d["yaw"].any() and (d["yaw_valid"] == -1).all() and not d["pose_roll"].any() and not d["lp_roll"].any()
+  assert not d["ll_y_l"].any() and not d["ll_std_r"].any() and (d["model_frame"] == -1).all()
+  assert (d["vid_seg"] == -1).all() and (d["vid_idx"] == -1).all() and (d["vid_t"] == -1).all()
   # v8 defaults: no 0x400 / 0x3E3 / deviceState / GPS / model message
   assert (d["blink_state"] == -1).all() and (d["lamp_l"] == -1).all() and (d["free_pct"] == -1).all()
   assert (d["gps_fix"] == -1).all() and (d["gps_seen"] == -1).all() and (d["rx_invalid"] == -1).all()
@@ -313,3 +333,51 @@ def test_v8_truncated_segment_is_listed(tmp_path):
   rx.main("000000fd", out, str(tmp_path))
   d = np.load(out, allow_pickle=True)
   assert list(d["segs"]) == [0, 1] and list(d["seg_err"]) == [1]
+
+
+def test_v9_yaw_rate_comes_from_live_location_kalman(route):
+  """Up to v8 yaw was read from livePose only - a message this schema does not have - and stayed 0 on every route."""
+  assert "livePose" not in log.Event.schema.union_fields and "liveLocationKalman" in log.Event.schema.union_fields
+  assert at(route, "yaw", 0.5) == pytest.approx(0.0, abs=1e-9) and at(route, "yaw", 2.0) == pytest.approx(np.degrees(0.05))
+  assert at(route, "yaw_valid", 0.3) == 0 and at(route, "yaw_valid", 0.7) == 1 and route["yaw_valid"][0] == -1
+  # yaw [rad/s] / v [m/s] is a curvature with the sign of k_meas: 0.05 / 10 m/s
+  assert np.radians(at(route, "yaw", 2.0)) / (route["v"][250] / 3.6) == pytest.approx(5.0e-3)
+  assert at(route, "pose_roll", 1.0) == pytest.approx(0.03) and at(route, "pose_pitch", 1.0) == pytest.approx(-0.01)
+  assert at(route, "lp_roll", 1.0) == pytest.approx(0.02) and at(route, "lp_stiff", 1.0) == pytest.approx(0.97)
+  assert at(route, "lp_sr", 1.0) == pytest.approx(15.0)
+
+
+def test_v9_live_pose_is_read_where_a_log_has_it():
+  ex = rx.Extractor()
+  cs = log.Event.new_message(); cs.logMonoTime = int(5e9); cs.init("carState")
+  pose = SimpleNamespace(which=lambda: "livePose", logMonoTime=int(4.99e9),
+                         livePose=SimpleNamespace(angularVelocityDevice=SimpleNamespace(z=0.02, valid=True)))
+  for m in (pose, cs.as_reader()):
+    ex.feed(m)
+  d = ex.result()
+  assert d["yaw"][0] == pytest.approx(np.degrees(0.02)) and d["yaw_valid"][0] == 1
+
+
+def test_v9_model_lane_lines_at_the_car(route):
+  assert at(route, "ll_y_l", 1.0) == pytest.approx(-1.7) and at(route, "ll_y_r", 1.0) == pytest.approx(1.8)
+  assert at(route, "ll_y_r", 2.5) == pytest.approx(1.9)
+  assert at(route, "ll_std_l", 1.0) == pytest.approx(0.05) and at(route, "ll_std_r", 1.0) == pytest.approx(0.07)
+  assert at(route, "ll_p_l", 1.0) == pytest.approx(0.9) and at(route, "ll_p_r", 1.0) == pytest.approx(0.8)
+  assert at(route, "re_y_l", 1.0) == pytest.approx(-6.0) and at(route, "re_y_r", 1.0) == pytest.approx(7.0)
+  assert at(route, "re_std_l", 1.0) == pytest.approx(0.9) and at(route, "re_std_r", 1.0) == pytest.approx(1.1)
+  assert at(route, "lane_min", 1.0) == pytest.approx(0.8)       # unchanged since v1: the weaker of the two lane lines
+  assert at(route, "model_frame", 1.0) == 720
+
+
+def test_v9_road_camera_video_alignment(route):
+  """vid_seg / vid_idx name the frame inside the road camera file, vid_t is its shutter time on the T axis."""
+  assert at(route, "vid_seg", 1.0) == 0 and at(route, "vid_idx", 1.0) == 20 and at(route, "vid_frame", 1.0) == 720
+  assert at(route, "vid_seg", 1.6) == 1 and at(route, "vid_idx", 1.6) == 2 and at(route, "vid_frame", 1.6) == 732
+  assert at(route, "vid_t", 1.0) == pytest.approx(1.0 - 0.06 + 0.005, abs=1e-6)   # T starts at the initData message, 5 ms early
+  assert at(route, "vid_frame", 1.0) == at(route, "model_frame", 1.0)
+
+
+def test_v9_log_of_v8_content_keeps_the_v8_series():
+  d = rx.extract(m.as_reader() for m in build(v9=False))
+  assert at(d, "des_lc", 1.5) == pytest.approx(0.7) and not d["yaw"].any() and (d["vid_seg"] == -1).all()
+  assert not d["ll_y_l"].any() and (d["model_frame"] == -1).all() and at(d, "lane_min", 1.0) == 1.0

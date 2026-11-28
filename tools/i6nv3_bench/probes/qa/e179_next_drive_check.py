@@ -283,31 +283,89 @@ def steady_curves(o):
       ts(T[np.flatnonzero(over)[::100]]))
 
 
+def shift_ms(ref, x, lo=-30, hi=100):
+  """Time shift (ms, 100 Hz series) of x after ref that maximises their normalised correlation, with a parabolic sub-sample
+  step - a scale factor or an offset on x does not move it. Returns (shift, correlation at it, True if it sits on a search
+  limit). ref / x must carry -lo frames before and hi frames after the compared span."""
+  n = len(ref) - (hi - lo); a = ref[-lo:-lo + n]; aa = (a * a).sum(); c = np.zeros(hi - lo + 1)
+  for k in range(lo, hi + 1):
+    y = x[k - lo:k - lo + n]; den = np.sqrt(aa * (y * y).sum()); c[k - lo] = (a * y).sum() / den if den > 0 else 0.0
+  j = int(np.argmax(c)); f = 0.0
+  if 0 < j < len(c) - 1:
+    d = c[j - 1] - 2 * c[j] + c[j + 1]; f = 0.5 * (c[j - 1] - c[j + 1]) / d if d < 0 else 0.0
+  return (lo + j + f) * 10.0, float(c[j]), j in (0, len(c) - 1)
+
+
+def own_cross(y, e, j, fr=0.2):
+  """ms after frame e at which y (sign-corrected) passes fr of ITS OWN rise: pre-entry level (mean of e-1.5 .. e-0.5 s) to its
+  own peak before j + 1 s. Returns (ms, pre-entry level, rise)."""
+  base = y[e - 150:e - 50].mean(); seg = y[e - 100:j + 100] - base; pk = seg.max(); i = np.flatnonzero(seg >= fr * pk)
+  if pk <= 0 or not len(i) or i[0] == 0:
+    return np.nan, base, pk
+  i = i[0]
+  return (i - 1 + (fr * pk - seg[i - 1]) / (seg[i] - seg[i - 1]) - 100) * 10.0, base, pk
+
+
+def entry_timing(km, kc, kw, e, j, s):
+  """One curve entry (e = entry frame, j = frame of the model's peak, s = its sign); km / kc / kw = model, command and wheel
+  curvature, all three smoothed with the SAME filter. Delay = shift_ms of the rate of change over 1 s before the entry .. the
+  model's peak (insensitive to amplitude: a command that is smaller early because the lane terms push outward is not 'late').
+  The shift is carried by the texture the three signals share (the rate minus its 1 s mean is 0.74 of the rate's sd in logged
+  entries); on an ideal textureless ramp an additive term that starts with the entry cannot be told from a delay.
+  Returns (wheel delay, command delay, wheel corr, command corr, own-level 20 % wheel - model, own-level 20 % command - model,
+  early amplitude command / model, early wheel / model, rise command / model, rise wheel / model); early = the rise 0.5 s
+  after the model passes 20 % of its own rise."""
+  a, b = e - 130, j + 100
+  dm, dc, dw = (np.diff(x[a:b + 1]) * s for x in (km, kc, kw))
+  tc, cc, _ = shift_ms(dm, dc); tw, cw, _ = shift_ms(dm, dw)
+  (om, bm, pm), (oc, bc, pc), (ow, bw, pw) = (own_cross(x * s, e, j) for x in (km, kc, kw))
+  i0 = e + int(round((om if np.isfinite(om) else 0.0) / 10.0)) + 50
+  rm = km[i0] * s - bm
+  return (tw, tc, cw, cc, ow - om, oc - om, (kc[i0] * s - bc) / rm if rm > 0 else np.nan, (kw[i0] * s - bw) / rm if rm > 0 else np.nan,
+          pc / pm if pm > 0 else np.nan, pw / pm if pm > 0 else np.nan)
+
+
+# LT-05 baselines (11-28, hands-off entries >= 45 km/h): Phase 79 a8 + a9 n 16, Phase 81 aa + ac + ad n 16, Phases 80-84
+# b0-b6 n 76 -> wheel delay median +265 / +274 / +267 ms (IQR 245..292, bootstrap se of the median 7), command delay
+# +29 / +29 / +28 ms (IQR 26..32), early amplitude command / model 0.93 / 0.94 / 0.84
+LT05_WHEEL_OK, LT05_WHEEL_FAIL, LT05_CMD_OK, LT05_CMD_FAIL, LT05_AMP_CHECK, LT05_N_FAIL = 300.0, 330.0, 40.0, 55.0, 0.70, 8
+
+
 def curve_entries(o):
   T, v = o["T"], o["v"]; ak = np.abs(o["kms"]); rows_ = []
+  km, kc, kw = box(o["km"], 20), box(o["kc"], 20), box(o["kme"], 20)
 
   def t20(x, e, s, pk, fr=0.2):
     i = np.flatnonzero(x[e - 150:e + 400] * s >= fr * pk)
     return (i[0] - 150) / 100 if len(i) else np.nan
-  wheel = box(o["kme"], 10)
   for e in entries(o):
     j = e + int(np.argmax(ak[e:e + 400])); s = np.sign(o["kms"][j]); pk = ak[j]
-    tm, tc, tw = t20(o["km"], e, s, pk), t20(o["kc"], e, s, pk), t20(wheel, e, s, pk)
+    if e < 180 or j + 250 > o["n"]:
+      continue
+    tm = t20(o["km"], e, s, pk)       # only places the position window (LT-06), as before
     i0 = e + int((tm if np.isfinite(tm) else 0) * 100)
     ok = o["fok"][i0 - 100:i0 + 300].mean() > 0.8
     ins = (o["pos"][i0:i0 + 300] - o["pos"][i0 - 100:i0].mean()) * s
-    rows_.append((T[e], v[e], (tw - tm) * 1e3, (tc - tm) * 1e3, ins.max() if ok else np.nan, ins[150:250].mean() if ok else np.nan,
-                  o["b15"][e - 50:e + 300].mean(), bit(o["sft"][e - 50:e + 300], 13).mean()))
-  E = np.array(rows_) if rows_ else np.zeros((0, 8)); o["E"] = E; n = len(E)
+    tim = entry_timing(km, kc, kw, e, j, s)
+    rows_.append((T[e], v[e], tim[0], tim[1], ins.max() if ok else np.nan, ins[150:250].mean() if ok else np.nan,
+                  o["b15"][e - 50:e + 300].mean(), bit(o["sft"][e - 50:e + 300], 13).mean(), *tim[2:]))
+  E = np.array(rows_) if rows_ else np.zeros((0, 16)); o["E"] = E; n = len(E)
   if not n:
-    row("LT-05", "curve entry: wheel start vs model (ms)", "no hands-off entry", "NO DATA")
+    row("LT-05", "curve entry: wheel / command delay after the model (ms)", "no hands-off entry", "NO DATA")
     row("LT-06", "curve entry: most inside in 0-3 s (cm)", "no hands-off entry", "NO DATA")
     return
   q = E[(E[:, 1] >= 60) & (E[:, 1] < 80)]
-  w, c, w6 = med(E[:, 2]), med(E[:, 3]), med(q[:, 2])
-  row("LT-05", "curve entry: wheel start (20 % of peak) after the model's, and command after the model's (ms)",
-      f"n {n}: wheel - model median {w:+.0f} (IQR {pct(E[:, 2], 25):+.0f}..{pct(E[:, 2], 75):+.0f}); 60-80 km/h (n {len(q)}) {w6:+.0f}; "
-      f"command - model {c:+.0f}", vd(w <= 380 and not w6 > 350 and c <= 60, fail=w > 420 or c > 100, enough=n >= 15),
+  w, c, w6, amp = med(E[:, 2]), med(E[:, 3]), med(q[:, 2]), med(E[:, 12])
+  ok = w <= LT05_WHEEL_OK and not w6 > LT05_WHEEL_OK and c <= LT05_CMD_OK
+  row("LT-05", "curve entry: delay of the wheel and of the command after the model (ms; time shift of the rate of change, "
+      "amplitude-insensitive) and, separately, the amplitude ratio",
+      f"n {n}: wheel delay median {w:+.0f} (IQR {pct(E[:, 2], 25):+.0f}..{pct(E[:, 2], 75):+.0f}); 60-80 km/h (n {len(q)}) {w6:+.0f}; "
+      f"command delay {c:+.0f} (IQR {pct(E[:, 3], 25):+.0f}..{pct(E[:, 3], 75):+.0f}); correlation at the shift wheel "
+      f"{med(E[:, 8]):.2f} / command {med(E[:, 9]):.2f} | amplitude (not a delay): 0.5 s into the entry command / model "
+      f"{amp:.2f} (60-80 {med(q[:, 12]):.2f}), wheel / model {med(E[:, 13]):.2f}; whole rise command / model {med(E[:, 14]):.2f}, "
+      f"wheel / model {med(E[:, 15]):.2f} | own-level 20 % crossing after the model's (shape-sensitive, not judged): wheel "
+      f"{med(E[:, 10]):+.0f}, command {med(E[:, 11]):+.0f}",
+      vd(ok, fail=n >= LT05_N_FAIL and (w > LT05_WHEEL_FAIL or c > LT05_CMD_FAIL), enough=n >= 15 and not amp < LT05_AMP_CHECK),
       "latest " + ts(E[np.argsort(-np.nan_to_num(E[:, 2]))][:, 0]))
   m, p9, m6 = med(E[:, 4]), pct(E[:, 4], 90), med(q[:, 4]); rl = E[E[:, 6] > 0]
   row("LT-06", "curve entry: most inside in 0-3 s, and mean of 1.5-2.5 s (cm)",

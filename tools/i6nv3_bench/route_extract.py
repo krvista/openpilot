@@ -1,4 +1,4 @@
-"""One-pass route extractor (09-23; v2 10-02; v6 11-23; v8 11-26): read a route's rlogs ONCE and save every 100 Hz series the i6nv3 probes
+"""One-pass route extractor (09-23; v2 10-02; v6 11-23; v8 11-26; v9 11-28): read a route's rlogs ONCE and save every 100 Hz series the i6nv3 probes
 need, so routes can be deleted from the disk-limited container right after extraction and analysed offline.
 
 Saved (carState-rate grid, T relative to the first log message):
@@ -50,6 +50,17 @@ Saved (carState-rate grid, T relative to the first log message):
   (length of the GitDiff param, -1 unknown) / build_desc (UpdaterCurrentDescription) from the FIRST initData, commits = every
   distinct gitCommit over all initData (a route that spans a reboot), lane_turn = "LaneTurnDesire,LaneTurnValue" params;
   segs = segment numbers read by main() (empty from extract()), seg_err = those that raised (truncated).
+  v9 (11-28, report 119 item 6): yaw was all zeros up to v8 - it was read from livePose, a message this fork's schema does
+  not have (locationd publishes liveLocationKalman). yaw (deg/s) = liveLocationKalman.angularVelocityCalibrated z (livePose
+  angularVelocityDevice z where a log has that message instead); its sign is that of k_meas (yaw [rad/s] / v = curvature),
+  yaw_valid = the measurement's valid flag (-1 = no message); pose_roll / pose_pitch = calibratedOrientationNED roll / pitch
+  (rad; body roll + road bank as locationd sees it), lp_roll = liveParameters roll (rad, the road-bank estimate the vehicle
+  model uses), lp_stiff = stiffnessFactor. Model lane lines at the car (x = 0), + = right: ll_y_l / ll_y_r (m), ll_std_l /
+  ll_std_r (laneLineStds), ll_p_l / ll_p_r (laneLineProbs), re_y_l / re_y_r / re_std_l / re_std_r (road edges);
+  model_frame = modelV2.frameId (-1 = no message). Road camera video alignment from (narrow)roadEncodeIdx: vid_seg
+  (segmentNum = the fcamera file), vid_idx (segmentId = frame index inside that file), vid_frame (camera frameId, the same
+  counter as model_frame), vid_t (shutter time timestampSof on the T axis, s); all -1 before the first message. The frame
+  on screen at time t is the row with vid_t nearest to t.
   Fields a log does not have keep their defaults. extract(msgs) / parse_* are importable (phase_tests/test_phase75_extract.py).
 Usage: PYTHONPATH=... python tools/i6nv3_bench/route_extract.py <route> <out.npz> [log dir]
 """
@@ -61,7 +72,7 @@ import numpy as np
 
 from openpilot.tools.lib.logreader import LogReader
 
-VERSION = 8
+VERSION = 9
 LOG_DIR = "/home/user/drivelog/drivelog"
 NO_CAR_SAFETY = ("silent", "noOutput")   # pandas in these modes say nothing about the car (as the MADS mismatch check)
 
@@ -122,6 +133,7 @@ class Extractor:
     self.blk_bus = None; self.prev_alert = None; self.prev_ev_sp = set(); self.last_model = None
     self.invalid = {}; self.commits = []; self.build = dict(commit_full="", branch="", dirty=-1, git_diff_len=-1, build_desc="", lane_turn="")
     self.segs, self.seg_err = [], []
+    self.pose, self.lln, self.enc = [], [], []   # v9
     self.passive = False
     self.events = []; self.prev_ev = set()
     self.t0 = None; self.commit = ""
@@ -168,8 +180,24 @@ class Extractor:
       self.mdl.append((t, ds[1] + ds[2] if len(ds) > 4 else 0.0, ds[3] + ds[4] if len(ds) > 4 else 0.0,
                        int(d.meta.laneChangeDirection.raw), d.frameDropPerc, t - self.last_model if self.last_model else 0.0))
       self.last_model = t
-    elif w == "livePose":
-      self.lp.append((t, np.degrees(m.livePose.angularVelocityDevice.z)))
+      ll = d.laneLines; re = d.roadEdges; sd_ = list(getattr(d, "laneLineStds", [])); pb = list(d.laneLineProbs); rs = list(getattr(d, "roadEdgeStds", []))
+      if len(ll) >= 4 and len(ll[1].y) and len(ll[2].y):
+        ok_re = len(re) >= 2 and len(re[0].y) and len(re[1].y)
+        self.lln.append((t, ll[1].y[0], ll[2].y[0], *(sd_[1:3] if len(sd_) >= 4 else (0.0, 0.0)), *(pb[1:3] if len(pb) >= 4 else (0.0, 0.0)),
+                         re[0].y[0] if ok_re else 0.0, re[1].y[0] if ok_re else 0.0, *(rs[:2] if len(rs) >= 2 else (0.0, 0.0)),
+                         int(d.frameId)))
+    elif w == "liveLocationKalman":   # this fork's locationd message (yaw was read from livePose only up to v8: all zeros)
+      k = m.liveLocationKalman; av = list(k.angularVelocityCalibrated.value); orn = list(k.calibratedOrientationNED.value)
+      if len(av) >= 3:
+        self.lp.append((t, float(np.degrees(av[2])), bool(k.angularVelocityCalibrated.valid)))
+      if len(orn) >= 3:
+        self.pose.append((t, orn[0], orn[1]))
+    elif w == "livePose":             # schemas that have it instead
+      x = m.livePose
+      self.lp.append((t, float(np.degrees(x.angularVelocityDevice.z)), bool(getattr(x.angularVelocityDevice, "valid", True))))
+    elif w in ("roadEncodeIdx", "narrowRoadEncodeIdx"):
+      x = getattr(m, w)
+      self.enc.append((t, int(x.segmentNum), int(x.segmentId), int(x.frameId), x.timestampSof * 1e-9 - self.t0))
     elif w == "selfdriveState":
       self.sd.append((t, m.selfdriveState.active))
       a = (m.selfdriveState.alertText1, m.selfdriveState.alertText2, str(m.selfdriveState.alertStatus))
@@ -212,7 +240,8 @@ class Extractor:
           pass
     elif w in ("liveParameters", "vehicleParameters"):       # the schema's name differs by version
       lp = getattr(m, w)
-      self.lpar.append((t, lp.steerRatio, lp.angleOffsetDeg, lp.angleOffsetAverageDeg))
+      self.lpar.append((t, lp.steerRatio, lp.angleOffsetDeg, lp.angleOffsetAverageDeg, getattr(lp, "roll", 0.0),
+                        getattr(lp, "stiffnessFactor", 0.0)))
     elif w in ("liveCalibration", "extrinsicsCalibration"):
       r = list(getattr(m, w).rpyCalib)
       if len(r) == 3:
@@ -326,6 +355,15 @@ class Extractor:
       alerts=np.array(self.alerts, dtype=object).reshape(-1, 4), events_sp=np.array(self.events_sp, dtype=object).reshape(-1, 2),
       invalid=np.array([(k, *c) for k, c in sorted(self.invalid.items())], dtype=object).reshape(-1, 4),
       commits=np.array(self.commits, dtype=str), segs=np.array(self.segs, np.int64), seg_err=np.array(self.seg_err, np.int64),
+      # v9
+      yaw_valid=res(lp, 2, -1.0, kind="since").astype(np.int64),
+      pose_roll=res(self.pose, 1, kind="since"), pose_pitch=res(self.pose, 2, kind="since"),
+      lp_roll=res(self.lpar, 4, kind="since"), lp_stiff=res(self.lpar, 5, kind="since"),
+      ll_y_l=res(self.lln, 1), ll_y_r=res(self.lln, 2), ll_std_l=res(self.lln, 3), ll_std_r=res(self.lln, 4),
+      ll_p_l=res(self.lln, 5), ll_p_r=res(self.lln, 6), re_y_l=res(self.lln, 7), re_y_r=res(self.lln, 8),
+      re_std_l=res(self.lln, 9), re_std_r=res(self.lln, 10), model_frame=res(self.lln, 11, -1.0, kind="since").astype(np.int64),
+      vid_seg=res(self.enc, 1, -1.0, kind="since").astype(np.int64), vid_idx=res(self.enc, 2, -1.0, kind="since").astype(np.int64),
+      vid_frame=res(self.enc, 3, -1.0, kind="since").astype(np.int64), vid_t=res(self.enc, 4, -1.0, kind="since"),
       **{k: np.array(x) for k, x in self.build.items()})
 
 
