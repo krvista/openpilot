@@ -11,9 +11,10 @@ KPH = 1 / 3.6
 
 @pytest.fixture
 def keep():
-  names = ("LANE_FIT_GAIN", "LANE_FIT_ARM_M", "LANE_CENTER_KI", "LANE_CENTER_WEIGHT", "LANE_CENTER_KE")
+  names = ("LANE_FIT_GAIN", "LANE_FIT_ARM_M", "LANE_CENTER_KI", "LANE_CENTER_WEIGHT", "LANE_CENTER_KE", "LANE_FIT_SPEED_MS")
   saved = {k: getattr(cd, k) for k in names}
   cd.LANE_CENTER_KI = 0.0; cd.LANE_CENTER_WEIGHT = 1e-12              # only the fit part (the weight must stay > 0)
+  cd.LANE_FIT_SPEED_MS = [45 * KPH, 60 * KPH]                         # the Phase 82 gate (Phase 88 ships 40-55 km/h)
   yield
   for k, v in saved.items():
     setattr(cd, k, v)
@@ -26,7 +27,7 @@ def fit_part(m, v, n=400, **kw):
 
 def test_shipped_values():
   assert cd.LANE_FIT_GAIN == 0.35 and cd.LANE_FIT_ARM_M == 1.8 and cd.LANE_FIT_T_S == 1.5 and cd.LANE_FIT_RANGE_S == 1.0
-  assert cd.LANE_FIT_SPEED_MS == pytest.approx([45 * KPH, 60 * KPH]) and cd.LANE_FIT_RANGE_M == (15.0, 45.0)
+  assert cd.LANE_FIT_SPEED_MS == pytest.approx([40 * KPH, 55 * KPH]) and cd.LANE_FIT_RANGE_M == (15.0, 45.0)   # Phase 88
   assert cd.LANE_CENTER_KE == [0.0, 0.0, 0.0, 0.0]                    # replaced by the fit
   assert cd.LANE_CENTER_KI == 0.06e-3 and cd.LANE_CENTER_I_CAP == 0.30e-3
 

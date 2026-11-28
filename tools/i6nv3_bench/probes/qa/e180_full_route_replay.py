@@ -1,7 +1,8 @@
 """e180: continuous replay of the real controlsd.state_control (HEAD) over a whole route, recording the
 internals of the lane-centre / entry-lead additions per 100 Hz frame.  argv: route variant [t0 t1]
 env REPLAY_SCRATCH (inputs), REPLAY_OUT (output dir)
-variants: head | nofit (LANE_FIT_GAIN 0 + Phase 79 KE) | noavoid | nolead | noexempt"""
+variants: head | nofit (LANE_FIT_GAIN 0 + Phase 79 KE) | noavoid | nolead | noexempt
+| f4560 (lane-fit gate of Phase 82) | f3550 | f4055 (gates tried for Phase 88)"""
 import os, sys, types, time
 os.environ.setdefault("REPLAY_PROFILE", "solo"); os.environ.setdefault("REPLAY_MODEL_DELAY", "log")
 import numpy as np
@@ -36,6 +37,12 @@ def setvar(variant):
     cd.ENTRY_LEAD_S = 0.0
   elif variant == "noexempt":
     cd.CONF_BLEND_LC_EXEMPT = False
+  elif variant == "f4560":
+    cd.LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6]
+  elif variant == "f3550":
+    cd.LANE_FIT_SPEED_MS = [35.0 / 3.6, 50.0 / 3.6]
+  elif variant == "f4055":
+    cd.LANE_FIT_SPEED_MS = [40.0 / 3.6, 55.0 / 3.6]
   elif variant != "head":
     raise SystemExit("variant?")
 

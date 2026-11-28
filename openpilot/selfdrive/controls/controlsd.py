@@ -486,7 +486,7 @@ ENTRY_LEAD_FRAME_S = 0.075     # modeld: frame delay + half a model interval on 
 # the lane centre over the next LANE_FIT_RANGE_S gives the car's offset, the lane's heading and the lane's curvature;
 # the curvature that would put the car on the centre over 0.5-1.5 x v * LANE_FIT_T_S ahead is
 #   1.432 e / L^2 + 1.653 psi / L + k_lane        (least squares of e + psi x + k x^2 / 2 against dk x^2 / 2)
-# and LANE_FIT_GAIN of its difference to the model action is added (>= 45 km/h, same weight / cap / low-pass as the
+# and LANE_FIT_GAIN of its difference to the model action is added (>= 45 km/h; Phase 88: 40, same weight / cap / low-pass as the
 # other parts, own target LANE_CENTER_BIAS_M). The heading is corrected for the camera sitting LANE_FIT_ARM_M ahead of
 # the rear axle (in a steady curve the lane heading at the camera is arm x curvature: measured median 1.6-2.0 m; without
 # the correction the heading part pushes 0.2-0.5e-3 to the INSIDE and cancels the rest). The lane curvature is read
@@ -523,8 +523,18 @@ LANE_AVOID_WARMUP_S = 3.0
 # new lane. A non-finite lane probability no longer wipes every lane-term state in one frame (weight 0 instead).
 # Kill: LANE_STATE_RESET = False.
 LANE_STATE_RESET = True
+# Phase 88 (report 119 item 5): the lane fit comes in over 40-55 km/h instead of 45-60 - below 60 km/h the car still
+# cut 11 cm to the inside of curves (45-60 km/h, 161 s) against 3.5 cm at 60-80 where the fit is fully on. Real
+# controlsd replayed on b0 / b2 / b6 / aa / ac, steady hands-off curves of 45-60 km/h (137 s, 41 curves): the fit
+# part's outward curvature goes from 2.7 to 4.6 % of the curve's (5.3 % at 60-80), outward in 98 % of the changed
+# seconds; 35-45 km/h 0.0 -> 1.2 %; nothing changes from 60 km/h up. Fit state per frame p99 x 1.15, max equal,
+# bit-14 edges + 4 %, steps of the final command identical. Simulation (R 400 / 200 / 125 m, 45 / 50 / 55 km/h):
+# steady inside cut -2.1 / -1.8 / -1.6 cm (about a fifth), entry peak and S-curve swing smaller, 20 cm step overshoot
+# + 0.5-1.3 points, delay margin 0.68 / 0.61 / 0.55 s (0.53 at 60 km/h), wheel activity + 2-5 %. 35-50 km/h was tried
+# and rejected: twice the effect, but fit state steps p99 x 1.33 / max x 1.4 and wheel activity + 8.5 % at 50 km/h.
+# Kill: LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6].
 LANE_FIT_GAIN = 0.35
-LANE_FIT_SPEED_MS = [45.0 / 3.6, 60.0 / 3.6]
+LANE_FIT_SPEED_MS = [40.0 / 3.6, 55.0 / 3.6]   # Phase 88 (was 45-60 km/h)
 LANE_FIT_T_S = 1.5
 LANE_FIT_RANGE_S = 1.0
 LANE_FIT_RANGE_M = (15.0, 45.0)
