@@ -31,7 +31,13 @@ STATE_VERSION = 1
 
 STEP = 1. / 3.6           # m/s per search step (1 km/h)
 GAP = 2. / 3.6            # m/s the entry stays above the confirmed hold floor
-ABS_FLOOR = 20. / 3.6     # m/s, the search never goes below this
+# m/s, the hold search never goes below this. WK2 drivelog 95-97 (b07c9b4): the EPS set a PERMANENT LKAS fault
+# (lateral lost until the car is switched off) twice, both times after lateral had been active continuously below
+# ~47.3-47.4 km/h for 0.7-0.9 s (trials at 47.0 and 46.0 km/h, faults at 47.4 and 46.7 km/h). 20 dips that left
+# the trial band within 0.35 s, and 15 s at 47.3-48.0 km/h, did not fault: the EPS limit is about 13 m/s (opendbc's
+# "13 m/s on the way down once engaged") with a short delay, which short dips cannot find. The search grid has
+# 47.96 km/h (minSteerSpeed - 3.9 - STEP, confirmed on 95 and used there without fault): ~0.6 km/h above the limit.
+ABS_FLOOR = 47.9 / 3.6
 START_HOLD_MARGIN = 3.9   # m/s below minSteerSpeed: confirmed hold floor to start from (WK2 49 km/h)
 START_ENTRY_MARGIN = 3.3  # m/s below minSteerSpeed: confirmed entry to start from (WK2 51 km/h)
 OFF_HOLD_MARGIN = 3.0     # m/s, hold floor with the toggle off (the floor since dbb1463)
@@ -143,12 +149,20 @@ class LowSpeedReengage:
       if d.get("version") != STATE_VERSION or abs(d.get("min_steer_speed", 0.) - self.min_steer_speed) > 1e-3:
         return
       hold, entry = float(d["hold"]), float(d["entry"])
-      if not (ABS_FLOOR - EPS_ <= hold <= self.min_steer_speed and hold + GAP - EPS_ <= entry <= self.min_steer_speed):
+      if not (0. < hold <= self.min_steer_speed and hold + GAP - EPS_ <= entry <= self.min_steer_speed):
         return
       self.hold, self.entry = hold, entry
       self.hold_ok, self.entry_ok = int(d.get("hold_ok", 0)), int(d.get("entry_ok", 0))
       self.hold_fails, self.entry_fails = int(d.get("hold_fails", 0)), int(d.get("entry_fails", 0))
       self.hold_ev.n, self.hold_ev.sxy, self.hold_ev.sxx = int(d.get("ev_n", 0)), float(d.get("ev_sxy", 0.)), float(d.get("ev_sxx", 0.))
+      if hold < ABS_FLOOR - EPS_:
+        # learned below the floor by an earlier build: back to the floor, and the hold search is over
+        while self.hold < ABS_FLOOR - EPS_:
+          self.hold += STEP  # stay on the search grid
+        self.hold_ok, self.hold_fails, self.hold_ev = 0, MAX_FAILS, Evidence()
+        self.entry = max(self.entry, self.hold + GAP)
+        cloudlog.warning(f"low speed lateral: hold {hold * 3.6:.1f} km/h is below the floor, now {self.hold * 3.6:.1f} km/h")
+        self._save()
     except Exception:
       pass  # missing or unreadable: start from the defaults
 

@@ -63,7 +63,9 @@ class TestLowSpeedReengage:
       assert abs(lsr.hold - HOLD0) < 1e-6
       assert dip(lsr, trial)
     assert abs(lsr.hold - (HOLD0 - STEP)) < 1e-6       # confirmed one step lower
-    assert abs(lsr.hold_floor() - (HOLD0 - 2 * STEP)) < 1e-6  # and the next trial is open
+    # ~48 km/h is the floor (WK2 EPS faults permanently after ~0.7 s active below ~47.4 km/h): the hold search ends
+    assert lsr.hold >= ABS_FLOOR and lsr.hold_floor() == lsr.hold
+    assert run(lsr, 17.6) and not run(lsr, ABS_FLOOR - 0.05)
     # now the entry trial has room: confirmed hold + GAP <= entry - STEP
     assert abs(lsr.entry_floor() - (ENTRY0 - STEP)) < 1e-6
 
@@ -238,12 +240,13 @@ class TestLowSpeedReengage:
   def test_state_persists(self, tmp_path):
     path = str(tmp_path / "state.json")
     lsr = LowSpeedReengage(WK2, state_path=path)
-    for _ in range(CONFIRMS):
-      dip(lsr, HOLD0 - STEP + 0.05)
-    dip(lsr, HOLD0 - 2 * STEP + 0.05)                  # one clean use of the next trial
+    for _ in range(CONFIRMS - 1):
+      dip(lsr, HOLD0 - STEP + 0.05)                    # clean uses of the trial so far
     lsr2 = LowSpeedReengage(WK2, state_path=path)
-    assert abs(lsr2.hold - (HOLD0 - STEP)) < 1e-6 and lsr2.hold_ok == 1 and lsr2.hold_ev.n > 0
+    assert abs(lsr2.hold - HOLD0) < 1e-6 and lsr2.hold_ok == CONFIRMS - 1 and lsr2.hold_ev.n > 0
+    dip(lsr2, HOLD0 - STEP + 0.05)
     assert json.load(open(path))["hold_kph"] == round((HOLD0 - STEP) * 3.6, 1)
+    assert abs(LowSpeedReengage(WK2, state_path=path).hold - (HOLD0 - STEP)) < 1e-6
     # a file for another car or a corrupt one is ignored
     d = json.load(open(path))
     d["min_steer_speed"] = 14.5
@@ -251,6 +254,17 @@ class TestLowSpeedReengage:
     assert abs(LowSpeedReengage(WK2, state_path=path).hold - HOLD0) < 1e-6
     open(path, "w").write("{")
     assert abs(LowSpeedReengage(WK2, state_path=path).hold - HOLD0) < 1e-6
+
+  def test_state_below_the_floor_is_clamped(self, tmp_path):
+    # what b07c9b4 learned on the car: hold 47.0 (trial 46.0 failed once), entry 50.1
+    path = str(tmp_path / "state.json")
+    json.dump({"version": 1, "min_steer_speed": 17.5, "hold": HOLD0 - 2 * STEP, "entry": ENTRY0 - STEP, "hold_ok": 0, "entry_ok": 0,
+               "hold_fails": 1, "entry_fails": 0, "ev_n": 0, "ev_sxy": 0., "ev_sxx": 0.}, open(path, "w"))
+    lsr = LowSpeedReengage(WK2, state_path=path)
+    assert abs(lsr.hold - (HOLD0 - STEP)) < 1e-6 and lsr.hold_floor() == lsr.hold and not lsr.hold_trial_ok
+    assert abs(lsr.entry - (ENTRY0 - STEP)) < 1e-6
+    assert json.load(open(path))["hold_kph"] == 48.0
+    assert run(lsr, 17.6) and run(lsr, HOLD0 - STEP + 0.05) and not run(lsr, HOLD0 - STEP - 0.05)
 
   def test_torque_ramp_after_low_entry(self):
     lsr = LowSpeedReengage(WK2)
