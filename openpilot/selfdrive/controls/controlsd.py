@@ -361,6 +361,11 @@ LANE_CENTER_KE = [0.0, 0.0, 0.0, 0.0]      # 1/m per m of offset. Phase 79: [0, 
 # 75n  Minimum steer speed with hysteresis: lateral goes off LAT_MIN_SPEED_HYST_MS below CP.minSteerSpeed (4 km/h) and
 #      comes back above it (5 km/h) - it flapped for 0.1-2.2 s around 5.0 km/h. Kill: LAT_MIN_SPEED_HYST_MS = 0.0.
 LANE_CENTER_NONFINITE_GUARD = True
+# Phase 90: tight-curve trim. The command is MODEL_K_TRIM less curvature than the model asks
+# above MODEL_K_TRIM_K[1] (radius < 90 m), fading in from MODEL_K_TRIM_K[0] (125 m). No lane lines. Kill: MODEL_K_TRIM = 0.0.
+MODEL_K_TRIM = 0.07
+MODEL_K_TRIM_K = [8e-3, 11e-3]   # 1/m
+MODEL_K_TRIM_V_MS = [20.0 / 3.6, 30.0 / 3.6]   # no trim below 20 km/h, full above 30 (junction turns are not cut inside). Kill: [-2.0, -1.0]
 LAT_MIN_SPEED_HYST_MS = 1.0 / 3.6
 
 # Phase 6g-1: floor on the model-confidence damping below. The damping blends the
@@ -834,6 +839,8 @@ class Controls(ControlsExt):
 
     # Phase 73c: lane-centre term
     if CC.latActive:
+      if MODEL_K_TRIM > 0.0 and self._model_nonfinite_frames == 0 and math.isfinite(new_desired_curvature):   # Phase 90 (not on the held command: it would compound)
+        new_desired_curvature *= 1.0 - float(_interp(abs(new_desired_curvature), MODEL_K_TRIM_K, [0.0, MODEL_K_TRIM])) * float(_interp(CS.vEgo, MODEL_K_TRIM_V_MS, [0.0, 1.0]))
       lc_ok = (mf.lane_change_state == LaneChangeState.off and not (CS.leftBlinker or CS.rightBlinker)
                and not CS.steeringPressed and not self.lane_dropout)
       if LANE_STATE_RESET and mf.lane_change_state != LaneChangeState.off:
