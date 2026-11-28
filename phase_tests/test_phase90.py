@@ -1,4 +1,4 @@
-"""Phase 90 (report 127/128): tight-curve trim - above 11e-3 1/m the direct-path command is 7 % less than the model asks."""
+"""Phase 90 (report 126-128): tight-curve trim - above 11e-3 1/m the command is 7 % less than the model asks."""
 import math
 
 import pytest
@@ -35,10 +35,6 @@ def test_shipped_values():
   assert cd.MODEL_K_TRIM == 0.07 and cd.MODEL_K_TRIM_K == [8e-3, 11e-3]
 
 
-def factor(k):
-  return 1.0 - cd.MODEL_K_TRIM * min(max((abs(k) - 8e-3) / 3e-3, 0.0), 1.0)
-
-
 @pytest.mark.usefixtures("keep")
 @pytest.mark.parametrize("k", [3e-3, 7.9e-3, -7.9e-3])
 def test_nothing_below_the_threshold(k):
@@ -55,10 +51,10 @@ def test_trim_fades_in_and_is_symmetric(k, f):
 
 @pytest.mark.usefixtures("keep")
 def test_continuous_and_monotonic_in_the_model_curvature():
-  ks = [7e-3 + i * 0.25e-3 for i in range(33)]            # 7e-3 .. 15e-3
-  out = [k * (1.0 - 0.07 * min(max((k - 8e-3) / 3e-3, 0.0), 1.0)) for k in ks]
-  assert all(b > a for a, b in zip(out, out[1:]))          # more asked is never less commanded
-  assert max(b - a for a, b in zip(out, out[1:])) < 0.26e-3
+  ks = [6e-3 + 0.25e-3 * i for i in range(41)]            # 6 .. 16e-3 through the real state_control
+  out = [settled(k, 0.07, n=300) for k in ks]
+  d = [b - a for a, b in zip(out, out[1:])]
+  assert min(d) > 0.6 * 0.25e-3 and max(d) < 1.02 * 0.25e-3
 
 
 @pytest.mark.usefixtures("keep")
@@ -104,3 +100,14 @@ def test_trim_speed_fade_kill_switch():
     assert on / off == pytest.approx(0.93, abs=0.004)       # as Phase 90 without the fade
   finally:
     cd.MODEL_K_TRIM_V_MS = saved
+
+
+@pytest.mark.usefixtures("keep")
+def test_kill_switch_is_exact():
+  saved = cd.MODEL_K_TRIM_K
+  try:
+    off = settled(14e-3, 0.0)
+    cd.MODEL_K_TRIM_K = [1.0, 2.0]                        # trim line runs but its factor is exactly 1.0
+    assert settled(14e-3, 0.07) == off
+  finally:
+    cd.MODEL_K_TRIM_K = saved

@@ -839,8 +839,10 @@ class Controls(ControlsExt):
 
     # Phase 73c: lane-centre term
     if CC.latActive:
-      if MODEL_K_TRIM > 0.0 and self._model_nonfinite_frames == 0 and math.isfinite(new_desired_curvature):   # Phase 90 (not on the held command: it would compound)
-        new_desired_curvature *= 1.0 - float(_interp(abs(new_desired_curvature), MODEL_K_TRIM_K, [0.0, MODEL_K_TRIM])) * float(_interp(CS.vEgo, MODEL_K_TRIM_V_MS, [0.0, 1.0]))
+      # Phase 90 (not on the held command: it would compound)
+      if MODEL_K_TRIM > 0.0 and self._model_nonfinite_frames == 0 and math.isfinite(new_desired_curvature):
+        new_desired_curvature *= 1.0 - (float(_interp(abs(new_desired_curvature), MODEL_K_TRIM_K, [0.0, MODEL_K_TRIM]))
+                                        * float(_interp(CS.vEgo, MODEL_K_TRIM_V_MS, [0.0, 1.0])))
       lc_ok = (mf.lane_change_state == LaneChangeState.off and not (CS.leftBlinker or CS.rightBlinker)
                and not CS.steeringPressed and not self.lane_dropout)
       if LANE_STATE_RESET and mf.lane_change_state != LaneChangeState.off:

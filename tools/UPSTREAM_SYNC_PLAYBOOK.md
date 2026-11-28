@@ -94,7 +94,7 @@ sync의 유일한 정당화 = **새 모델/OS로 업그레이드 테스트를 �
 | `LAT_CONF_FLOOR` | controlsd.py | `0.0` (floor taper off) | 0.5 |
 | `LAT_CMD_SMOOTH_TAU_V` | controlsd.py | `[0,0,0]` (곡률 LP off) | [0.20,0.12,0.08] |
 | `SMOOTHING_ANGLE_RELEASE_HI_DEG` | values.py | `1e6` (이미 release off, 6h-1) | 1e6 |
-| `SMOOTHING_ANGLE_DEADBAND_DEG` | values.py | `0.0` | 0.1 |
+| ~~`SMOOTHING_ANGLE_DEADBAND_DEG`~~ | values.py | Phase 91 에서 삭제(스위치 없음, 커밋 revert) | — |
 | ACIGAIN grip-band (Phase 9) | carcontroller 호출부 | legacy band(350/0.19) 전달 | 260/0.10 (grip 시) |
 | `ROLL_DC_TAU` (ZB-1, 미구현) | latcontrol_angle.py | `0.0` (현 동작) | — sync 후 추가 |
 
