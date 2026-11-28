@@ -7,6 +7,8 @@ from phase_tests.harness import make_cp, Sim, run_signal  # noqa: F401 (path set
 from opendbc.car.hyundai.carcontroller import compute_torque_reduction_gain, _interp
 from opendbc.car.hyundai.values import CarControllerParams as P
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 
 def frames_to(gain_target, *, city_release, post_grip=True, err=3.5, v_kph=35.0, last=0.19, n=600):
   """Frames for the gain to climb from `last` to gain_target with a steady |steering_error| = err."""

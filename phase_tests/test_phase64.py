@@ -1,8 +1,10 @@
 """Phase 64 (report §76).
 64a: lagd CCNC profile — Hyundai angle-steering (CCNC) cars learn with NCC >= 0.9, confidence >= 0.5, >= 60 km/h, a 1 s
 recovery, and only a press held >= 0.5 s counts as steering (short HOD "hands on" touches do not blank the learner).
-64b: controlsd's Phase 60 delay shift follows the delay modeld is actually told: E_eff = E(v) + 0.3 - model delay, and the
-plan reference times move with the model delay, so a learned (estimated) lagd value is not counted twice."""
+64b: controlsd tracks the delay modeld is actually told (_update_model_lat_delay: lagd's value with LagdToggle on, else
+the cached fixed value). The Phase 60 delay shift that was corrected by it was removed in Phase 89 (and its tests); the
+tracked delay still times the Phase 78 entry lead.
+The lagd tests run on the only profile left since Phase 89 (seed 0.32 s, published <= 0.50 s)."""
 import types
 
 import numpy as np
@@ -12,18 +14,12 @@ from phase_tests.harness_noncontrol import FakeParams  # noqa: F401 (stub instal
 
 import openpilot.selfdrive.controls.controlsd as cd
 import openpilot.selfdrive.locationd.lagd as lagd
-from phase_tests.test_phase55 import model, call, settled
-from phase_tests.test_phase60 import ramp_plan
 
 
 @pytest.fixture(autouse=True)
 def _restore():
-  names = ("LOOKAHEAD_DELAY_EXTRA_S", "LOOKAHEAD_DELAY_FOLLOW_MODEL")
-  saved = {nm: getattr(cd, nm) for nm in names}
   prof = lagd.CCNC_PROFILE
   yield
-  for nm, val in saved.items():
-    setattr(cd, nm, val)
   lagd.CCNC_PROFILE = prof
   FakeParams.reset()
 
@@ -45,26 +41,26 @@ def test_profile_only_for_ccnc_angle_cars():
 
 def test_seed_sets_the_pre_learning_delay():
   e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
-  assert e.initial_lag == pytest.approx(lagd.LAGD_SEED_S)           # 0.55, not steerActuatorDelay + 0.2 = 0.30
+  assert e.initial_lag == pytest.approx(lagd.LAGD_SOLO_SEED_S)      # 0.32, not steerActuatorDelay + 0.2 = 0.30
   msg = e.get_msg(True)                                             # before any learning
   assert str(msg.lateralDelay.status) == "unestimated"
-  assert msg.lateralDelay.lateralDelay == pytest.approx(lagd.LAGD_SEED_S)   # what modeld receives
+  assert msg.lateralDelay.lateralDelay == pytest.approx(lagd.LAGD_SOLO_SEED_S)   # what modeld receives
 
 
 def test_seed_kill_switch_restores_stock_base():
   e = lagd.LateralLagEstimator(cp(), 0.05)                          # no profile kwargs
   assert e.initial_lag == pytest.approx(0.1 + 0.2)                  # steerActuatorDelay + 0.2
-  assert lagd.lagd_profile(cp())["initial_lag_seed"] == lagd.LAGD_SEED_S
+  assert lagd.lagd_profile(cp())["initial_lag_seed"] == lagd.LAGD_SOLO_SEED_S
 
 
 def test_learned_value_overrides_the_seed():
   # once estimated, modeld gets the learned block mean, not the seed (adaptive)
   e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
-  e.reset(0.60, lagd.BLOCK_NUM_NEEDED + 2)                          # as if learned 0.60 over >= 5 blocks
+  e.reset(0.40, lagd.BLOCK_NUM_NEEDED + 2)                          # as if learned 0.40 over >= 5 blocks
   msg = e.get_msg(True)
   assert str(msg.lateralDelay.status) == "estimated"
-  assert msg.lateralDelay.lateralDelay == pytest.approx(0.60, abs=1e-6)
-  assert msg.lateralDelay.lateralDelay != pytest.approx(lagd.LAGD_SEED_S)
+  assert msg.lateralDelay.lateralDelay == pytest.approx(0.40, abs=1e-6)
+  assert msg.lateralDelay.lateralDelay != pytest.approx(lagd.LAGD_SOLO_SEED_S)
 
 
 def test_estimator_takes_the_profile():
@@ -102,60 +98,6 @@ def test_stock_press_is_immediate():
 
 
 # ---------------------------------------------------------------- 64b controlsd
-def with_delay(d):
-  s = settled(20.0)
-  s._model_lat_delay = d
-  return s
-
-
-def test_untold_delay_keeps_phase60():
-  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.3] * 5
-  m = ramp_plan(0.001, 0.005)
-  a = with_delay(0.3); out_a = call(a, m)
-  b = settled(20.0); out_b = call(b, m)                     # no attribute = the 0.3 base
-  assert a._delay_extra_eff == pytest.approx(0.3) and out_a == pytest.approx(out_b, abs=1e-12)
-
-
-def test_learned_delay_is_not_counted_twice():
-  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.3] * 5
-  m = ramp_plan(0.001, 0.005)
-  s = with_delay(0.57)
-  call(s, m)
-  assert s._delay_extra_eff == pytest.approx(0.03, abs=1e-9)
-  s = with_delay(0.6)
-  call(s, m)
-  assert s._delay_extra_eff == 0.0 and s._delay_match == 0.0
-
-
-def test_total_read_point_is_kept():
-  # the delay-match reads the plan at REF + ref_shift + E_eff = 0.3 + E whatever the model delay
-  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.3] * 5
-  m = ramp_plan(0.001, 0.005)                                # plan slope 0.002 / s
-  s = with_delay(0.45)
-  call(s, m)
-  assert s._delay_extra_eff == pytest.approx(0.15)
-  assert s._delay_match == pytest.approx(0.002 * 0.15, rel=0.05)
-
-
-def test_orient_lead_moves_with_the_action():
-  # a step in the plan at 1.1 s: seen by the lead window (0.3 .. 0.98 s) only once the window moves with a 0.6 s delay
-  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.0] * 5
-  m = model(0.002, 0.006, t_step=1.1)
-  out_base = call(with_delay(0.3), m)
-  out_late = call(with_delay(0.6), m)
-  assert out_late > out_base
-
-
-def test_kill_switch():
-  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.3] * 5
-  cd.LOOKAHEAD_DELAY_FOLLOW_MODEL = False
-  m = ramp_plan(0.001, 0.005)
-  s = with_delay(0.6)
-  out = call(s, m)
-  assert s._delay_extra_eff == pytest.approx(0.3)
-  assert out == pytest.approx(call(settled(20.0), m), abs=1e-12)
-
-
 class _Delay:
   def __init__(self, d):
     self.lateralDelay = d

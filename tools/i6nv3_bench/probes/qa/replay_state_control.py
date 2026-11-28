@@ -1,11 +1,12 @@
 """Replay the REAL controlsd.state_control over a logged window: carState (100 Hz route npz) + modelV2 rebuilt from the
 plan npz (action, plan position/yaw rate/speed, inner lane lines, lane probs, lane-change state). Vehicle model:
-curvature <-> wheel angle from the drives' own median ratio per speed (deg per 1e-3/m). Variants: 'logged' = the 55b
-build's constants (Phase 56 off) — must reproduce controlsState.desiredCurvature; 'new' = shipped constants.
+curvature <-> wheel angle from the drives' own median ratio per speed (deg per 1e-3/m). Variants: 'new' = shipped
+constants; 'logged' / 'x_nosoft' / 'p_tek=..' / 'p_ctq=..' / 'p57..' set the Phase 56 / 57 constants of older builds.
 Usage (repo root): PYTHONPATH=$PWD:$PWD/opendbc_repo python3 .../replay_state_control.py <scratch> <route> <t0> <t1>
-Phase 72 (report §97): REPLAY_PROFILE=solo runs the direct path (the stub otherwise keeps the legacy stack, as the
-pre-72 drives did); REPLAY_FORCE_LAT=1 treats lateral as active throughout (shadow replay of a stock-LFA capture drive,
-where openpilot was passive)."""
+Phase 89: controlsd has one path (the direct one), so this replays that path whatever the variant - the lookahead /
+delay-match constant sets of the pre-72 builds are gone and REPLAY_PROFILE is no longer read; drives of those builds are
+not reproduced any more. REPLAY_FORCE_LAT=1 treats lateral as active throughout (shadow replay of a stock-LFA capture
+drive, where openpilot was passive)."""
 import math
 import sys
 import types
@@ -85,30 +86,15 @@ def model_at(i):
 
 
 def replay(variant, t0, t1):
-  saved = {k: getattr(cd, k) for k in ("TURN_EXIT_K", "LANE_DROPOUT_COUNTER_TQ", "LOOKAHEAD_ORIENT_WEIGHT_SHRINK",
-                                       "LOOKAHEAD_ORIENT_DEADBAND", "LOOKAHEAD_ORIENT_GATE", "LOOKAHEAD_ORIENT_T_S",
-                                       "LOOKAHEAD_ORIENT_W_SLEW_S", "LOOKAHEAD_ORIENT_GROW_SPAN", "LOOKAHEAD_ORIENT_WEIGHT",
-                                       "LOOKAHEAD_JERK_BUDGET", "TURN_EXIT_SOFT_EXEMPT", "LOWCONF_CURVE_K")}
-  if variant in ("logged", "c55only", "cubic") or variant.startswith("x_"):          # Phase 56 off
+  saved = {k: getattr(cd, k) for k in ("TURN_EXIT_K", "LANE_DROPOUT_COUNTER_TQ", "TURN_EXIT_SOFT_EXEMPT", "LOWCONF_CURVE_K")}
+  if variant == "logged" or variant.startswith("x_"):    # Phase 56 off
     cd.TURN_EXIT_K = cd.LANE_DROPOUT_COUNTER_TQ = 1e9
-  if variant == "logged":                                # the 55b build that was driven
-    cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK, cd.LOOKAHEAD_ORIENT_DEADBAND, cd.LOOKAHEAD_ORIENT_GATE = 0.5, 0.0, [0.0, 0.0]
-  if variant == "cubic":                                 # Phase 41-2 build (before Phase 55)
-    cd.LOOKAHEAD_ORIENT_T_S = 0.0
-  if variant == "x_nodb":
-    cd.LOOKAHEAD_ORIENT_DEADBAND = 0.0
-  if variant == "x_nogate":
-    cd.LOOKAHEAD_ORIENT_GATE = [0.0, 0.0]
-  if variant == "x_w5":
-    cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK = 0.5
   # sensitivity set (Phase 56 ON): p_<param>=<value>
   if variant.startswith("p_"):
     k, v = variant[2:].split("=")
-    setattr(cd, {"shrink": "LOOKAHEAD_ORIENT_WEIGHT_SHRINK", "db": "LOOKAHEAD_ORIENT_DEADBAND", "span": "LOOKAHEAD_ORIENT_GROW_SPAN",
-                 "w": "LOOKAHEAD_ORIENT_WEIGHT", "ts": "LOOKAHEAD_ORIENT_T_S", "J": "LOOKAHEAD_JERK_BUDGET",
-                 "tek": "TURN_EXIT_K", "ctq": "LANE_DROPOUT_COUNTER_TQ"}[k], float(v))
+    setattr(cd, {"tek": "TURN_EXIT_K", "ctq": "LANE_DROPOUT_COUNTER_TQ"}[k], float(v))
   import openpilot.selfdrive.controls.lib.lowconf_rate_cap as lrc
-  if variant in ("logged", "new", "c55only", "cubic", "x_nosoft", "x_noslew") or variant.startswith(("x_", "p_")):
+  if variant in ("logged", "new", "x_nosoft") or variant.startswith(("x_", "p_")):
     cd.LOWCONF_CURVE_K = [1e9, 1e9]          # Phase 57 is not part of any driven build; 'p57' / 'p57_<lo>_<hi>' enables it
     lrc.LOWCONF_CAP_OWN_STATE = False
   else:
@@ -120,26 +106,9 @@ def replay(variant, t0, t1):
     cd.LOWCONF_CURVE_K = [1e9, 1e9]
   if variant == "x_nosoft":
     cd.TURN_EXIT_SOFT_EXEMPT = False
-  if variant.startswith("q_"):                 # Phase 57 ON (cap fix + curve fade) plus 55c shaping variants
-    cd.LOWCONF_CURVE_K = [1.5e-3, 3.0e-3]; lrc.LOWCONF_CAP_OWN_STATE = True
-    for tok in variant[2:].split("+"):
-      if tok == "nogate":
-        cd.LOOKAHEAD_ORIENT_GATE = [0.0, 0.0]
-      elif tok == "nodb":
-        cd.LOOKAHEAD_ORIENT_DEADBAND = 0.0
-      elif tok == "noslew":
-        cd.LOOKAHEAD_ORIENT_W_SLEW_S = 1e-9
-      elif tok.startswith("shrink"):
-        cd.LOOKAHEAD_ORIENT_WEIGHT_SHRINK = float(tok[6:])
-      elif tok.startswith("gate"):
-        cd.LOOKAHEAD_ORIENT_GATE = [float(tok[4:]) * 1e-3, float(tok[4:]) * 1e-3 + 0.7e-3]
-  if variant == "x_noslew":
-    cd.LOOKAHEAD_ORIENT_W_SLEW_S = 1e-9
-  s = H.mk_controls(); s.VM = VM(); s._lookahead_orient_w = 1.0
-  s._steer_legacy = __import__('os').environ.get('REPLAY_PROFILE', 'legacy') != 'solo'   # Phase 72
+  s = H.mk_controls(); s.VM = VM()
   force_lat = bool(__import__('os').environ.get('REPLAY_FORCE_LAT'))
-  # the logged plans / actions were produced with the model told 0.30 s (lagd unestimated); the test stub says 0.2 and
-  # Phase 64b would read that as a -0.1 s reference shift (= 0.1 s more advance than asked for)
+  # the logged plans / actions were produced with the model told 0.30 s (lagd unestimated); the test stub says 0.2
   # REPLAY_MODEL_DELAY=log: what lagd published on that drive (builds from Phase 64d on: the seed 0.65 s, then the learned
   # value) - the logged action was computed for exactly that delay
   md = __import__('os').environ.get('REPLAY_MODEL_DELAY', '0.3')
@@ -148,7 +117,7 @@ def replay(variant, t0, t1):
   s.sm['lateralDelay'].lateralDelay = float(force) if force else (0.3 if md == "log" else float(md))
   Tr = d['T']; a0 = np.searchsorted(Tr, t0 - 8.0); a1 = np.searchsorted(Tr, t1)
   cs = s.sm['carState']; out = []
-  s.desired_curvature = float(d['k_ctrl'][a0]); s._lat_cmd_lp = s.desired_curvature
+  s.desired_curvature = float(d['k_ctrl'][a0])
   for j in range(a0, a1):
     cs.vEgo = float(d['v'][j]) / 3.6; cs.steeringAngleDeg = float(d['ang'][j]); cs.steeringPressed = bool(d['pressed'][j])
     cs.steeringTorque = float(d['tq_s'][j]); cs.leftBlinker = bool(d['lb'][j]); cs.rightBlinker = bool(d['rb'][j])

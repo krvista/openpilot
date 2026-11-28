@@ -80,7 +80,7 @@ def test_unusable_context_fades_the_offset_part_and_nan_is_safe(keep):
 def after_hand(start_dps, v_kph=60.0):
   """the driver holds the wheel 6 deg off the command with a firm grip, lets go; the request then walks to the command"""
   P.ENGAGE_TAPER_DRIVER_START_DPS = start_dps
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(200):
     sim.step(v=v_kph * KPH, cmd=0.0, wheel=0.0, lfa_state=0)
   for _ in range(150):
@@ -103,7 +103,7 @@ def test_taper_starts_faster_after_the_drivers_hand(keep):
 
 
 def test_other_anchors_keep_the_slow_start(keep):
-  sim = Sim(solo=True); tx = []
+  sim = Sim(); tx = []
   for _ in range(300):
     sim.step(v=42 * KPH, cmd=8.0, wheel=0.0, lat_active=False, lfa_state=0)
   for _ in range(40):

@@ -11,7 +11,6 @@ import openpilot.cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
-from openpilot.common.steer_profile import ProfileLatch
 from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
@@ -65,8 +64,8 @@ class _ModelFrame:
   (plan-point fits, lane-centre curvature, BSM lane inputs) are computed on first use, so a
   disengaged frame — which never reads them — pays nothing (review: eager computation made
   disengaged frames slower than before)."""
-  __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit12", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
-               "_klane", "_bsm", "lane_change_state", "lane_change_dir", "_orient", "_lanes", "_psi", "_lfit")
+  __slots__ = ("ref", "key", "fallback", "n", "_pos", "_fit24", "lane_min", "lane_max", "y_std", "lane_min_p",
+               "_bsm", "lane_change_state", "lane_change_dir", "_lanes", "_psi", "_lfit")
   _UNSET = object()
 
   def __init__(self, model_v2, key):
@@ -74,7 +73,7 @@ class _ModelFrame:
     self.fallback = model_v2.action.desiredCurvature
     self.n = len(model_v2.position.x)
     self._pos = None
-    self._fit12 = self._fit24 = self._klane = self._bsm = self._orient = self._lanes = _ModelFrame._UNSET
+    self._fit24 = self._bsm = self._lanes = _ModelFrame._UNSET
     self._psi = _ModelFrame._UNSET   # Phase 78
     self._lfit = _ModelFrame._UNSET  # Phase 82
     probs = getattr(model_v2, "laneLineProbs", [])
@@ -104,31 +103,10 @@ class _ModelFrame:
     return (x, c)
 
   @property
-  def fit12(self):
-    if self._fit12 is _ModelFrame._UNSET:
-      self._fit12 = self._fit(12)
-    return self._fit12
-
-  @property
   def fit24(self):
     if self._fit24 is _ModelFrame._UNSET:
       self._fit24 = self._fit(24)
     return self._fit24
-
-  @property
-  def orient_plan(self):
-    """Phase 55: (plan yaw rate z, plan speed x) on ModelConstants.T_IDXS; None = missing, short or non-finite."""
-    if self._orient is _ModelFrame._UNSET:
-      self._orient = None
-      try:
-        orr = np.array(list(self.ref.orientationRate.z), dtype=np.float64)
-        vx = np.array(list(self.ref.velocity.x), dtype=np.float64)
-        if (len(orr) == len(_PLAN_T_IDXS) and len(vx) == len(_PLAN_T_IDXS)
-            and np.all(np.isfinite(orr)) and np.all(np.isfinite(vx))):
-          self._orient = (orr, vx)
-      except (AttributeError, TypeError, ValueError):
-        pass
-    return self._orient
 
   @property
   def psi_plan(self):
@@ -142,22 +120,6 @@ class _ModelFrame:
       except (AttributeError, TypeError, ValueError):
         pass
     return self._psi
-
-  @property
-  def klane_raw(self):
-    """Phase 7c entry assist: lane-centre curvature from the two inner lane lines; None = unreadable."""
-    if self._klane is _ModelFrame._UNSET:
-      try:
-        lls = getattr(self.ref, "laneLines", [])
-        xl = np.fromiter((x for x in lls[1].x), dtype=np.float64)
-        yl = np.fromiter((y for y in lls[1].y), dtype=np.float64)
-        xr = np.fromiter((x for x in lls[2].x), dtype=np.float64)
-        yr = np.fromiter((y for y in lls[2].y), dtype=np.float64)
-        lc = lambda xq: 0.5 * (np.interp(xq, xl, yl) + np.interp(xq, xr, yr))
-        self._klane = (lc(0.0) - 2.0 * lc(25.0) + lc(50.0)) / 625.0
-      except (IndexError, ValueError):
-        self._klane = None
-    return self._klane
 
   def lane_preview(self, dist):
     """Phase 73c: (lane-centre y at the car, lane-centre y at dist, plan y at dist, lane width at the car, lane width at
@@ -233,185 +195,35 @@ LAT_ACCEL_ENVELOPE = 3.0 + 9.81 * 0.06  # ~3.59 m/s²
 # noise. With DT_CTRL=0.01s this gives alpha ≈ 0.033 per frame.
 PRED_RATIO_TAU = 0.3
 
-# --- Lateral command temporal smoothing (jerk reduction with lead compensation) ---
-# From the comma controls-challenge result: tracking a jittery target in full pays its
-# jerk; a FORWARD-LOOKING (lead) low-pass cuts jerk WITHOUT net lag because openpilot
-# already knows the future path (Phase 6f-4 history: constant TAU/LEAD 0.06 -> 0.10).
-# Phase 6h-1: speed-dependent command low-pass with MATCHED lead, replacing the
-# heavy low-speed angle-domain EMA. Offline pre-validation (ccnc-drivelog 0x40/0x42,
-# 8 segs): total tau 0.10->0.20 cuts <30 km/h 3-7 Hz desiredCurvature RMS 3.2x
-# (1.80e-4 -> 5.62e-5 1/m); tau 0.30 adds nothing IN THAT 3-7 Hz BAND. Lead is
-# matched per-speed so net phase stays ~0 (same principle as 6f-4).
-# Phase 34: low-speed node 0.20 -> 0.30. The felt low-speed shake band is
-# 0.8-2.5 Hz (not 3-7), and there tau 0.30 DOES help: offline replay of the
-# full pipeline (LP + matched lead + 6h-2 bound) on 0x51-0x54 + 0x4c/0x4e
-# model streams measures, vs 0.20 —
-#   quasi-straight 3-30 km/h 0.8-2.5 Hz command churn:  -14%
-#   1 s windows punching through the 0.5 deg TX hysteresis: 71% -> 52%
-#   turn-initiation t63, plan-foreseen (lead active):    ~0 (slightly leads)
-#   turn-initiation t63, lead-off (plan did not foresee): +0.245 s (was +0.175)
-#   S-reversal zero-cross lag / peak retention:          +0.07 s / 0.93 (was 0.96)
-# HONESTY NOTES (verification round):
-# (a) the onset bracket is wide (-0.060..+0.245 = 305 ms) and lead-off is a
-#     FLOOR on the replan worst case, not the worst case — right after a
-#     replan the lead points at the OLD future and must unwind first, which
-#     is worse than no lead. Margin to the 7a-5/33b failure region is
-#     therefore smaller than the table reads.
-# (b) 7c entry assist is NOT tau-independent: it consumes the leaded
-#     new_desired_curvature, and at 7-8 m/s the tau-driven dk_max growth
-#     (+0.0011..0.0014) exceeds the whole ENTRY_ASSIST_CAP (0.001). Benign
-#     by substitution — lead and assist add in the SAME direction at entry,
-#     so net entry command does not drop — but corner-onset t63 above is
-#     slightly optimistic for it.
-# (c) dist_ahead grows ~21% at low speed, so the x[-1] < dist_ahead fallback
-#     (raw model curvature, no lead — safe degradation) fires somewhat more
-#     often on stop approaches; rate unmeasured (corpus lacks position.x),
-#     distiller now records it for the next rounds.
-# tau 0.40/0.50 rejected: reversal retention 0.90/0.87 and replan +140/+200 ms
-# approach the 7a-5/33b failure territory for -6/-11%p more churn. A
-# gate-release variant (fast-tau when |input-output| large) measured 96-108%
-# of current churn = no gain, but that TESTED VARIANT was invalid by
-# construction: it released the LP while the lead horizon stayed sized for
-# the slow tau, so net lead > lag re-injected band energy. A correctly
-# matched gate (t_ahead recomputed from the instantaneous tau) is UNTESTED
-# and remains the natural mitigation if the replan lag surfaces on-road —
-# it would need its own validation (switching transient).
-# Kill switch: TAU_V = [0.10]*3 (pre-6h-1); previous behaviour: [0.20, 0.12, 0.08].
-LAT_CMD_SMOOTH_TAU_BP = [8.0, 13.0, 18.0]   # m/s
-LAT_CMD_SMOOTH_TAU_V  = [0.30, 0.12, 0.08]
-
-# Phase 6h-2: the lookahead lead is ADDITIVE and BOUNDED on top of the model plan
-# instead of replacing it. The budget is the curvature equivalent of this much
-# lateral jerk over the lookahead horizon (dk_max = J * t_ahead / v^2), so it
-# scales with the 6h-1 matched lead: at low speed (tau 0.20) the budget is ~25%
-# larger than the standalone pre-validation numbers, by design (lead-horizon
-# proportional). Kill switch: 1e9 (= replace behaviour, pre-6h-2).
-LOOKAHEAD_JERK_BUDGET = 0.7   # m/s^3
-# Phase 7c-2: corner-entry lead cap. The corner under-steer is mostly ENTRY LAG
-# (pooled 0x50-0x5b: achieved/desired 0.82 instantaneous vs 0.90 steady — the gap
-# is lag; cross-correlation showed ~170 ms residual desired->achieved lag AFTER
-# the current lookahead). Lag cannot be closed by the 7a integral without
-# winding up and over-cutting on exit (the 7a-3/7a-4 over-correction reverted in
-# 7a-5, which crossed a lane at the Seoul-Station S-curve). Feed-forward LEAD is
-# the right tool — it anticipates instead of reacting, so no windup. Raise the
-# t_ahead cap a SMALL step (0.25 -> 0.27 s, +20 ms) as a conservative probe; the
-# additive lead stays bounded by LOOKAHEAD_JERK_BUDGET (dk_max) so it cannot
-# over-command beyond the J=0.7 envelope even on an uncertain reverse curve.
-# Validate at the S-curve (the overshoot worst case) before any larger step.
-# Kill switch: LOOKAHEAD_T_AHEAD_CAP = 0.25 (previous behaviour).
-# Phase 41-2 (i6nv3 0x17-0x1f, 159 hands-off corner entries, report §23): plan -> vehicle-curvature half-level lag
-# p50 ~0.7 s of which controlsd's own share (LP + blend) is 0.15 s and the MDPS/vehicle share 0.55 s; authority is
-# not the binding term (gain sits above the base ceiling on ~half the entry frames via the error boost, and the
-# wire->wheel lag does not shrink with gain). The only request-side lever left is lead: one more step on the cap,
-# +50 ms, still inside the J = 0.7 m/s^3 budget (dk_max scales with t_ahead). The 7c-2 S-curve overshoot check is
-# the acceptance test on-road (swing p95 must not rise > 0.3 deg). Kill: 0.27 (7c-2).
-LOOKAHEAD_T_AHEAD_CAP = 0.32  # s
-# Phase 55 (report §52/§53) -> 55b (report §54/§55): lead from the plan's YAW RATE / SPEED instead of the cubic y''.
-# 9 OPM10V3 routes, ~390k model frames: the cubic plan curvature lags the road by 0.4-0.6 s, and the plan yaw rate
-# sampled 0.9 s (+ tau(v)) ahead tracks the road best. Phase 55 REPLACED the action by that sample (bounded); the
-# closed-loop check (§54) showed the 0.9 s sample carries only 26-30 % of the action's lane-heading feedback and
-# 30-80 % of its offset feedback, so with the MDPS's ~10 % steady angle shortfall the car would drift outward in
-# curves (identified-model sim on the recorded roads: curve offset RMS +15-63 % vs the cubic build). 55b keeps the
-# action (and its feedback) and adds HALF of the plan's predicted curvature CHANGE between 0.3 s and 0.9 s + tau:
-#   cmd = K + LOOKAHEAD_ORIENT_WEIGHT * clip(k_or(0.9 + tau) - k_or(0.3), +-J (0.9 + tau) / v^2)
-# Same sim, three calibrations matched to the real offsets: curve offset RMS -11/-31 % vs the cubic build, straight
-# unchanged, 20 Hz command change -24 %, lateral jerk -27 %; open loop vs road at t + 0.45 s: straight -25 %,
-# entry -27 %, curve -16 %, exit -13 %; feedback kept (offset 1.00, heading 0.69 of the action's). Weight 0.3 gained
-# less in curves, 0.7 worsened straights. No |k| gate: the delta carries no straight-road noise (command change down).
-# Not covered by the data (cubic path, cross-faded over LOOKAHEAD_ORIENT_SLEW_S): < 25-30 km/h, lane change, plan
-# arrays missing / non-finite.
-# Kill switches: LOOKAHEAD_ORIENT_T_S = 0.0 (cubic path, Phase 41-2); LOOKAHEAD_ORIENT_WIDE_BUDGET = False (budget on
-# the cubic path's t_ahead instead of 0.9 s + tau).
-LOOKAHEAD_ORIENT_T_S = 0.9            # s, plan sample time on top of tau(v)
-LOOKAHEAD_ORIENT_REF_T_S = 0.3        # s, reference plan time (closest to the action, RMSE 0.27e-3)
-LOOKAHEAD_ORIENT_WEIGHT = 0.5         # share of a predicted TIGHTENING (entry) added to the action
-# Phase 55c (report §56/§57, first 55b drives 48-4f): entry improved as predicted (outside offset +0.057 -> +0.008 m)
-# but the car sat 6-10 cm further OUT in curves: 55b also unwinds early — its lead in the last 1.5 s of a curve is
-# -0.12e-3 (toward the outside) vs +0.05e-3 on the cubic build, exit -0.58 vs -0.21e-3. 55c keeps the full weight
-# only while the plan predicts the curve TIGHTENING, a cubic-build-sized weight while it predicts loosening, ignores
-# changes below a small deadband and adds nothing on straights (|k| gate on the larger of the two samples).
-# 12 drives: entry lead +0.41e-3 (55b +0.51), late-curve -0.01 (cubic +0.05, 55b -0.12), exit -0.20 (cubic -0.21),
-# straight lead RMS 0.027e-3 (cubic 0.049, 55b 0.128), lead 20 Hz change -32 % vs 55b in curves.
-# Kill (back to 55b): WEIGHT_SHRINK = 0.5, DEADBAND = 0.0, GATE = [0.0, 0.0]. (Weight continuous in the predicted
-# |k| growth and slewed — replay showed a hard 0.5/0.2 switch adding command steps on reversals.)
-LOOKAHEAD_ORIENT_WEIGHT_SHRINK = 0.2  # share of a predicted LOOSENING (exit) added to the action
-LOOKAHEAD_ORIENT_DEADBAND = 0.15e-3   # 1/m: predicted changes below this add nothing
-LOOKAHEAD_ORIENT_GATE = [0.8e-3, 1.5e-3]   # 1/m: max(|k_or(0.9+tau)|, |k_or(0.3)|) -> 0..1 (straights: no lead)
-LOOKAHEAD_ORIENT_GROW_SPAN = 0.5e-3   # 1/m: predicted |k| growth at which the full (entry) weight applies
-LOOKAHEAD_ORIENT_W_SLEW_S = 0.3       # s for a full SHRINK <-> WEIGHT change of the lead weight
-LOOKAHEAD_ORIENT_WIDE_BUDGET = True   # dk_max over 0.9 s + tau(v) instead of t_ahead
-LOOKAHEAD_ORIENT_RAMP_V = [25.0 / 3.6, 30.0 / 3.6]   # m/s: cubic below, orient above
-LOOKAHEAD_ORIENT_SLEW_S = 0.5         # s for a full cubic <-> orient cross-fade
 _PLAN_T_IDXS = np.array(ModelConstants.T_IDXS, dtype=np.float64)
-# Phase 60 (report §67): speed-scheduled DELAY MATCH. The model's action is the curvature for t + 0.375 s (lateral delay
-# 0.3 + 0.075; lagd never converges on this driving), but the measured action -> vehicle-curvature delay depends on speed
-# (102 routes: 0.40 / 0.50 / 0.55 / 0.60 s at 40-55 / 55-70 / 70-90 / 90+ km/h on the current chain). Instead of
-# extrapolating, read the model's OWN planned curvature further ahead: the base command becomes
-#   K + clip(k_plan(REF + extra(v)) - k_plan(REF), +-LOOKAHEAD_DELAY_JERK * |extra| / v^2)
-# (k_plan = plan yaw rate / speed, REF = LOOKAHEAD_ORIENT_REF_T_S, the plan time closest to the action). extra(v) may be
-# negative (a chain faster than the model assumes). Faded in with the orient path (25-30 km/h), off in lane changes.
-# The 55c entry lead and everything downstream act on top of this base. Kill: LOOKAHEAD_DELAY_EXTRA_S all 0.
-# i6n Phase 69a (report §91.2, §92): the third breakpoint moved 62.5 -> 70 km/h and the first three steps raised 0.3 -> 0.5 s
-# (below). A wheel at rest needs ~0.9 s to start once the request moves, whatever the request rate, the gap or the
-# speed (71 hands-off entries) — a bigger or faster request does not shorten it, only an earlier one does; and corner
-# entries are 46-63 % of the driver's non-lane-change grabs. Total timing (Phase 68: max(model delay, 0.3 + E(v))) is
-# therefore 0.8 s up to 70 km/h and falls back to the learned delay (0.65-0.69 s) by 80 km/h, where the chain sim's
-# plant is right and more advance only costs intent error. Kill: speeds [.., 62.5 / 3.6, ..], EXTRA_S [0.3] * 5.
-LOOKAHEAD_DELAY_SPEEDS_MS = [35.0 / 3.6, 47.5 / 3.6, 70.0 / 3.6, 80.0 / 3.6, 100.0 / 3.6]
-# §67 picked 0.2 / 0.1 / 0 / 0 / 0 s with Phase 59 on. Phase 61 (§69): Phase 59 is off again (trim / kick layers), whose
-# chain is slower: full-chain sim E 0 / 0.1 / 0.2 / 0.3 s at all speeds -> intent error 0.854 / 0.836 / 0.828 / 0.827e-3,
-# model -> car delay 500 / 420 / 360 / 300 ms, lateral jerk p95 0.34 / 0.34 / 0.34 / 0.35 (31520b9 corners on the road:
-# car 639 ms behind the model at >= 55 km/h).
-LOOKAHEAD_DELAY_EXTRA_S = [0.5, 0.5, 0.5, 0.3, 0.3]
-LOOKAHEAD_DELAY_JERK = 2.5            # m/s^3 envelope for the delay-match shift
-# i6n Phase 64b (report §76): LOOKAHEAD_DELAY_EXTRA_S was tuned while the model was told a 0.3 s lateral delay (lagd
-# unestimated -> CP.steerActuatorDelay 0.1 + 0.2). Once lagd is estimated (Phase 64a: ~0.57 s on this car) modeld
-# itself plans for the real delay — the delay is a model input and sets where the action is read on the plan — and
-# the same shift added here again would steer ~0.3 s early. So the shift is what the model's delay still lacks:
-#   E_eff(v) = clip(E(v) + LOOKAHEAD_DELAY_BASE_S - model delay, LOOKAHEAD_DELAY_EFF_CLIP)
-# (model delay as modeld reads it: lagd's lateralDelay with LagdToggle on, else LagdValueCache). The total timing
-# (model delay + shift, 0.6 s, the Phase 61 sim optimum) is kept, and the model's own planning takes over the part
-# lagd has learned. Kill: LOOKAHEAD_DELAY_FOLLOW_MODEL = False.
-LOOKAHEAD_DELAY_FOLLOW_MODEL = True
+# Phase 64b: the lateral delay the model is told while lagd has not published one (CP.steerActuatorDelay 0.1 + 0.2), and
+# how often _update_model_lat_delay re-reads the LagdToggle / LagdValueCache params.
 LOOKAHEAD_DELAY_BASE_S = 0.3
-LOOKAHEAD_DELAY_EFF_CLIP = (-0.3, 0.6)
 LOOKAHEAD_DELAY_PARAM_FRAMES = 300    # LagdToggle / LagdValueCache re-read every 3 s (modeld: every 3 s)
-# i6n Phase 67b (report §88-89): the orient-lead jerk budget (LOOKAHEAD_JERK_BUDGET x horizon / v^2) took its horizon
-# from t_or, which Phase 64b moves with the model delay — a 0.65 s delay made the budget 36 % looser although the lead
-# window itself (REF -> 0.9 s + tau) keeps its length. The budget horizon no longer includes that shift, i.e. it is the
-# Phase 55 value again whatever delay the model is told. Kill: LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = False.
-LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = True
-# i6n Phase 68 (report §90): the total timing (model delay + this shift) is no longer pinned at BASE + E(v) = 0.6 s.
-# Phase 64b subtracted from the model's own delay whenever lagd told it more than 0.6 s (learned 0.69 s -> shift
-# -0.09 s), i.e. it steered later than the delay the car was measured to have. The shift now only fills what the
-# model delay lacks and is never negative: total = max(model delay, BASE + E(v)) — 0.6 s until the model is told
-# more, then the told (seed 0.65 s / learned) delay itself. Kill: LOOKAHEAD_DELAY_PIN_TOTAL = True.
-LOOKAHEAD_DELAY_PIN_TOTAL = False
 
-# i6n Phase 72 (report §96-97, common/steer_profile.py): DIRECT lateral path for the solo profile. With the factory LFA
-# held off the vehicle's ADAS controller relays our request and the MDPS follows it in 180 ms at 0.95 (request -> yaw
-# 0.32 s); the "late, partly delivered" steering every lead layer below was fitted to (6h-1 smoothing with matched lead,
-# 6f-5 / 6h-2 cubic lead, 55b / 55c plan lead, 60 / 64b / 68 / 69a delay match, 7c entry assist, latcontrol 7a trim) was
-# the factory LFA steering on its own schedule. In the solo profile the command is the model's action itself - the
-# model already plans for the lateral delay lagd publishes - and only the guards about the MODEL stay (non-finite hold,
-# confidence blend, lane-dropout hold, low-confidence rate cap, departure hold, BSM guard, turn-exit handling) plus
-# clip_curvature. self._steer_legacy (ProfileLatch: changes only while lateral is not active) selects the path; an
-# object without it (unit-test stubs, replays of pre-72 logs) keeps the legacy path.
+# i6n Phase 72 (report §96-97): DIRECT lateral path. With the factory LFA held off the vehicle's ADAS controller relays
+# our request and the MDPS follows it in 180 ms at 0.95 (request -> yaw 0.32 s). The command is the model's action
+# itself - the model already plans for the lateral delay lagd publishes - and only the guards about the MODEL stay
+# (non-finite hold, confidence blend, lane-dropout hold, low-confidence rate cap, departure hold, BSM guard, turn-exit
+# handling) plus clip_curvature.
+# Phase 89: this is the only path. The lead layers fitted to the factory LFA steering on its own schedule (6h-1
+# smoothing with matched lead, 6f-5 / 6h-2 cubic lead, 55b / 55c plan lead, 60 / 64b / 68 / 69a delay match, 7c entry
+# assist, latcontrol 7a trim) and the profile switch that selected them were removed.
 # Phase 46: controlsState.steerFlags — which lateral guards acted on this frame's command, so drive-log judgments of
 # Phase 39/41/41-2/7c/37b no longer have to re-derive them from inputs (report §26 "observability" gap). Telemetry
 # only: nothing reads these bits back. Cost: a few int ORs per 100 Hz frame and one UInt16 in controlsState.
 STEER_FLAG_LOWCONF_GATE = 1 << 0      # Phase 41 low-confidence gate on (lane_min < LOWCONF_LANE_MIN, hands off)
 STEER_FLAG_LOWCONF_CAPPED = 1 << 1    # Phase 41 rate cap actually held the command back
 STEER_FLAG_LOWCONF_RELEASE = 1 << 2   # Phase 41 release ramp running (gate just dropped)
-STEER_FLAG_LOOKAHEAD_CAP = 1 << 3     # Phase 41-2 lookahead t_ahead clipped by LOOKAHEAD_T_AHEAD_CAP
+STEER_FLAG_LOOKAHEAD_CAP = 1 << 3     # (logs before Phase 89 only) Phase 41-2 lookahead t_ahead clipped by its cap
 STEER_FLAG_CONF_BLEND = 1 << 4        # Phase 6g confidence blend toward the previous command (confidence < 1)
 STEER_FLAG_LANE_DROPOUT = 1 << 5      # Phase 39 dropout hold
 STEER_FLAG_DEPARTURE_HOLD = 1 << 6    # lane-departure guard held the command
 STEER_FLAG_BSM_HOLD = 1 << 7          # Phase 37b BSM lane guard held the command
-STEER_FLAG_ENTRY_ASSIST = 1 << 8      # Phase 7c geometry entry assist added curvature
-STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # Phase 55b lead taken (fully or partly) from the plan yaw-rate change
-STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # Phase 55b orient lead clipped by the jerk budget
-STEER_FLAG_DIRECT = 1 << 11           # Phase 72 direct path in use (solo profile) while lateral is active
+STEER_FLAG_ENTRY_ASSIST = 1 << 8      # (logs before Phase 89 only) Phase 7c geometry entry assist added curvature
+STEER_FLAG_LOOKAHEAD_ORIENT = 1 << 9  # (logs before Phase 89 only) Phase 55b lead from the plan yaw-rate change
+STEER_FLAG_LOOKAHEAD_BUDGET = 1 << 10 # (logs before Phase 89 only) Phase 55b orient lead clipped by the jerk budget
+STEER_FLAG_DIRECT = 1 << 11           # Phase 72 direct path in use while lateral is active (Phase 89: always)
 STEER_FLAG_ENTRY_LEAD = 1 << 13       # Phase 78 entry lead is adding curvature
 STEER_FLAG_LANE_CENTER = 1 << 12      # Phase 73c lane-centre term is adding curvature
 STEER_FLAG_LANE_FIT = 1 << 14         # Phase 82 lane-fit part is adding curvature
@@ -551,24 +363,6 @@ LANE_CENTER_KE = [0.0, 0.0, 0.0, 0.0]      # 1/m per m of offset. Phase 79: [0, 
 LANE_CENTER_NONFINITE_GUARD = True
 LAT_MIN_SPEED_HYST_MS = 1.0 / 3.6
 
-# Phase 7c: confidence-gated geometry ENTRY ASSIST. The model plan under-commands
-# corner entry vs lane geometry (0x44-0x4a: entry op/k_lane p50 0.83-0.93,
-# under<0.6 32-41%) — invisible to the 7a feedback (desired-vs-achieved). When a
-# well-tracked (lane_min>0.6) medium+ corner (|k_lane|>0.003) is BUILDING
-# (|desired| rising) and the plan is short of the lane-implied curvature in the
-# SAME direction, add the bounded shortfall. Replay (0x49/0x4a/0x42 incl. the
-# seg4 S-reversal fixture): fires on 0.6-1.1% of op-active frames (entry only),
-# assist p50 6-10e-4 (cap-bound), 0 fires inside the seg4 reversal window (the
-# sign+rising gates stay silent through reversals). Applied BEFORE confidence
-# damping and the 6h-1 LP (ramped in smoothly) and bounded downstream by
-# clip_curvature/VM/panda as usual. Kill switch: ENTRY_ASSIST_CAP = 0.0.
-ENTRY_ASSIST_CAP = 1e-3       # 1/m absolute cap
-ENTRY_ASSIST_REL = 0.5        # ... and at most +50% of the plan
-ENTRY_ASSIST_KLANE_MIN = 0.003
-ENTRY_ASSIST_LANE_MIN = 0.6
-ENTRY_ASSIST_MIN_SPEED = 8.3  # m/s; aligned with latcontrol_angle.LAT_FB_MIN_SPEED (7a-7) so open-loop entry assist
-                              # never runs in the 7.0-8.3 m/s band where the closed-loop trim is off (was 7.0)
-
 # Phase 6g-1: floor on the model-confidence damping below. The damping blends the
 # command toward the PREVIOUS (straighter) curvature when lane/position confidence
 # drops, which on corner entry right after an intersection (low lane confidence as
@@ -654,9 +448,9 @@ LANE_DROPOUT_EXIT_ON_ONE_LINE = True
 # (a) no dropout latch in that window; (b) in that window a command moving toward straight is not rate-capped by
 # Phase 41 (treated like a declared manoeuvre); (c) a held dropout ends when the driver turns against it with
 # >= LANE_DROPOUT_COUNTER_TQ (angle = -curvature: opposing torque has the SAME sign as the held curvature);
-# (d) in that window a command moving toward straight is not frozen by the 6g low-confidence blend either, and the
-# 55c lead uses its full weight for the predicted unwinding (replay of 4a t451-458 through the real state_control:
-# without (d) the blend kept the command 1-2e-3 above the unwinding model for 1 s).
+# (d) in that window a command moving toward straight is not frozen by the 6g low-confidence blend either (replay of
+# 4a t451-458 through the real state_control: without (d) the blend kept the command 1-2e-3 above the unwinding model
+# for 1 s).
 # Kill: TURN_EXIT_K = 1e9 (a, b), LANE_DROPOUT_COUNTER_TQ = 1e9 (c).
 TURN_EXIT_K = 8e-3                    # 1/m (radius 125 m): intersection / tight-turn scale
 TURN_EXIT_S = 5.0
@@ -673,10 +467,8 @@ TURN_EXIT_SOFT_EXEMPT = True          # (b) Phase 41 cap and (d) 6g blend exempt
 LOWCONF_CURVE_K = [1.5e-3, 3.0e-3]   # 1/m: |model action| at which the low-confidence restraints start / have faded out
 
 # Non-finite model action handling. A NaN/inf model_v2.action.desiredCurvature
-# bypasses every isfinite check in _lookahead_curvature (they only cover the
-# SAMPLED TRAJECTORY, not the fallback) and reaches the recursive state below:
-# _lat_cmd_lp, _absdc_slow and self.desired_curvature (via np.clip in
-# clip_curvature) all latch NaN PERMANENTLY, and the actuator finite-guard then
+# reaches the recursive state below: self.desired_curvature (via np.clip in
+# clip_curvature) latches NaN PERMANENTLY, and the actuator finite-guard then
 # zeroes curvature/steeringAngleDeg every frame — one glitch frame = a silent,
 # unrecoverable 0-deg steering command for the rest of the drive.
 # A short PURE HOLD of the last command rides out a transient glitch with no
@@ -684,8 +476,8 @@ LOWCONF_CURVE_K = [1.5e-3, 3.0e-3]   # 1/m: |model action| at which the low-conf
 # frameDropPerc/posenetOK, never the value) faults on a model that keeps
 # emitting non-finite actions, so an unbounded hold would keep the car turning
 # on a stale curvature indefinitely with no alert. After the hold window the
-# target is ramped to straight — same "bleed, not hold" rule the Phase 7a trim
-# uses for its anti-windup. Kill switch: RAMP_END_S = HOLD_S = large -> pure hold.
+# target is ramped to straight ("bleed, not hold").
+# Kill switch: RAMP_END_S = HOLD_S = large -> pure hold.
 MODEL_NONFINITE_HOLD_S = 0.20      # pure hold (identical to the last command)
 MODEL_NONFINITE_RAMP_END_S = 2.20  # ramp factor reaches 0 here; it multiplies the previous output every frame, so the
                                    # command is at 0.76 / 0.09 / 0.00 of the held value 0.3 / 0.5 / 0.7 s into the gap
@@ -700,8 +492,6 @@ class Controls(ControlsExt):
 
     # Initialize sunnypilot controlsd extension and base model state
     ControlsExt.__init__(self, self.CP, self.params)
-    self._steer_profile = ProfileLatch(self.params)   # Phase 72: solo (default) / legacy steering profile
-    self._steer_legacy = self._steer_profile.legacy
     self._lc_p = 0.0   # Phase 73c lane-centre term: low-passed proportional part
     self._lc_i = 0.0   #                             integral part
     self._lc_e = 0.0   # Phase 77: low-passed proportional part on the car's own offset
@@ -730,20 +520,12 @@ class Controls(ControlsExt):
     self._turn_peak_buf = deque(maxlen=int(TURN_EXIT_S / 0.1))   # Phase 56: per-0.1 s max |model action|
     self._turn_peak_cur = 0.0
     self._turn_peak_n = 0
-    self._turn_exit = False
-    self._lookahead_lead_w = LOOKAHEAD_ORIENT_WEIGHT_SHRINK   # Phase 55c slewed lead weight
     self._mf = None                          # _ModelFrame cache (see class)
     self.desired_curvature = 0.0
     self.predicted_lat_accel_ratio = 0.0
-    self._lat_cmd_lp = 0.0  # state for the LAT_CMD_SMOOTH_TAU_* low-pass
-    self._klane_lp = 0.0     # Phase 7c lane-geometry curvature (EMA 0.3 s)
-    self._absdc_slow = 0.0   # Phase 7c rising-entry detector state
     self._model_nonfinite_frames = 0  # consecutive non-finite model actions
     self.lowconf_cap = LowConfRateCap(DT_CTRL)   # Phase 41: low-lane-confidence steering-rate cap
     self.steer_flags = 0                         # Phase 46: STEER_FLAG_* of the last frame
-    self._lookahead_capped = False
-    self._lookahead_flags = 0                    # Phase 55
-    self._lookahead_orient_w = 0.0               # Phase 55 cubic -> orient cross-fade weight
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -906,15 +688,11 @@ class Controls(ControlsExt):
     self._entry_lead_lp, self._entry_lead_wo = el, wo
     return el
 
-  def _lookahead_curvature(self, model_v2, v_ego, lookahead_extra_s):
-    """Phase 7: sample modelV2 trajectory at adaptive look-ahead distance.
-
-    Phase 6h-1: lookahead_extra_s is the caller's LP time constant tau(v) so the
-    phase lead always matches the smoothing lag (was a fixed 0.10 s constant)."""
+  def _lookahead_curvature(self, model_v2):
+    """The model's action for this frame (Phase 72 direct path; the look-ahead lead layers were removed in Phase 89),
+    with the non-finite hold."""
     mf = self._model_frame(model_v2)
     fallback = mf.fallback
-    self._lookahead_capped = False
-    self._lookahead_flags = 0   # Phase 55b STEER_FLAG_LOOKAHEAD_ORIENT / _BUDGET
 
     # Non-finite model action: hold the last command briefly, then ramp to
     # straight (see MODEL_NONFINITE_* above). Nothing non-finite may reach the
@@ -925,118 +703,7 @@ class Controls(ControlsExt):
                    (MODEL_NONFINITE_RAMP_END_S - MODEL_NONFINITE_HOLD_S), 0.0, 1.0)
       return self.desired_curvature * float(ramp)
     self._model_nonfinite_frames = 0
-
-    if not getattr(self, "_steer_legacy", True):   # Phase 72 direct path: the model's action, no lead layers
-      self._delay_match = 0.0
-      self._delay_extra_eff = 0.0
-      self._lookahead_orient_w = 0.0
-      return fallback
-
-    # Phase 60: speed-scheduled delay match (see LOOKAHEAD_DELAY_*): shift the base along the model's own plan.
-    self._delay_match = 0.0
-    dm_extra = float(_interp(v_ego, LOOKAHEAD_DELAY_SPEEDS_MS, LOOKAHEAD_DELAY_EXTRA_S))
-    # Phase 64b: the action now sits at the model's own delay, so the plan reference times move with it (ref_shift)
-    # and the extra shift is only what that delay does not cover yet.
-    ref_shift = 0.0
-    if LOOKAHEAD_DELAY_FOLLOW_MODEL:
-      model_delay = getattr(self, "_model_lat_delay", LOOKAHEAD_DELAY_BASE_S)
-      ref_shift = float(_clip(model_delay - LOOKAHEAD_DELAY_BASE_S, -LOOKAHEAD_ORIENT_REF_T_S, 0.5))
-      dm_lo = LOOKAHEAD_DELAY_EFF_CLIP[0] if LOOKAHEAD_DELAY_PIN_TOTAL else max(min(dm_extra, 0.0), LOOKAHEAD_DELAY_EFF_CLIP[0])
-      dm_extra = float(_clip(dm_extra - ref_shift, dm_lo, LOOKAHEAD_DELAY_EFF_CLIP[1]))
-    self._delay_extra_eff = dm_extra
-    dm_plan = mf.orient_plan
-    if dm_extra != 0.0 and dm_plan is not None and mf.lane_change_state == LaneChangeState.off:
-      dm_yr, dm_vx = dm_plan
-      dm_k = lambda t: float(np.interp(t, _PLAN_T_IDXS, dm_yr)) / max(float(np.interp(t, _PLAN_T_IDXS, dm_vx)), 1.0)
-      dm_ref = LOOKAHEAD_ORIENT_REF_T_S + ref_shift
-      dm = dm_k(max(dm_ref + dm_extra, 0.0)) - dm_k(dm_ref)
-      dm_max = LOOKAHEAD_DELAY_JERK * max(abs(dm_extra), 0.05) / max(v_ego, 5.0) ** 2
-      dm_w = float(_interp(v_ego, LOOKAHEAD_ORIENT_RAMP_V, [0.0, 1.0]))
-      self._delay_match = dm_w * float(_clip(dm, -dm_max, dm_max))
-      if math.isfinite(self._delay_match):
-        fallback = fallback + self._delay_match
-      else:
-        self._delay_match = 0.0
-
-    # Phase 55b cross-fade weight toward the orient lead, updated on every engaged frame (also below the gate) so a
-    # speed / lane-change / plan-validity switch never steps the command.
-    plan = mf.orient_plan if LOOKAHEAD_ORIENT_T_S > 0.0 else None
-    w_tgt = 0.0
-    if plan is not None and mf.lane_change_state == LaneChangeState.off:
-      w_tgt = float(_interp(v_ego, LOOKAHEAD_ORIENT_RAMP_V, [0.0, 1.0]))
-    w_prev = getattr(self, "_lookahead_orient_w", w_tgt)
-    step = DT_CTRL / LOOKAHEAD_ORIENT_SLEW_S
-    w = 0.0 if plan is None else float(_clip(w_tgt, w_prev - step, w_prev + step))   # no plan -> nothing to fade from
-    self._lookahead_orient_w = w
-
-    if mf.n < 5:
-      return fallback
-
-    abs_curv = abs(fallback)
-    tau_v = lookahead_extra_s
-    cmd_cubic = fallback
-    # Phase 6f-5 lane-tracking responsiveness:
-    #   base_s: extend the high-speed shelf to 140 km/h (38.9 m/s) -> 0.18 s so
-    #     highway cruise (frequent Gyeongbu expressway runs to Yongin) sees an
-    #     earlier preview of lane drift. The 0.13 s shelf at 100 km/h is kept
-    #     as the third node so anything <=100 km/h is unchanged.
-    #   boost_s: raise the corner peak from 0.12 -> 0.20 s while keeping the
-    #     entry threshold (|curv|>=0.001) intact, so straight-line 4-5 Hz
-    #     wobble (the band Phase 6f-4 just cut) is not amplified. ccnc-drivelog
-    #     0x3a-0x3f cross-correlation showed the existing pipeline gives op a
-    #     ~+87 ms duration-weighted lead over the wheel; this widens that lead
-    #     in shallow-to-medium corners (where it matters most for entry feel).
-    base_s = float(_interp(v_ego, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
-    boost_s = float(_interp(abs_curv, [0.0008, 0.005], [0.0, 0.20]))  # R1: start aligned with the 0.0008 gate/blend (was 0.001)
-    t_ahead = min(base_s + boost_s + tau_v, LOOKAHEAD_T_AHEAD_CAP + tau_v)
-    # Phase 6h-2: gate lowered 0.001 -> 0.0008 to match the continuous blend at
-    # the return (below 0.0008 the blend is 0, so behaviour is identical — this
-    # only removes the replace/fallback discontinuity at the old gate). Phase 55b: gates the cubic path only.
-    if abs_curv >= 0.0008 and w < 1.0:
-      self._lookahead_capped = (base_s + boost_s) > LOOKAHEAD_T_AHEAD_CAP   # Phase 46 telemetry (cubic path only)
-      dist_ahead = min(v_ego * t_ahead, 10.0)
-      # cubic fit of the first 12 plan points, computed once per model frame (_ModelFrame)
-      x, c = mf.fit12 if dist_ahead >= 0.3 else (None, None)
-      if c is not None and x[-1] >= dist_ahead:
-        curv = 6.0 * c[0] * dist_ahead + 2.0 * c[1]
-        if np.isfinite(curv):
-          # Phase 6h-2: ADDITIVE, BOUNDED lead instead of replacement. Pre-validation:
-          # 0x42 seg4 spike: replace=0.0155 (model plan 0.0120 x1.30) -> bounded
-          # J=0.7 = 0.0141; straights (|fb|<0.0015, n=2668) injected-noise p99
-          # 0.00092->0.00058 (-37%); normal corners (n=1192) ratio p50/p90 unchanged.
-          dk_max = LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v_ego, 5.0) ** 2
-          blend = float(_interp(abs_curv, [0.0008, 0.0015], [0.0, 1.0]))
-          cmd_cubic = fallback + blend * float(_clip(float(curv) - fallback, -dk_max, dk_max))
-    if w <= 0.0:
-      return cmd_cubic
-
-    # Phase 55b/55c: action + weight * (plan yaw-rate curvature at 0.9 s + tau - at 0.3 s), budget over 0.9 s + tau.
-    t_or = LOOKAHEAD_ORIENT_T_S + tau_v + ref_shift   # Phase 64b: same lead horizon beyond the action
-    yaw_rate, vx = plan
-    k_or = lambda t: float(np.interp(t, _PLAN_T_IDXS, yaw_rate)) / max(float(np.interp(t, _PLAN_T_IDXS, vx)), 1.0)
-    t_budget = (t_or - (ref_shift if LOOKAHEAD_BUDGET_EXCLUDES_SHIFT else 0.0)) if LOOKAHEAD_ORIENT_WIDE_BUDGET else t_ahead
-    dk_or = LOOKAHEAD_JERK_BUDGET * max(t_budget, 0.05) / max(v_ego, 5.0) ** 2
-    k_far, k_ref = k_or(t_or), k_or(LOOKAHEAD_ORIENT_REF_T_S + ref_shift)
-    delta = k_far - k_ref
-    d_c = float(_clip(delta, -dk_or, dk_or))
-    # Phase 55c: weight by how much the plan predicts |k| to grow — WEIGHT_SHRINK for loosening, WEIGHT once it grows by
-    # LOOKAHEAD_ORIENT_GROW_SPAN, linear in between (continuous: an S-curve reversal must not switch it in one frame);
-    # Phase 56d: unwinding out of a turn the car made gets the full weight (the LP lag must not keep it turning).
-    # The weight is slewed (LOOKAHEAD_ORIENT_W_SLEW_S for the full span) so neither change steps the command.
-    w_t = float(_interp(abs(k_far) - abs(k_ref), [0.0, LOOKAHEAD_ORIENT_GROW_SPAN],
-                        [LOOKAHEAD_ORIENT_WEIGHT_SHRINK, LOOKAHEAD_ORIENT_WEIGHT]))
-    if getattr(self, "_turn_exit", False):
-      w_t = LOOKAHEAD_ORIENT_WEIGHT
-    w_prev = getattr(self, "_lookahead_lead_w", w_t)
-    w_step = abs(LOOKAHEAD_ORIENT_WEIGHT - LOOKAHEAD_ORIENT_WEIGHT_SHRINK) * DT_CTRL / LOOKAHEAD_ORIENT_W_SLEW_S
-    weight = float(_clip(w_t, w_prev - w_step, w_prev + w_step)) if w_step > 0.0 else w_t
-    self._lookahead_lead_w = weight
-    g0, g1 = LOOKAHEAD_ORIENT_GATE
-    gate = 1.0 if g1 <= g0 else float(_clip((max(abs(k_far), abs(k_ref)) - g0) / (g1 - g0), 0.0, 1.0))
-    lead = math.copysign(max(abs(d_c) - LOOKAHEAD_ORIENT_DEADBAND, 0.0), d_c)
-    cmd_or = fallback + weight * gate * lead
-    self._lookahead_flags = STEER_FLAG_LOOKAHEAD_ORIENT | (STEER_FLAG_LOOKAHEAD_BUDGET if abs(delta) > dk_or else 0)
-    return w * cmd_or + (1.0 - w) * cmd_cubic
+    return fallback
 
   def _predicted_lat_accel_excess(self, model_v2, v_ego, lookahead_s=1.5):
     """Predicted v²·κ at lookahead_s ahead, normalized by LAT_ACCEL_ENVELOPE.
@@ -1103,7 +770,6 @@ class Controls(ControlsExt):
     model_v2 = self.sm['modelV2']
     mf = self._model_frame(model_v2)    # per-model-frame derived values (see _ModelFrame)
     turn_exit = self._turn_exit_update(self.curvature, mf.fallback)   # Phase 56
-    self._turn_exit = turn_exit                                         # (read by _lookahead_curvature)
 
     # curveSpeedAdvisory: EMA-filtered ratio of predicted v²·κ at 1.5 s
     # lookahead to LAT_ACCEL_ENVELOPE. Updated every frame (cheap) so the
@@ -1130,12 +796,6 @@ class Controls(ControlsExt):
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and \
                     (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
 
-    # Phase 72: steering profile for this frame (re-evaluated every 3 s; a change takes effect while lateral is off)
-    if hasattr(self, "_steer_profile"):
-      self._steer_legacy = self._steer_profile.update(bool(CC.latActive))
-    steer_direct = not getattr(self, "_steer_legacy", True)
-    if hasattr(self.LaC, "direct"):
-      self.LaC.direct = steer_direct
     if hasattr(self.LaC, "request_paused"):
       self.LaC.request_paused = self.get_request_paused(self.sm)   # Phase 75k
 
@@ -1169,15 +829,11 @@ class Controls(ControlsExt):
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    # Phase 6h-1 order: tau(v) first, so the lookahead lead matches the LP lag below.
-    lat_smooth_tau = float(_interp(CS.vEgo, LAT_CMD_SMOOTH_TAU_BP, LAT_CMD_SMOOTH_TAU_V))
-    self._lookahead_capped = False
-    self._lookahead_flags = 0
-    new_desired_curvature = self._lookahead_curvature(model_v2, CS.vEgo, lat_smooth_tau) if CC.latActive else self.curvature
-    steer_flags = (STEER_FLAG_LOOKAHEAD_CAP if self._lookahead_capped else 0) | self._lookahead_flags   # Phase 46 / 55
+    new_desired_curvature = self._lookahead_curvature(model_v2) if CC.latActive else self.curvature
+    steer_flags = 0   # Phase 46
 
-    # Phase 73c: lane-centre term (direct path only)
-    if steer_direct and CC.latActive:
+    # Phase 73c: lane-centre term
+    if CC.latActive:
       lc_ok = (mf.lane_change_state == LaneChangeState.off and not (CS.leftBlinker or CS.rightBlinker)
                and not CS.steeringPressed and not self.lane_dropout)
       if LANE_STATE_RESET and mf.lane_change_state != LaneChangeState.off:
@@ -1207,29 +863,6 @@ class Controls(ControlsExt):
         self._lc_usual = None; self._lc_wa = 1.0; self._lc_usual_n = 0; self._lc_avoid_gap = 0
       self._entry_lead_lp = 0.0
       self._entry_lead_wo = 0.0
-
-    # Phase 7c geometry entry assist (constants above).
-    if ENTRY_ASSIST_CAP > 0.0 and CC.latActive and mf.klane_raw is not None and not steer_direct:   # (lane-line read failed -> skip, as before; Phase 72: not on the direct path)
-      lane_min_p = mf.lane_min_p
-      klane_raw = mf.klane_raw          # lane-centre curvature, once per model frame (_ModelFrame)
-      a = DT_CTRL / (0.3 + DT_CTRL)
-      # NaN lane-line y values pass the length checks and np.interp forwards
-      # them; one such frame would poison the EMA (abs(NaN) gates all go
-      # False) and silently disable entry assist for the rest of the drive.
-      if math.isfinite(klane_raw):
-        self._klane_lp += a * (float(klane_raw) - self._klane_lp)
-      self._absdc_slow += (DT_CTRL / 0.5) * (abs(new_desired_curvature) - self._absdc_slow)
-      rising = abs(new_desired_curvature) > self._absdc_slow * 1.02
-      if (CS.vEgo > ENTRY_ASSIST_MIN_SPEED and lane_min_p > ENTRY_ASSIST_LANE_MIN
-          and mf.lane_change_state == log.LaneChangeState.off
-          and abs(self._klane_lp) > ENTRY_ASSIST_KLANE_MIN and rising
-          and np.sign(self._klane_lp) == np.sign(new_desired_curvature)
-          and abs(self._klane_lp) > abs(new_desired_curvature)):
-        shortfall = abs(self._klane_lp) - abs(new_desired_curvature)
-        assist = min(shortfall, ENTRY_ASSIST_CAP, ENTRY_ASSIST_REL * abs(new_desired_curvature))
-        new_desired_curvature = new_desired_curvature + float(np.sign(new_desired_curvature)) * assist
-        if assist > 0.0:
-          steer_flags |= STEER_FLAG_ENTRY_ASSIST
 
     # Model uncertainty damping: when the model is unsure about lane position
     # (e.g. lead car occluding lane lines, ambiguous lane split), blend toward
@@ -1306,7 +939,6 @@ class Controls(ControlsExt):
       conf_blend_lc = CONF_BLEND_LC_EXEMPT and self._conf_blend_lc_frames > 0
       if self.lane_dropout:
         new_desired_curvature = self.lane_dropout_hold_k
-        self._lat_cmd_lp = new_desired_curvature   # the 6h-1 LP must not re-anchor the hold to the plan
       elif confidence < 1.0 and not conf_blend_lc and not (TURN_EXIT_SOFT_EXEMPT and turn_exit and abs(new_desired_curvature) < abs(self.desired_curvature)):
         # (Phase 56d: unwinding out of a turn is not frozen by the low-confidence blend — it only ever moves toward straight)
         new_desired_curvature = confidence * new_desired_curvature + (1.0 - confidence) * self.desired_curvature
@@ -1370,21 +1002,9 @@ class Controls(ControlsExt):
             steer_flags |= STEER_FLAG_BSM_HOLD
         else:
           self.bsm_guard.reset()
-    if steer_direct and CC.latActive:
+    if CC.latActive:
       steer_flags |= STEER_FLAG_DIRECT   # Phase 72
     self.steer_flags = steer_flags   # Phase 46: published in controlsState.steerFlags
-
-    # Temporal command smoothing w/ lead compensation (see constants). Applied AFTER
-    # confidence damping / lane-departure and BEFORE clip_curvature, so ISO lateral
-    # jerk/accel safety limits still bound the result. tau=0 disables (no-op).
-    # Phase 6h-1: tau is speed-dependent (lat_smooth_tau, computed above so the
-    # lookahead lead matches); the angle-domain EMA downstream is now light.
-    if lat_smooth_tau > 0.0 and CC.latActive and not steer_direct:   # Phase 72: no extra low-pass on the direct path
-      alpha = DT_CTRL / (lat_smooth_tau + DT_CTRL)
-      self._lat_cmd_lp = alpha * new_desired_curvature + (1.0 - alpha) * self._lat_cmd_lp
-      new_desired_curvature = self._lat_cmd_lp
-    else:
-      self._lat_cmd_lp = new_desired_curvature
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.lat_delay  # R2: assigned once above
@@ -1459,7 +1079,6 @@ class Controls(ControlsExt):
     cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
     cs.desiredCurvature = self.desired_curvature
     cs.laneDropout = bool(self.lane_dropout)   # Phase 39
-    cs.angleFbInteg = float(getattr(self.LaC, "_fb_integ", 0.0))   # i6n: 7a integrator state (see log.capnp)
     cs.steerCmdGapDeg = float(CC.actuators.steeringAngleDeg - CS.steeringAngleDeg) if self.CP.steerControlType == car.CarParams.SteerControlType.angle else 0.0
     cs.steerFlags = int(self.steer_flags)   # Phase 46
     cs.longControlState = self.LoC.long_control_state

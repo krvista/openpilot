@@ -35,25 +35,25 @@ def test_shipped_values():
 
 
 def test_boot_door_and_creep_no_longer_arm():
-  s = Sim(solo=True)
+  s = Sim()
   assert not drive(s, 400, v=10 * KPH)                               # controller start at low speed, GPS already fixed
   assert not drive(s, 1500, v=5 * KPH, lead_dist=None)               # 15 s lead-less crawl (the old creep signature)
   assert not drive(s, 400, v=20 * KPH, wheel=280.0, cmd=280.0)       # 280 deg is below the new threshold
   P.PARKING_V2 = False
-  s = Sim(solo=True)
+  s = Sim()
   assert drive(s, 400, v=10 * KPH)                                   # the old boot signature
 
 
 def test_wheel_reverse_park_arm_after_three_seconds():
   for kw in (dict(wheel=305.0, cmd=305.0), dict(gear='reverse'), dict(gear='park')):
-    s = Sim(solo=True)
+    s = Sim()
     drive(s, 100, v=40 * KPH)
     assert not drive(s, 290, v=12 * KPH, **kw)
     assert drive(s, 20, v=12 * KPH, **kw), kw
 
 
 def test_wheel_event_above_30_or_in_an_earlier_stretch_does_not_arm():
-  s = Sim(solo=True)
+  s = Sim()
   drive(s, 100, v=40 * KPH)
   drive(s, 100, v=12 * KPH, wheel=305.0, cmd=305.0)                  # 1 s only
   drive(s, 100, v=35 * KPH)                                          # stretch over: the signature goes with it
@@ -61,20 +61,20 @@ def test_wheel_event_above_30_or_in_an_earlier_stretch_does_not_arm():
 
 
 def test_gps_signature_until_first_fix_or_release():
-  s = Sim(solo=True)
+  s = Sim()
   assert drive(s, 320, v=12 * KPH, gps_fix_seen=False)               # underground start
   assert not drive(s, 320, v=40 * KPH, gps_fix_seen=False)           # released by speed ...
   assert not drive(s, 600, v=12 * KPH, gps_fix_seen=False)           # ... and the signature is spent (cold start outdoors)
-  s = Sim(solo=True)
+  s = Sim()
   drive(s, 100, v=12 * KPH, gps_fix_seen=False)
   assert not drive(s, 600, v=12 * KPH, gps_fix_seen=True)            # fix before the 3 s: no latch
   P.PARKING_V2_GPS_SIGNATURE = False
-  s = Sim(solo=True)
+  s = Sim()
   assert not drive(s, 600, v=12 * KPH, gps_fix_seen=False)
 
 
 def latched():
-  s = Sim(solo=True)
+  s = Sim()
   drive(s, 100, v=40 * KPH)
   assert drive(s, 320, v=12 * KPH, wheel=305.0, cmd=305.0)
   return s
@@ -111,13 +111,6 @@ def test_cruise_engagement_releases_after_one_second():
   P.PARKING_V2_CRUISE_FRAMES = 0
   s = latched()
   assert drive(s, 400, v=18 * KPH, cruise_enabled=True)
-
-
-def test_legacy_profile_keeps_the_old_rules():
-  s = Sim(solo=False)
-  assert drive(s, 400, v=10 * KPH)                                   # boot signature
-  assert drive(s, 250, v=31 * KPH)                                   # 31 km/h does not release (exit is above 33)
-  assert not drive(s, 250, v=34 * KPH)
 
 
 def _prompts(reason, cruise, v=40.0, n=400):

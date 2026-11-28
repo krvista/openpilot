@@ -3,8 +3,13 @@
 The audit's _lookahead_curvature tests only check the helper's return value.
 These drive the real Controls.state_control() so they actually prove the thing
 that matters: a single non-finite model frame must not permanently latch
-_lat_cmd_lp / _absdc_slow / _klane_lp / desired_curvature (which zeroes the
-steering command for the rest of the drive via the actuator finite-guard).
+desired_curvature (which zeroes the steering command for the rest of the drive
+via the actuator finite-guard).
+
+Phase 89: the stub runs the only path there is (the model's action, direct). The
+tests of this module are about the guards on that command, so the additions on
+top of it - lane-centre term, entry lead; own suites: 73 / 77 / 78 / 82 / 83 -
+are switched off here (_no_lane_terms).
 """
 import math
 import types
@@ -20,12 +25,18 @@ import openpilot.selfdrive.controls.controlsd as cd
 
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
-# The real modelV2 x grid (33 points, 0..192 m). The old fixture stopped at 38 m, so the Phase 7c lane
-# curvature (sampled at 0 / 25 / 50 m, np.interp clamps past the last point) came out ~6.5x low and the
-# entry assist never fired at a realistic magnitude in these tests (verifier, 2026-09-10).
+# The real modelV2 x grid (33 points, 0..192 m).
 XS = [float(x) for x in ModelConstants.X_IDXS]
 N_PTS = len(XS)
 K = 0.006
+
+
+@pytest.fixture(autouse=True)
+def _no_lane_terms():
+  saved = (cd.LANE_CENTER_WEIGHT, cd.LANE_CENTER_KI, cd.ENTRY_LEAD_S)
+  cd.LANE_CENTER_WEIGHT, cd.LANE_CENTER_KI, cd.ENTRY_LEAD_S = 0.0, 0.0, 0.0
+  yield
+  cd.LANE_CENTER_WEIGHT, cd.LANE_CENTER_KI, cd.ENTRY_LEAD_S = saved
 
 
 def mk_model(fallback=K, lane_nan_idx=None, k_lane=None):
@@ -115,13 +126,12 @@ def mk_controls():
   s.calibrated_pose = None
   s.steer_limited_by_safety = False
   s.curvature = s.desired_curvature = s.predicted_lat_accel_ratio = 0.0
-  s._lat_cmd_lp = s._klane_lp = s._absdc_slow = 0.0
   s.bsm_guard = cd.BsmLaneGuard(0.01)   # Phase 37b (Controls built via __new__)
   s.lowconf_cap = cd.LowConfRateCap(0.01)   # Phase 41
   s.lane_dropout = False; s.lane_dropout_clear_frames = 0; s.lane_dropout_frames = 0   # Phase 39
   s.lane_dropout_low_frames = 0; s.lane_dropout_armed = True; s.lane_dropout_rearm_frames = 0   # Phase 39-2
   s.lane_dropout_lc_holdoff = 0; s.lane_dropout_hold_k = 0.0; s.lane_dropout_k_hist = collections.deque(maxlen=31)
-  s._turn_peak_buf = collections.deque(maxlen=50); s._turn_peak_cur = 0.0; s._turn_peak_n = 0; s._turn_exit = False   # Phase 56
+  s._turn_peak_buf = collections.deque(maxlen=50); s._turn_peak_cur = 0.0; s._turn_peak_n = 0   # Phase 56
   s._mf = None   # _ModelFrame cache
   s._model_nonfinite_frames = 0
   return s
@@ -144,21 +154,10 @@ class TestRecursiveStatePoisoning:
     assert steady == pytest.approx(K, rel=1e-3)
     run(s, 1, mk_model(fallback=float('nan')))
     out = run(s, 400, mk_model())
-    for v in (s._lat_cmd_lp, s._absdc_slow, s._klane_lp, s.desired_curvature):
-      assert math.isfinite(v)
+    assert math.isfinite(s.desired_curvature)
     # command back to steady, i.e. NOT stuck at the finite-guard's 0.0
     assert out[0] == pytest.approx(steady, rel=1e-6)
     assert abs(out[1]) > 1.0
-
-  def test_single_nan_lane_line_does_not_kill_entry_assist(self):
-    # NaN at a sampled interp node (x=0) poisons _klane_lp permanently,
-    # silently disabling Phase 7c entry assist for the rest of the drive.
-    s = mk_controls()
-    run(s, 200, mk_model())
-    run(s, 1, mk_model(lane_nan_idx=0))
-    run(s, 400, mk_model())
-    assert math.isfinite(s._klane_lp)
-    assert abs(s._klane_lp) > 1e-6
 
   def test_sustained_nonfinite_model_does_not_latch_a_stale_turn(self):
     s = mk_controls()
@@ -287,42 +286,3 @@ class TestLaneDropoutLatch:
       run(s, 40, mk_model_dropout(k_plan=K, lane_prob=0.5)); run(s, 1, mk_model_dropout(k_plan=K, lane_prob=0.25))
     assert s.lane_dropout
 
-
-class TestFixtureHorizonAndEntryAssist:
-  """The fixture must reach past the 50 m klane sample, and 7c must fire at real magnitude on it."""
-
-  def test_fixture_lane_curvature_matches_K(self):
-    s = mk_controls()
-    mf = cd.Controls._model_frame(s, mk_model())
-    assert XS[-1] >= 72.0
-    assert mf.klane_raw == pytest.approx(K, rel=0.05)
-
-  @staticmethod
-  def _rising_entry(v, cap):
-    """Settle on the lane geometry, then 5 frames of a rising plan short of the lane; returns the last command."""
-    saved = cd.ENTRY_ASSIST_CAP
-    cd.ENTRY_ASSIST_CAP = cap
-    try:
-      s = mk_controls(); s.sm['carState'].vEgo = v
-      k_lane = 0.0064
-      run(s, 200, mk_model(fallback=0.001, k_lane=k_lane))
-      out = None
-      for k_plan in (0.0040, 0.0041, 0.0042, 0.0043, 0.0044):
-        out = run(s, 1, mk_model(fallback=k_plan, k_lane=k_lane))[0]
-      if cap > 0.0:   # the klane EMA only runs while the assist is enabled
-        assert s._klane_lp == pytest.approx(k_lane, rel=0.05)
-      return out
-    finally:
-      cd.ENTRY_ASSIST_CAP = saved
-
-  def test_entry_assist_fires_at_realistic_magnitude(self):
-    # lane geometry 1.6x the plan, plan rising at 9 m/s: the assist (<= min(shortfall, 1e-3, 0.5*plan)) must
-    # show up in the command versus the same run with the assist disabled (the 6h-1 LP lags the plan, so
-    # compare assisted vs unassisted rather than against the raw plan)
-    assisted = self._rising_entry(9.0, 1e-3)
-    plain = self._rising_entry(9.0, 0.0)
-    assert assisted - plain > 2e-4
-
-  def test_entry_assist_off_below_min_speed(self):
-    v = cd.ENTRY_ASSIST_MIN_SPEED - 0.5
-    assert self._rising_entry(v, 1e-3) == self._rising_entry(v, 0.0)

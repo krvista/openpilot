@@ -1,5 +1,5 @@
 """E84: sustained-curve samples (|K model| >= 0.5e-3 held 1 s, op, hands off, no blinker) by speed band: share of time
-the command is below the curve-trim arm gate (CURVE_TRIM_MIN_CMD_DEG 4 deg) and the steady wheel/command and yaw/model
+the command is below 4 deg (the arm gate of the curve trim, removed in Phase 89) and the steady wheel/command and yaw/model
 delivery in command-size bins — does the 4 deg gate leave highway curves without the trim?"""
 import glob, sys
 import numpy as np

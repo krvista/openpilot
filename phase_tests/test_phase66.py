@@ -1,7 +1,9 @@
 """Phase 66 (report §85): lagd lag search widened and press-free window gate (CCNC profile).
 The stock search [0.15, 0.65) returned every peak at or beyond its last sample as exactly 0.600 s (76 % of this car's
-accepted estimates); the CCNC profile searches to LAGD_MAX_LAG_S, accepts an estimate only when no driver press of any
-length happened within LAGD_PRESS_FREE_S (the correlation window), seeds 0.65 s and bumps the cache VERSION."""
+accepted estimates); the estimator can search further (max_lag), the CCNC profile accepts an estimate only when no driver
+press of any length happened within LAGD_PRESS_FREE_S (the correlation window), and the cache VERSION was bumped.
+Phase 89: the profile that searched to 1.0 s and seeded 0.65 s (factory LFA steering along) was removed; the wide
+search is exercised here with an explicit max_lag (WIDE_S)."""
 import types
 
 import numpy as np
@@ -11,6 +13,9 @@ from phase_tests.harness_noncontrol import FakeParams  # noqa: F401 (stub instal
 
 import openpilot.selfdrive.locationd.lagd as lagd
 from openpilot.cereal import log
+
+
+WIDE_S = 1.0
 
 
 def cp(brand="hyundai", sct="angle"):
@@ -23,9 +28,9 @@ def est(**kw):
 
 def test_profile_values():
   p = lagd.lagd_profile(cp())
-  assert p["max_lag"] == lagd.LAGD_MAX_LAG_S == 1.0
+  assert p["max_lag"] == lagd.MAX_LAG == 0.65
   assert p["press_free_sec"] == lagd.LAGD_PRESS_FREE_S == lagd.MOVING_WINDOW_SEC
-  assert p["initial_lag_seed"] == lagd.LAGD_SEED_S == 0.65
+  assert p["initial_lag_seed"] == lagd.LAGD_SOLO_SEED_S == 0.32
   assert lagd.VERSION == 2
   s = lagd.LateralLagEstimator(cp(), 0.05)                      # stock: old search, no gate
   assert s.max_lag == lagd.MAX_LAG == 0.65 and s.press_free_sec == 0.0 and s.press_free()
@@ -41,7 +46,7 @@ def delayed_pair(lag_s, dt=0.05, n=1200, seed=0):
 def test_search_edge_clipped_the_estimate_and_the_wide_search_does_not():
   d, a, m = delayed_pair(0.80)
   lag_old, corr_old, _ = lagd.LateralLagEstimator.actuator_delay(d, a, m, 0.05, lagd.MIN_LAG, lagd.MAX_LAG)
-  lag_new, corr_new, _ = lagd.LateralLagEstimator.actuator_delay(d, a, m, 0.05, lagd.MIN_LAG, lagd.LAGD_MAX_LAG_S)
+  lag_new, corr_new, _ = lagd.LateralLagEstimator.actuator_delay(d, a, m, 0.05, lagd.MIN_LAG, WIDE_S)
   assert lag_old == pytest.approx(0.60, abs=1e-9)             # the search edge, not the 0.80 s of the signal
   assert lag_new == pytest.approx(0.80, abs=0.03)
   assert corr_new > corr_old
@@ -49,7 +54,7 @@ def test_search_edge_clipped_the_estimate_and_the_wide_search_does_not():
 
 def test_wide_search_keeps_a_short_lag():
   d, a, m = delayed_pair(0.35)
-  lag_new, _, _ = lagd.LateralLagEstimator.actuator_delay(d, a, m, 0.05, lagd.MIN_LAG, lagd.LAGD_MAX_LAG_S)
+  lag_new, _, _ = lagd.LateralLagEstimator.actuator_delay(d, a, m, 0.05, lagd.MIN_LAG, WIDE_S)
   assert lag_new == pytest.approx(0.35, abs=0.03)
 
 
@@ -75,7 +80,7 @@ def test_gate_kill_switch_and_stock():
 
 
 def test_published_value_is_capped_at_the_profile_search_end():
-  e = est(publish_max=None)                                                     # Phase 67a cap off: up to the search end
+  e = est(publish_max=None, max_lag=WIDE_S)                                     # Phase 67a cap off: up to the search end
   e.reset(0.90, lagd.BLOCK_NUM_NEEDED + 2)
   assert e.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.90)       # was min(0.65, ...)
   s = lagd.LateralLagEstimator(cp(), 0.05); s.reset(0.90, lagd.BLOCK_NUM_NEEDED + 2)
@@ -85,7 +90,7 @@ def test_published_value_is_capped_at_the_profile_search_end():
 def test_seed_before_learning():
   e = est()
   m = e.get_msg(True).lateralDelay
-  assert str(m.status) == "unestimated" and m.lateralDelay == pytest.approx(0.65)
+  assert str(m.status) == "unestimated" and m.lateralDelay == pytest.approx(0.32)
 
 
 class _P:

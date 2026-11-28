@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Attribution replay: drive the REAL Hyundai CarController (phase_tests harness Sim) with a route's logged carState /
 carControl and record, per 100 Hz frame, what the on-device log cannot show — the driver-domain torque (raw - hold_comp),
-the ACI gain call's gates (post_grip, city_release, anchored_recovery, suppress_error_boost, grip_start), curve_trim,
+the ACI gain call's gates (post_grip, city_release, anchored_recovery, suppress_error_boost, grip_start),
 stall kick and the regenerated apply angle / gain. Validates itself against the logged LKAS_ALT (angle, gain) frame by
 frame (parity), then summarises the 39a/39b questions from ROUTE8_REPORT §21.
 usage: PYTHONPATH=$PWD:$PWD/opendbc_repo python3 tools/i6nv3_bench/attrib_replay.py <route> [--segs a-b] [--npz out.npz]"""
@@ -80,14 +80,14 @@ for f in files:
                    rec.get("driver_tq", np.nan), s.hold_comp_last, s.aci_gain_last, rec.get("err", np.nan),
                    int(rec.get("post_grip", False)), int(rec.get("city_release", False)), int(rec.get("anchored", False)),
                    int(rec.get("boost_off", False)), rec.get("grip_start", np.nan),
-                   s.curve_trim, getattr(s, "stall_kick_deg", 0.0), s.apply_angle_last, cc.actuators.steeringAngleDeg,
+                   s.apply_angle_last, cc.actuators.steeringAngleDeg,
                    cs.steeringAngleDeg, wa, wg, int(cs.leftBlinker or cs.rightBlinker),
                    int(getattr(s, "low_speed_cam_latched", False)),
                    int(getattr(s, "in_low_speed_zone", False) and not getattr(s, "low_speed_scen_ok", True)),
                    int(getattr(s, "angle_passive_active", False)), int(getattr(s, "parking_mode_active", False)),
                    int(sim.effective_lat_active()), cs.aEgo, int(cs.gasPressed)))
 A = np.array(rows, dtype=float)
-cols = "t v_kph raw_tq pressed lat driver_tq hold_comp gain err post_grip city_release anchored boost_off grip_start curve_trim kick apply cmd wheel wire_angle wire_gain blinker latched scen_block angle_passive parking eff_active a_ego gas".split()
+cols = "t v_kph raw_tq pressed lat driver_tq hold_comp gain err post_grip city_release anchored boost_off grip_start apply cmd wheel wire_angle wire_gain blinker latched scen_block angle_passive parking eff_active a_ego gas".split()
 C = {k: i for i, k in enumerate(cols)}
 if a.npz:
   np.savez_compressed(a.npz, data=A, cols=np.array(cols))
@@ -106,7 +106,6 @@ if len(B):
         f"driver_tq p25/50/75 {np.nanpercentile(dt,25):.0f}/{np.nanmedian(dt):.0f}/{np.nanpercentile(dt,75):.0f} | hold_comp p50 {np.median(B[:, C['hold_comp']]):.0f}")
   print(f"   39a-eligible (driver_tq<30) {np.nanmean(dt<30)*100:.0f}% | city_release active {B[:, C['city_release']].mean()*100:.1f}% | post_grip {B[:, C['post_grip']].mean()*100:.0f}% | boost off {B[:, C['boost_off']].mean()*100:.0f}% | "
         f"39b band (driver_tq 30-60, pre-39b would yield) {np.nanmean((dt>=30)&(dt<60))*100:.1f}% | driver_tq >= grip_start {np.nanmean(dt>=B[:, C['grip_start']])*100:.0f}%")
-  print(f"   request composition p50 |curve_trim| {np.median(np.abs(B[:, C['curve_trim']])):.2f} deg (at cap>=5.9: {np.mean(np.abs(B[:, C['curve_trim']])>=5.9)*100:.0f}%) | |kick| >0: {np.mean(np.abs(B[:, C['kick']])>0)*100:.1f}%")
   # releases: pressed 1->0 inside the band; was 39a active in the following 1 s? gap>3 share in 0-2 s
   P = A[:, C["pressed"]]; idx = np.where((P[1:] == 0) & (P[:-1] == 1))[0] + 1
   rel = []

@@ -22,6 +22,8 @@ from phase_tests.harness import Sim, run_signal
 
 from opendbc.car.hyundai.values import CarControllerParams as P
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 
 def settle(sim, n=120, **kw):
   """Run n frames with no driver torque so hold_comp reaches steady state."""
@@ -390,7 +392,7 @@ class TestYankFix:
     # keeps it latched), so the true gap now starts below that: pressed
     # exits, the arm holds, and apply diverges toward the plan while the
     # driver still lightly holds. On the final let-go the stored divergence
-    # must be dumped to the wheel, not delivered, and the trim zeroed.
+    # must be dumped to the wheel, not delivered.
     sim = Sim()
     settle(sim, v=15.0, wheel=0.0, cmd=0.0)
     run_signal(sim, 100, v=15.0, wheel=0.0, cmd=8.0, tq=460.0)   # anchored grip
@@ -401,7 +403,6 @@ class TestYankFix:
     sim.step(v=15.0, wheel=0.0, cmd=8.0, tq=0.0)                 # driver lets go
     assert abs(sim.s.apply_angle_last) < 1.0                     # dumped to the wheel
     assert not sim.s.reanchor_ready                              # edge consumed (G2)
-    assert sim.s.curve_trim == 0.0
 
   def test_memory_survives_fire_for_refire(self):
     # F1 review fix: the fire must NOT disarm the memory — a second

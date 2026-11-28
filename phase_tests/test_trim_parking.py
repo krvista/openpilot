@@ -1,69 +1,12 @@
-"""Invariant (e): steady-curve trim; (f): parking-mode latch; (g): interactions."""
+"""Invariant (f): parking-mode latch; (g): interactions. (Invariant (e), the steady-curve trim, was removed with the
+trim in Phase 89; the file keeps its name.)"""
 import math
 
-import numpy as np
-
 from phase_tests.harness import Sim, run_signal
-from opendbc.car.hyundai.values import CarControllerParams
+
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
 
 DT = 0.01
-
-
-def trim_cap(v):
-  return float(np.interp(v, CarControllerParams.CURVE_TRIM_CAP_SPEEDS_MS,
-                         CarControllerParams.CURVE_TRIM_CAP_DEG))
-
-
-class TestTrimInvariants:
-  def _build_trim(self, sim, v=15.0, cmd=10.0, wheel=5.0, n=3000):
-    tr = run_signal(sim, n, v=v, cmd=cmd, wheel=wheel)
-    return tr
-
-  def test_trim_never_exceeds_speed_cap(self):
-    for v in (5.0, 10.0, 20.0, 27.8):
-      sim = Sim()
-      tr = self._build_trim(sim, v=v, cmd=12.0, wheel=2.0)  # large persistent deficit
-      # 1e-6 tolerance: capnp stores vEgoRaw as float32, so the in-code
-      # np.interp cap evaluates at v +- half a float32 ULP
-      assert max(abs(t) for t in tr['trim']) <= trim_cap(v) + 1e-6, v
-
-  def test_trim_bleeds_within_1s_of_gate_drop(self):
-    sim = Sim()
-    self._build_trim(sim)
-    t0 = abs(sim.s.curve_trim)
-    assert t0 > 1.0
-    run_signal(sim, 100, v=15.0, cmd=0.0, wheel=0.0)  # straight: gate drops
-    assert abs(sim.s.curve_trim) < 0.15 * t0 + 0.05
-
-  def test_s_curve_flip_fast_decay(self):
-    sim = Sim()
-    self._build_trim(sim)
-    t0 = abs(sim.s.curve_trim)
-    # flip the curve: opposing trim must decay with tau 0.15 (~87% gone in 0.3 s)
-    run_signal(sim, 30, v=15.0, cmd=-10.0, wheel=-5.0)
-    assert abs(sim.s.curve_trim) < 0.25 * t0
-
-  def test_trim_never_grows_while_pressed(self):
-    sim = Sim()
-    self._build_trim(sim)
-    t0 = abs(sim.s.curve_trim)
-    tr = run_signal(sim, 200, v=15.0, cmd=10.0, wheel=5.0, tq=480.0)  # driver_pressed (Phase 31 comp ~195)
-    assert all(abs(t) <= t0 + 1e-9 for t in tr['trim'])
-    assert abs(sim.s.curve_trim) < t0
-
-  def test_trim_bleeds_when_passthrough_flips_mid_curve(self):
-    # (g) build trim in low-speed traffic-follow, then lose the scenario.
-    # Fast boot first so the S1b cold-start-at-low-speed parking signature
-    # does not arm and hold the trim gate closed.
-    sim = Sim()
-    run_signal(sim, 60, v=20.0, cmd=0.0)
-    run_signal(sim, 3000, v=5.0, cmd=10.0, wheel=5.0, lead_dist=6.0)
-    t0 = abs(sim.s.curve_trim)
-    assert t0 > 0.5
-    tr = run_signal(sim, 200, v=5.0, cmd=50.0, wheel=5.0)  # lead gone, sharp cmd
-    assert not sim.s.low_speed_scen_ok
-    assert abs(sim.s.curve_trim) < 0.2 * t0
-    assert not sim.effective_lat_active()
 
 
 class TestParkingMode:

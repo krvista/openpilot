@@ -5,14 +5,16 @@ import numpy as np
 
 from phase_tests.harness import Sim, run_signal
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 DT = 0.01
-FINITE_STATE = ('apply_angle_last', 'curve_trim', 'trim_resid_lp', 'cmd_hyst',
+FINITE_STATE = ('apply_angle_last', 'cmd_hyst',
                 'aci_gain_last', 'creep_sum', 'blinker_anchor_hold')
 
 
 class TestResetOnDisengage:
   def _build_state(self, sim):
-    # build curve trim + hysteresis + angle_passive on a sustained curve
+    # build hysteresis + angle_passive on a sustained curve
     run_signal(sim, 400, v=15.0, cmd=10.0, wheel=6.0, tq=0.0)
 
   def test_angle_passive_counters_reset(self):
@@ -25,30 +27,12 @@ class TestResetOnDisengage:
     assert sim.s.intent_disagree_frames == 0
     assert sim.s.angle_passive_release_frames == 0
 
-  def test_no_stale_trim_after_disengage(self):
-    sim = Sim()
-    self._build_state(sim)
-    assert abs(sim.s.curve_trim) > 0.5
-    # 2 s disengaged: trim must bleed to ~0 (tau 0.5 s)
-    run_signal(sim, 200, v=15.0, cmd=10.0, wheel=6.0, lat_active=False)
-    assert abs(sim.s.curve_trim) < 0.1
-    # re-engage: sustain counter must re-arm from zero (no instant integration)
-    assert sim.s.curve_trim_sustain == 0
-    sim.step(v=15.0, cmd=10.0, wheel=6.0)
-    assert abs(sim.s.curve_trim) < 0.1
-
   def test_cmd_hyst_recenters_while_inactive(self):
     sim = Sim()
     self._build_state(sim)
     sim.step(v=15.0, cmd=-20.0, wheel=6.0, lat_active=False)
     # while inactive the hysteresis state must track the raw desired
     assert sim.s.cmd_hyst == -20.0
-
-  def test_trim_resid_lp_resets_when_gate_drops(self):
-    sim = Sim()
-    self._build_state(sim)
-    run_signal(sim, 5, v=15.0, cmd=0.0, wheel=0.0)  # straight -> gate drops
-    assert sim.s.trim_resid_lp == 0.0
 
   def test_apply_angle_snaps_to_wheel_when_inactive(self):
     sim = Sim()

@@ -168,8 +168,8 @@ SF_TX_REJECTED        = 1 << 26   # panda rejected the previous LKAS_ALT echo
 SF_TX_SATURATED       = 1 << 27   # 38 TX governor held the wire behind the request
 SF_HOD_TOUCH          = 1 << 28   # Phase 51: brief light touch exempted from the yield (HOD-silencing touch)
 SF_HAND_GAP           = 1 << 29   # Phase 58: hand-on gap cap bound the request this frame
-SF_MDPS_COMP          = 1 << 30   # Phase 59: MDPS inverse-model compensator shaping the request (feedback on)
-SF_ENTRY_BOOST        = 1 << 31   # Phase 63b: corner-entry boost added to the request (Phase 69b: or the corner-exit lead)
+SF_MDPS_COMP          = 1 << 30   # (logs before Phase 89 only) Phase 59 MDPS inverse-model compensator shaping the request
+SF_ENTRY_BOOST        = 1 << 31   # (logs before Phase 89 only) Phase 63b corner-entry boost / Phase 69b corner-exit lead
 
 
 # Phase 72 telemetry (card.py -> carStateSP.gatewayFlags): what the vehicle's ADAS controller is doing with our request
@@ -177,7 +177,7 @@ GW_VALID      = 1 << 0   # LFAHDA_CLUSTER and ADAS_CMD_35_10ms both received lat
 GW_LFA_ON     = 1 << 1   # factory LFA switched on (icon 1 / 2 / 3)
 GW_LFA_ACTIVE = 1 << 2   # factory LFA active (icon 2): the controller sends its own request to the MDPS
 GW_RELAY      = 1 << 3   # the controller's request equals one of our last transmitted angles (relayed)
-GW_SOLO       = 1 << 4   # Phase 72 profile in use (0 = pre-72 behaviour)
+GW_SOLO       = 1 << 4   # Phase 72 profile in use (Phase 89: always on this platform; 0 in logs of the pre-72 behaviour)
 GW_PULSE      = 1 << 5   # an LFA button pulse is being sent this frame
 GW_FOLLOW     = 1 << 6   # 72c bound the request to the wheel band this frame
 GW_GAVE_UP    = 1 << 7   # hold-off paused: the car kept switching the factory LFA back on
@@ -518,12 +518,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # present (stop-and-go traffic).
     self.low_speed_cam_latched = False
     self.traffic_following = False
-    # Phase 12a (P1): steady-curve TX trim state.
-    self.curve_trim = 0.0
-    self.curve_trim_sustain = 0
-    # Phase 13b: LP state of the trim residual (raw wheel noise must not
-    # reach the trim integrator).
-    self.trim_resid_lp = 0.0
     # Phase 12b (P2): desired-angle hysteresis (backlash) filter state.
     self.cmd_hyst = 0.0
     # Phase 13a: low-speed scenario gate state.
@@ -618,42 +612,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.hand_gap_quiet = 0
     self.hand_gap_cap = None      # deg; None = inactive
     self.hand_gap_binding = False
-    # Phase 63b: corner-entry boost (values.py ENTRY_BOOST_*)
-    self.eb_ref = 0.0
-    self.eb_off = 0.0
-    self.eb_init = False
-    # Phase 69b: corner-exit lead (values.py EXIT_LEAD_*)
-    self.xl_ref = 0.0
-    self.xl_off = 0.0
-    self.xl_init = False
-    # Phase 59: MDPS inverse-model compensator (values.py MDPS_COMP_*)
-    self.mdps_comp_active = False
-    self.mdps_comp_feedback = False
-    self.mdps_comp_hist = []          # recent sent angles (apply_angle_last), newest last
-    self.mdps_comp_ref_prev = None
-    self.mdps_comp_ref_rate = 0.0
-    self.mdps_comp_ref_last = None    # Phase 59b: previous frame's reference (delta = sent - reference)
-    self.mdps_comp_wheel_prev = None
-    self.mdps_comp_wheel_rate = 0.0
-    self.mdps_comp_frozen = False
     self.rain_active = False
     self.rain_w = 0.0
     # Phase 28 (0x41 yank fix): override-episode memory + anchor-recency +
     # re-arm edge for the release re-anchor / boost hold-off.
     self.reanchor_arm = 0
-    # Phase 40: stall kick state (see values.py STALL_KICK_*)
-    self.kick_off = 0.0           # current offset magnitude (deg)
-    self.kick_phase = 0           # 0 idle/decay, 1 ramp, 2 hold
-    self.kick_hold_left = 0
-    self.kick_ramp_base = 0.0     # offset when the current ramp started
-    self.kick_wheel_start = 0.0   # measured angle when the current ramp started
-    self.kick_sign = 0.0
-    self.kick_count = 0           # steps used in the current stall episode
-    self.kick_since_start = 10 ** 6  # frames since the last step started
-    self.kick_idle_frames = 0     # frames since the stall condition last held
-    self.kick_wheel_hist = []     # last STALL_KICK_QUIET_FRAMES measured angles
-    self.kick_req_hist = []       # last STALL_KICK_QUIET_FRAMES sent angles
-    self.stall_kick_deg = 0.0     # offset applied this frame (for logging/tests)
     # Phase 35b: frames since apply was last pinned to the wheel
     self.frames_since_apply_anchor = 10**6
     self.taper_driver = False        # Phase 77: the last anchor was the driver's hand
@@ -674,13 +637,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # camera-TX rate vs our frame%5==0 downsample.
     self.suppress_lfa_counter = 0
     self.prev_fault_lfa = 0
-    # MADS↔cluster sync (kept-feature #12): on every MADS enabled-state edge,
-    # hold LFA_BUTTON=1 on LKAS_ALT for LFA_SYNC_PULSE_FRAMES so the gateway
-    # toggles the cluster icon exactly once per transition.
-    self.prev_mads_enabled = False
+    # frames left of an LFA_BUTTON=1 pulse on LKAS_ALT (LFA_SYNC_PULSE_FRAMES each; sent by the hold-off loop)
     self.lfa_sync_pulse_remaining = 0
-    # Phase 72 (values.py LFA_HOLD_OFF_* / GW_*): solo profile, factory-LFA hold-off loop, relay check, follow band
-    self.solo_mode = False
+    # Phase 72 (values.py LFA_HOLD_OFF_* / GW_*): factory-LFA hold-off loop, relay check, follow band
     self.lfa_hold_on_frames = 0       # consecutive frames with the factory LFA switched on (icon 1 / 2)
     self.lfa_hold_wait = 0            # frames until the next pulse may be sent
     self.lfa_hold_tries = 0           # pulses since the factory LFA was last seen off
@@ -798,69 +757,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     req = float(getattr(CS, 'gw_req_angle', 0.0))
     return min(abs(req - a) for a in self.gw_tx_hist) <= CarControllerParams.GW_RELAY_TOL_DEG
 
-  def _mdps_comp(self, cmd: float, wheel: float, v_ego: float, lat_active: bool, hold: bool) -> float:
-    """Phase 59/59b: inverse of the identified MDPS response with wheel feedback (values.py MDPS_COMP_*). The request is
-    reference + delta; delta is the compensator's own share (leaky, freeze-on-no-response, speed-bounded)."""
-    P = CarControllerParams
-    v_kph = v_ego * CV.MS_TO_KPH
-    self.mdps_comp_feedback = False
-    self.mdps_comp_frozen = False
-    if self.mdps_comp_ref_prev is None:
-      self.mdps_comp_ref_prev = cmd
-    raw_rate = (cmd - self.mdps_comp_ref_prev) / DT_CTRL
-    self.mdps_comp_ref_prev = cmd
-    self.mdps_comp_ref_rate += (DT_CTRL / max(P.MDPS_COMP_RATE_TAU_S, DT_CTRL)) * (raw_rate - self.mdps_comp_ref_rate)
-    if self.mdps_comp_wheel_prev is None:
-      self.mdps_comp_wheel_prev = wheel
-    w_raw = (wheel - self.mdps_comp_wheel_prev) / DT_CTRL
-    self.mdps_comp_wheel_prev = wheel
-    self.mdps_comp_wheel_rate += (DT_CTRL / max(P.MDPS_COMP_WHEEL_RATE_TAU_S, DT_CTRL)) * (w_raw - self.mdps_comp_wheel_rate)
-    if P.MDPS_COMP_LAMBDA <= 0.0 or not lat_active:
-      self.mdps_comp_active = False
-      self.mdps_comp_hist = []
-      self.mdps_comp_ref_rate = 0.0
-      self.mdps_comp_ref_last = None
-      return cmd
-    if self.mdps_comp_active:
-      if v_kph < P.MDPS_COMP_MIN_KPH - 2.0:
-        self.mdps_comp_active = False
-    elif v_kph >= P.MDPS_COMP_MIN_KPH:
-      self.mdps_comp_active = True
-      self.mdps_comp_hist = []
-      self.mdps_comp_ref_last = None
-    self.mdps_comp_hist.append(float(self.apply_angle_last))
-    if len(self.mdps_comp_hist) > 40:
-      self.mdps_comp_hist.pop(0)
-    if not self.mdps_comp_active:
-      self.mdps_comp_ref_last = None
-      return cmd
-    sp = P.MDPS_COMP_SPEEDS_KPH
-    kf = max(float(_interp(v_kph, sp, P.MDPS_COMP_KF)), P.MDPS_COMP_KF_MIN)
-    kp = float(_interp(v_kph, sp, P.MDPS_COMP_KP))
-    kc = float(_interp(v_kph, sp, P.MDPS_COMP_KC))
-    dly = float(_interp(v_kph, sp, P.MDPS_COMP_DELAY_S))
-    gmax = min(float(_interp(v_kph, sp, P.MDPS_COMP_GMAX_V)), P.MDPS_COMP_GMAX_DEG)
-    ref = cmd + P.MDPS_COMP_PREVIEW * dly * self.mdps_comp_ref_rate
-    tx = float(self.apply_angle_last)
-    ref_last = ref if self.mdps_comp_ref_last is None else self.mdps_comp_ref_last
-    self.mdps_comp_ref_last = ref
-    delta = tx - ref_last                      # what the compensator actually added last frame (after the limiters)
-    if hold:
-      delta -= delta * min(P.MDPS_COMP_RETURN_RATE * DT_CTRL, 1.0)
-      return float(ref + delta)
-    nd = int(round(dly / DT_CTRL))
-    tx_d = self.mdps_comp_hist[-1 - nd] if len(self.mdps_comp_hist) > nd else tx
-    ff = self.mdps_comp_ref_rate * (1.0 / kf - 1.0)
-    fb = (P.MDPS_COMP_LAMBDA * (ref - wheel) - kp * (tx_d - wheel) + kc * wheel) / kf
-    if (P.MDPS_COMP_FREEZE and abs(self.mdps_comp_wheel_rate) < P.MDPS_COMP_FREEZE_RATE_DPS
-        and abs(ref - wheel) > P.MDPS_COMP_FREEZE_ERR_DEG and abs(delta) > P.MDPS_COMP_FREEZE_MIN_DEG and fb * delta > 0.0):
-      fb = 0.0                                  # the wheel is not following: do not wind the request up any further
-      self.mdps_comp_frozen = True
-    self.mdps_comp_feedback = True
-    delta += (ff + fb) * DT_CTRL
-    delta -= delta * DT_CTRL / max(P.MDPS_COMP_LEAK_TAU_S, DT_CTRL)
-    return float(ref + _clip(delta, -gmax, gmax))
-
   def _hand_gap_cap(self, desired: float, wheel: float, v_ego: float, driver_tq: float, lat_active: bool) -> float:
     """Phase 58: keep the request within HAND_GAP_CAP_DEG of the wheel while a hand rests on it (values.py HAND_GAP_*)."""
     P = CarControllerParams
@@ -890,131 +786,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     out = float(_clip(desired, wheel - self.hand_gap_cap, wheel + self.hand_gap_cap))
     self.hand_gap_binding = out != desired
     return out
-
-  def _entry_boost(self, cmd: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool, gate_ok: bool) -> float:
-    """Phase 63b: request offset (deg) on a corner entry — values.py ENTRY_BOOST_*."""
-    P = CarControllerParams
-    if P.ENTRY_BOOST_GAIN <= 0.0 or not lat_active or not self.eb_init:
-      self.eb_ref = cmd
-      self.eb_off = 0.0
-      self.eb_init = lat_active
-      return 0.0
-    self.eb_ref += (cmd - self.eb_ref) * DT_CTRL / max(P.ENTRY_BOOST_REF_TAU_S, DT_CTRL)
-    cap = float(_interp(v_ego * CV.MS_TO_KPH, P.ENTRY_BOOST_SPEEDS_KPH, P.ENTRY_BOOST_CAP_DEG))
-    hands_off = (driver_tq < P.ENTRY_BOOST_HANDS_OFF_NM and not self.driver_pressed and not self.hand_gap_on
-                 and self.aci_gain_last >= 0.9)
-    if not (gate_ok and hands_off and not blinker_on) or cap <= 0.0:
-      self.eb_off -= self.eb_off * DT_CTRL / max(P.ENTRY_BOOST_ABORT_TAU_S, DT_CTRL)
-    elif self.eb_off * _sign(cmd) < 0.0:
-      self.eb_off -= self.eb_off * DT_CTRL / max(P.ENTRY_BOOST_FLIP_TAU_S, DT_CTRL)
-    else:
-      lead = cmd - self.eb_ref   # the high-passed command: positive away from centre while the command grows
-      excess = max(0.0, abs(lead) - P.ENTRY_BOOST_DEADBAND_DEG) if lead * _sign(cmd) > 0.0 else 0.0
-      tgt = float(_sign(cmd)) * min(P.ENTRY_BOOST_GAIN * excess, cap)
-      mag = abs(self.eb_off) if self.eb_off * _sign(cmd) >= 0.0 else 0.0
-      mag = max(abs(tgt), mag - P.ENTRY_BOOST_BLEED_DPS * DT_CTRL, 0.0)   # rise with the target, bleed under the rate floor
-      self.eb_off = float(_sign(cmd)) * min(mag, cap)
-    if abs(self.eb_off) < 1e-3:
-      self.eb_off = 0.0
-    return self.eb_off
-
-  def _exit_lead(self, cmd: float, wheel: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool,
-                 gate_ok: bool) -> float:
-    """Phase 69b: request offset (deg, toward centre) while the command unwinds and the wheel lags — values.py EXIT_LEAD_*."""
-    P = CarControllerParams
-    if P.EXIT_LEAD_GAIN <= 0.0 or not lat_active or not self.xl_init:
-      self.xl_ref = cmd
-      self.xl_off = 0.0
-      self.xl_init = lat_active
-      return 0.0
-    self.xl_ref += (cmd - self.xl_ref) * DT_CTRL / max(P.EXIT_LEAD_REF_TAU_S, DT_CTRL)
-    s = float(_sign(cmd))
-    cap = float(_interp(v_ego * CV.MS_TO_KPH, P.EXIT_LEAD_SPEEDS_KPH, P.EXIT_LEAD_CAP_DEG))
-    hands_off = (driver_tq < P.ENTRY_BOOST_HANDS_OFF_NM and not self.driver_pressed and not self.hand_gap_on
-                 and self.aci_gain_last >= 0.9)
-    mag = max(-self.xl_off * s, 0.0)        # size of the offset toward centre (an offset left from the other side counts as 0)
-    room = P.EXIT_LEAD_MAX_FRAC * abs(cmd)  # never unwinds the request past this share of the command -> cannot cross centre
-    if not (gate_ok and hands_off and not blinker_on) or cap <= 0.0 or s == 0.0:
-      mag -= mag * DT_CTRL / max(P.ENTRY_BOOST_ABORT_TAU_S, DT_CTRL)
-    else:
-      back = (self.xl_ref - cmd) * s                                            # > 0: the command has come back toward centre
-      excess = max(0.0, back - P.EXIT_LEAD_DEADBAND_DEG)
-      behind = max(0.0, (wheel - cmd) * s - P.EXIT_LEAD_WHEEL_MARGIN_DEG)       # the wheel is still this far out beyond the command
-      tgt = min(P.EXIT_LEAD_GAIN * excess, cap, behind)
-      if back < 0.0:   # the command is growing again (beyond its slow reference): an exit offset has no place in an entry
-        mag -= mag * DT_CTRL / max(P.ENTRY_BOOST_FLIP_TAU_S, DT_CTRL)
-      else:
-        mag = min(max(tgt, mag - P.EXIT_LEAD_BLEED_DPS * DT_CTRL), cap)         # rise with the target, bleed under the rate floor
-    mag = max(min(mag, room), 0.0)
-    self.xl_off = -s * mag if mag >= 1e-3 else 0.0
-    return self.xl_off
-
-  def _stall_kick(self, wheel: float, v_ego: float, driver_tq: float, blinker_on: bool, lat_active: bool) -> float:
-    """Phase 40b: request offset (deg) for this frame. Ramp away from a stuck wheel until it moves, hold, slow decay
-    (the CCNC MDPS follows request RATE, not error — values.py STALL_KICK_*)."""
-    P = CarControllerParams
-    n = P.STALL_KICK_QUIET_FRAMES
-    self.kick_wheel_hist.append(float(wheel))
-    self.kick_req_hist.append(float(self.apply_angle_last))
-    if len(self.kick_wheel_hist) > n:
-      self.kick_wheel_hist.pop(0)
-      self.kick_req_hist.pop(0)
-    amp = P.STALL_KICK_AMPLITUDE_DEG
-    if amp <= 0.0 or not lat_active:
-      self.kick_off = 0.0
-      self.kick_phase = 0
-      self.kick_count = 0
-      self.kick_since_start = 10 ** 6
-      self.stall_kick_deg = 0.0
-      return 0.0
-    gap = self.apply_angle_last - wheel
-    v_kph = v_ego * CV.MS_TO_KPH
-    full = len(self.kick_wheel_hist) >= n
-    wheel_moved = (max(self.kick_wheel_hist) - min(self.kick_wheel_hist)) if full else 0.0
-    req_moved = (max(self.kick_req_hist) - min(self.kick_req_hist)) if full else 0.0
-    stall = (full and driver_tq < P.STALL_KICK_HANDS_OFF_NM and self.aci_gain_last >= P.STALL_KICK_MIN_GAIN
-             and not blinker_on and P.STALL_KICK_SPEEDS_KPH[0] <= v_kph < P.STALL_KICK_SPEEDS_KPH[1]
-             and abs(gap) > P.STALL_KICK_GAP_DEG and wheel_moved < P.STALL_KICK_WHEEL_STILL_DEG
-             and req_moved < P.STALL_KICK_REQ_STILL_DEG and self.vm_reject_consecutive_frames == 0)
-    abort = (driver_tq >= P.STALL_KICK_ABORT_NM or blinker_on or self.vm_reject_consecutive_frames > 0)
-    # episode bookkeeping: the ramp budget comes back after 1 s without the stall condition
-    if stall:
-      self.kick_idle_frames = 0
-    else:
-      self.kick_idle_frames += 1
-      if self.kick_idle_frames >= P.STALL_KICK_EPISODE_RESET_FRAMES:
-        self.kick_count = 0
-    self.kick_since_start += 1
-    # phases: 0 idle/decay, 1 ramp, 2 hold
-    if abort:
-      self.kick_phase = 0
-    elif (self.kick_phase == 0 and stall and self.kick_count < P.STALL_KICK_MAX_PULSES
-          and self.kick_off <= P.STALL_KICK_RETRIGGER_DEG and self.kick_since_start >= P.STALL_KICK_MIN_GAP_FRAMES):
-      self.kick_phase = 1
-      self.kick_sign = 1.0 if gap > 0 else -1.0
-      self.kick_count += 1
-      self.kick_since_start = 0
-      self.kick_ramp_base = self.kick_off
-      self.kick_wheel_start = float(wheel)
-    if self.kick_phase == 1:
-      unstuck = abs(wheel - self.kick_wheel_start) >= P.STALL_KICK_WHEEL_MOVED_DEG
-      released = abs(gap) < P.STALL_KICK_RELEASE_DEG
-      reached = self.kick_off >= min(self.kick_ramp_base + amp, P.STALL_KICK_ENVELOPE_DEG) - 1e-9
-      if unstuck or released or reached:
-        self.kick_phase = 2
-        self.kick_hold_left = P.STALL_KICK_HOLD_FRAMES
-      else:
-        self.kick_off = min(self.kick_off + P.STALL_KICK_RAMP_DPS * DT_CTRL,
-                            self.kick_ramp_base + amp, P.STALL_KICK_ENVELOPE_DEG)
-    if self.kick_phase == 2:
-      self.kick_hold_left -= 1
-      if self.kick_hold_left <= 0:
-        self.kick_phase = 0
-    if self.kick_phase == 0:
-      rate = P.STALL_KICK_ABORT_DECAY_DPS if abort else P.STALL_KICK_DECAY_DPS
-      self.kick_off = max(0.0, self.kick_off - rate * DT_CTRL)
-    self.stall_kick_deg = self.kick_sign * self.kick_off
-    return self.stall_kick_deg
 
   def update(self, CC, CC_SP, CS, now_nanos):
     self._cc_sp = CC_SP
@@ -1194,12 +965,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     ccnc_lka_alt = is_ccnc_angle_platform(self.CP.flags)
     lkas_alt_cam_msg = getattr(CS, 'lkas_alt_cam_msg', None) if ccnc_lka_alt else None
 
-    # Phase 72 (values.py): solo = openpilot steers alone (factory LFA held off, direct profile, follow band);
-    # CarControlSP.stockLfaWithOp (controlsd: steer_profile.SOLO_DEFAULT False) or LFA_HOLD_OFF = False keep the pre-72 behaviour.
+    # Phase 72 (values.py): solo = openpilot steers alone (factory LFA held off, direct profile, follow band).
+    # Phase 89: always on this platform - the profile that ran together with the factory LFA was removed.
     lfa_state = int(getattr(CS, 'lfa_state', -1))
-    solo = bool(ccnc_lka_alt and CarControllerParams.LFA_HOLD_OFF and not getattr(self._cc_sp, 'stockLfaWithOp', False))
-    solo_changed = solo != self.solo_mode
-    self.solo_mode = solo
+    solo = bool(ccnc_lka_alt)
     self.gw_relay = self._gw_relayed(CS)
     self.gw_follow = False
 
@@ -1840,16 +1609,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # stale command (0x41 seg17: -0.3° -> +8.8° at 86 km/h). op then
         # re-approaches the plan VM-rate-limited. The fire consumes the
         # re-arm edge (G2) but keeps the episode memory (F1: a disarm left
-        # the memory dead at the field event's actual t=3.01 release). The
-        # wound curve_trim is zeroed so it cannot recreate the divergence
-        # just dumped (F5).
+        # the memory dead at the field event's actual t=3.01 release).
         self.apply_angle_last = float(_clip(steer_angle_safe,
                                               -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
                                                self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.frames_since_apply_anchor = 0; self.taper_driver = False
         self.reanchor_ready = False
-        self.curve_trim = 0.0
-        self.trim_resid_lp = 0.0
       # Phase 30: the Phase 29/29b divergence leash that followed this
       # one-shot was REMOVED. It clamped apply to wheel±2° for 2 s after an
       # anchor episode to stop slow-ease tail re-divergence — but torque
@@ -1888,107 +1653,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         desired_angle = self.cmd_hyst
       else:
         self.cmd_hyst = desired_angle
-      comp_cmd = desired_angle   # Phase 59: the command the compensator tracks (before trim / smoothing / kick)
-
-      # Phase 12a (P1): steady-curve trim — close the MDPS's sustained-curve
-      # realization deficit (wheel/TX = 0.55-0.63, |TX-wheel| p50 3.7° on
-      # 0x10-0x28) at the TX layer instead of waiting for the model's visual
-      # loop to inflate the command. Slew-limited pursuit of the residual,
-      # speed-scheduled cap, armed only after a sustained curve command while
-      # hands-off; bleeds out on grip/straight/inactive. See values.py.
-      trim_rate = CarControllerParams.CURVE_TRIM_RATE_DPS
-      # Phase 13b: gate on the debounced steeringPressed only (the original
-      # `hands_off` torque test flaps inside the p50=156/p90=284 Nm hands-off
-      # band and blocked the trim almost always — TX-cmd p50 +0.02° as
-      # shipped). Hold the angle gate with hysteresis (arm 4°, hold 3°) so
-      # the gate cannot flap at the curve threshold.
-      # Phase 63a: gates and deadband scheduled on speed (4° / 3° / 0.7° up to 55 km/h -> 1.5° / 1° / 0.35° from 70).
-      v_kph_trim = v_ego_safe * CV.MS_TO_KPH
-      trim_arm_deg = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_GATE_SPEEDS_KPH, CarControllerParams.CURVE_TRIM_GATE_V))
-      trim_hold_deg = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_GATE_SPEEDS_KPH, CarControllerParams.CURVE_TRIM_HOLD_V))
-      angle_gate = abs(desired_angle) >= (
-        trim_hold_deg if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES else trim_arm_deg)
-      # Phase 26: gate on driver_pressed — the raw EPS flag self-triggers in
-      # exactly the sustained curves the trim exists for (41% of pressed
-      # frames sit at hold-model >= 300 Nm), so the delivery fix was being
-      # disabled where the delivery deficit lives. (A Phase 28 draft added
-      # the EPS flag back as an AND — G4 review measured that disabling the
-      # trim on 37.4% of curve-eligible frames; dropped. The F5 wound-trim
-      # problem is closed by zeroing curve_trim on a re-anchor fire instead.)
-      trim_gate = (bool(CC.latActive) and not self.driver_pressed
-                   and not self.parking_mode_active and not in_passthrough
-                   and trim_rate > 0.0 and v_ego_safe > 3.0 and angle_gate
-                   and not self.mdps_comp_active    # Phase 59 replaces the trim
-                   and not solo)                    # Phase 72b: the MDPS follows a relayed request - nothing to trim
-      self.curve_trim_sustain = min(self.curve_trim_sustain + 1, 10 * CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES) if trim_gate else 0
-      # S-curve direction flip: a trim built for the previous curve points the
-      # wrong way once desired crosses zero. The 2°/s integrator (or the 0.5 s
-      # exit bleed) alone would carry an opposing trim for seconds — replay
-      # measured up to 4.5° opposing — so fast-bleed any trim opposing the
-      # current curve direction, in every branch.
-      if self.curve_trim * _sign(desired_angle) < 0.0:
-        self.curve_trim *= (1.0 - DT_CTRL / CarControllerParams.CURVE_TRIM_FLIP_TAU_S)
-      if self.curve_trim_sustain >= CarControllerParams.CURVE_TRIM_SUSTAIN_FRAMES:
-        trim_cap = float(_interp(v_ego_safe,
-                                   CarControllerParams.CURVE_TRIM_CAP_SPEEDS_MS,
-                                   CarControllerParams.CURVE_TRIM_CAP_DEG))
-        if CarControllerParams.CURVE_TRIM_CMD_CAP_K > 0.0:   # Phase 63c: never more than K x the request itself
-          trim_cap = min(trim_cap, max(CarControllerParams.CURVE_TRIM_CMD_CAP_FLOOR_DEG,
-                                       CarControllerParams.CURVE_TRIM_CMD_CAP_K * abs(desired_angle)))
-        # Rate-limited integrator: step toward the residual's sign at up to
-        # CURVE_TRIM_RATE_DPS until the residual closes (equilibrium residual=0,
-        # i.e. wheel = pre-trim desired) or the cap binds. A pursuit law
-        # (trim -> residual) would only close ~half the gap at equilibrium.
-        # Phase 13b: the residual consumes the RAW measured wheel — replay
-        # showed the un-filtered trim itself carrying 1-8 Hz RMS 0.069°, the
-        # size of the whole v2 jitter budget. LP the residual (tau 0.3 s) and
-        # apply a deadband so wheel noise never reaches the integrator; the
-        # deadband also sets the closure floor (residual converges to ~0.7°
-        # instead of 0 — a fifth of the 3.7° deficit it exists to close).
-        residual = desired_angle - steer_angle_safe
-        alpha = DT_CTRL / max(CarControllerParams.CURVE_TRIM_RESID_LP_TAU_S, DT_CTRL)
-        self.trim_resid_lp += alpha * (residual - self.trim_resid_lp)
-        db = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_GATE_SPEEDS_KPH, CarControllerParams.CURVE_TRIM_DEADBAND_V))
-        res_eff = float(_sign(self.trim_resid_lp)) * max(0.0, abs(self.trim_resid_lp) - db)
-        # Phase 69c: up to the fast rate while the residual is large, at city / arterial speeds (values.py CURVE_TRIM_FAST_*)
-        rate_now = trim_rate
-        if CarControllerParams.CURVE_TRIM_FAST_RATE_DPS > trim_rate:
-          w_v = float(_interp(v_kph_trim, CarControllerParams.CURVE_TRIM_FAST_SPEEDS_KPH, [1.0, 0.0]))
-          w_r = float(_interp(abs(res_eff), CarControllerParams.CURVE_TRIM_FAST_RESID_DEG, [0.0, 1.0]))
-          rate_now = trim_rate + (CarControllerParams.CURVE_TRIM_FAST_RATE_DPS - trim_rate) * w_v * w_r
-        step = rate_now * DT_CTRL
-        self.curve_trim = float(_clip(self.curve_trim + _clip(res_eff, -step, step),
-                                        -trim_cap, trim_cap))
-      else:
-        self.trim_resid_lp = 0.0
-        # exponential bleed toward 0 (tau = CURVE_TRIM_BLEED_TAU_S)
-        self.curve_trim *= (1.0 - DT_CTRL / max(CarControllerParams.CURVE_TRIM_BLEED_TAU_S, DT_CTRL))
-        if abs(self.curve_trim) < 0.01:
-          self.curve_trim = 0.0
-      desired_angle = float(_clip(desired_angle + self.curve_trim,
-                                    -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
-                                     self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
       if abs(v_ego_safe) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_safe, desired_angle, self.apply_angle_last)
 
-      # Phase 40: stall kick — a short request pulse away from a stuck wheel (values.py STALL_KICK_*).
-      # Added after the smoothing so it reaches TX in full; the VM/panda rate limits below still bound it.
-      desired_angle += self._stall_kick(steer_angle_safe, v_ego_safe, driver_tq, blinker_on,
-                                        bool(CC.latActive) and not self.mdps_comp_active and not solo)   # Phase 59 / 72b
-      # Phase 63b: corner-entry boost on the clean command (values.py ENTRY_BOOST_*); the hand-gap cap below still binds.
-      desired_angle += self._entry_boost(comp_cmd, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive),
-                                         not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active
-                                         and not solo)   # Phase 72b
-      # Phase 69b: corner-exit lead — the request unwinds ahead of a wheel that lags the unwinding command (EXIT_LEAD_*).
-      desired_angle += self._exit_lead(comp_cmd, steer_angle_safe, v_ego_safe, driver_tq, blinker_on, bool(CC.latActive),
-                                       not in_passthrough and not self.parking_mode_active and not self.mdps_comp_active
-                                       and not solo)     # Phase 72b
-      # Phase 59: MDPS inverse-model compensator (replaces the trim / kick output while active).
-      comp_hold = (self.hand_gap_on or self.driver_pressed or self.aci_gain_last < CarControllerParams.MDPS_COMP_HOLD_GAIN)
-      comp_out = self._mdps_comp(comp_cmd, steer_angle_safe, v_ego_safe, bool(CC.latActive) and not solo, comp_hold)   # Phase 72b
-      if self.mdps_comp_active:
-        desired_angle = comp_out
+      # Phase 89: the removed request stages (curve trim, stall kick, entry boost, exit lead) each added 0.0 here, which
+      # turned a -0.0 request into +0.0; kept so the request and what is logged of it stay bit-identical.
+      desired_angle += 0.0
       # Phase 58: hand-on gap cap — a resting hand cannot release more than HAND_GAP_CAP_DEG of stored gap at once.
       desired_angle = self._hand_gap_cap(desired_angle, steer_angle_safe, v_ego_safe, driver_tq, bool(CC.latActive))
       # Phase 72c: the factory LFA is active or releasing -> the ADAS controller does not relay us; stay with the wheel
@@ -2092,9 +1763,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     else:
       mads_lka_icon = None
 
-    # MADS↔cluster LFA sync pulse (kept-feature #12). On every MADS
-    # enabled-state edge, hold LFA_BUTTON=1 for LFA_SYNC_PULSE_FRAMES so
-    # the gateway toggles the cluster icon exactly once per transition.
+    # LFA button pulse (LFA_BUTTON=1 for LFA_SYNC_PULSE_FRAMES toggles the factory LFA once).
     if solo:
       # Phase 72a: no pulse on MADS edges - the factory LFA is held off by its own state (see _lfa_hold_off)
       # Phase 75f: short confirm for a while after cruise was engaged (the car's own switch-on follows that edge), not
@@ -2108,19 +1777,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       lfa_sync_pulse = self._lfa_hold_off(lfa_state, self.lfa_fast_left > 0
                                           and self.frame >= CarControllerParams.LFA_HOLD_OFF_FAST_GUARD_FRAMES)
     else:
-      if ccnc_lka_alt and mads_enabled != self.prev_mads_enabled:
-        self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
-      elif (ccnc_lka_alt and solo_changed and mads_enabled and lfa_state == 0 and CarControllerParams.LFA_HOLD_OFF
-            and self.lfa_sync_pulse_remaining == 0):
-        # back to the pre-72 behaviour while MADS is on: the factory LFA was held off, switch it on once so the two
-        # are in step again (as the MADS-on edge would have done)
-        self.lfa_sync_pulse_remaining = LFA_SYNC_PULSE_FRAMES
-      lfa_sync_pulse = self.lfa_sync_pulse_remaining > 0
-      if self.lfa_sync_pulse_remaining > 0:
-        self.lfa_sync_pulse_remaining -= 1
-      self.cruise_enabled_prev = None            # Phase 75f: no edge is taken from before a profile change
-      self.lfa_fast_left = 0
-    self.prev_mads_enabled = mads_enabled
+      lfa_sync_pulse = False
 
     # FAULT_LFA edge state kept so we can decide cam_invalid without the
     # original cloudlog diagnostics.
@@ -2606,8 +2263,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                     (self.was_in_reverse, SF_REVERSE), (cam_stale_tripped or fault_lfa_bool, SF_CAM_FAULT),
                     (self.wheel_outrun_passive, SF_WHEEL_OUTRUN), (bool(getattr(CS, "tx_rejected", False)), SF_TX_REJECTED),
                     (self.tx_sat_frames > 0, SF_TX_SATURATED), (self.hod_touch_exempt, SF_HOD_TOUCH),
-                    (self.hand_gap_binding, SF_HAND_GAP), (self.mdps_comp_active and self.mdps_comp_feedback, SF_MDPS_COMP),
-                    (self.eb_off != 0.0 or self.xl_off != 0.0, SF_ENTRY_BOOST)):
+                    (self.hand_gap_binding, SF_HAND_GAP)):
       if on:
         sf |= bit
     self.steer_debug_flags = sf
@@ -2644,8 +2300,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                          mads_force_assist=bool(mads_enabled and ccnc_lka_alt),
                                                          cam_invalid=bool(cam_stale_tripped or fault_lfa_bool),
                                                          lfa_sync_pulse=lfa_sync_pulse,
-                                                         meas_angle=meas_angle_for_panda,
-                                                         lfa_button_mirror=not solo))
+                                                         meas_angle=meas_angle_for_panda))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     # CCNC cars (including the HDA2-ALT + CCNC angle-control platform):

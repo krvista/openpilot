@@ -7,8 +7,9 @@ the factory LFA is not active. Up to Phase 71 the 'MADS <-> cluster sync pulse' 
      hands the model's action through (no lead layers, entry assist, extra low-pass); latcontrol without the 7a trim;
      lagd learns the relayed plant (seed 0.32 s, published <= 0.5 s, factory-LFA windows excluded).
 72c  follow band: while the factory LFA is active / releasing the request stays within 1 deg of the wheel.
-Legacy (CarControlSP.stockLfaWithOp; steer_profile.SOLO_DEFAULT = False) = the pre-72 behaviour. The Developer toggle
-'stock LFA with op (old)' and its param were removed in Phase 74."""
+The Developer toggle 'stock LFA with op (old)' and its param were removed in Phase 74; the pre-72 behaviour itself
+(the 'legacy' profile, its layers and the switches CarControlSP.stockLfaWithOp / steer_profile.SOLO_DEFAULT /
+LFA_HOLD_OFF) in Phase 89 - what was a comparison against it here is now the solo half alone."""
 import types
 
 import numpy as np
@@ -20,9 +21,6 @@ from opendbc.car import structs
 from opendbc.car.hyundai.values import CarControllerParams as P
 import opendbc.car.hyundai.carcontroller as ccmod
 import openpilot.selfdrive.controls.controlsd as cd
-import openpilot.common.steer_profile as sp
-from phase_tests.test_phase55 import call, settled
-from phase_tests.test_phase60 import ramp_plan
 
 KPH = 1 / 3.6
 
@@ -72,7 +70,7 @@ def run(sim, car, n, mads=True, **kw):
 
 @pytest.fixture
 def params():
-  saved = {k: getattr(P, k) for k in ("LFA_HOLD_OFF", "GW_FOLLOW_BAND_DEG", "LFA_HOLD_OFF_MAX_PULSES")}
+  saved = {k: getattr(P, k) for k in ("GW_FOLLOW_BAND_DEG", "LFA_HOLD_OFF_MAX_PULSES")}
   yield P
   for k, v in saved.items():
     setattr(P, k, v)
@@ -80,15 +78,14 @@ def params():
 
 # ------------------------------------------------------------------ 72a hold-off
 def test_shipped_values():
-  assert P.LFA_HOLD_OFF is True and P.LFA_HOLD_OFF_CONFIRM_FRAMES == 30
+  assert P.LFA_HOLD_OFF_CONFIRM_FRAMES == 30
   assert P.LFA_HOLD_OFF_WAIT_FRAMES == [150, 300, 600, 1000] and P.LFA_HOLD_OFF_MAX_PULSES == 8
   assert P.LFA_HOLD_OFF_WINDOW_FRAMES == 6000 and P.LFA_HOLD_OFF_GIVE_UP_FRAMES == 12000
   assert P.GW_FOLLOW_BAND_DEG == 1.0 and P.GW_RELAY_TOL_DEG == 0.5 and P.GW_RELAY_HIST == 8
-  assert sp.SOLO_DEFAULT is True and not hasattr(sp, "PARAM")       # Phase 74: no param, the constant is the switch
 
 
 def test_factory_lfa_found_on_is_switched_off_with_one_pulse():
-  sim, car = Sim(solo=True), FactoryLfa(state=2)
+  sim, car = Sim(), FactoryLfa(state=2)
   bits = run(sim, car, 600)
   assert len(car.pulses) == 1 and 30 <= car.pulses[0] <= 33          # 0.3 s of 'on', then the pulse
   assert sum(bits) == ccmod.LFA_SYNC_PULSE_FRAMES                    # one pulse = 2 frames
@@ -97,11 +94,11 @@ def test_factory_lfa_found_on_is_switched_off_with_one_pulse():
 
 
 def test_standby_counts_as_on_and_releasing_or_unknown_never_pulse():
-  sim, car = Sim(solo=True), FactoryLfa(state=1)
+  sim, car = Sim(), FactoryLfa(state=1)
   run(sim, car, 200)
   assert len(car.pulses) == 1 and car.state in (3, 0)
   for st in (3, -1):
-    sim2 = Sim(solo=True)
+    sim2 = Sim()
     bits = []
     for _ in range(1500):
       sim2.step(lfa_state=st); bits.append(int(sim2.lkas_alt()["LFA_BUTTON"]))
@@ -110,13 +107,13 @@ def test_standby_counts_as_on_and_releasing_or_unknown_never_pulse():
 
 def test_no_pulse_while_the_release_is_in_progress():
   # the car goes 2 -> 3 (1 s) -> 0 after our pulse; a second pulse inside that second would switch it back on
-  sim, car = Sim(solo=True), FactoryLfa(state=2)
+  sim, car = Sim(), FactoryLfa(state=2)
   run(sim, car, 400)
   assert len(car.pulses) == 1 and car.state == 0
 
 
 def test_car_switching_it_on_again_is_answered():
-  sim, car = Sim(solo=True), FactoryLfa(state=2)
+  sim, car = Sim(), FactoryLfa(state=2)
   run(sim, car, 500)
   assert car.state == 0
   car.auto_on()                                                      # cruise engaged on a motorway: HDA switches the LFA on
@@ -127,7 +124,7 @@ def test_car_switching_it_on_again_is_answered():
 
 
 def test_ignored_pulses_are_retried_with_backoff():
-  sim, car = Sim(solo=True), FactoryLfa(state=1, ignore=True)        # e.g. at standstill right after the start
+  sim, car = Sim(), FactoryLfa(state=1, ignore=True)        # e.g. at standstill right after the start
   run(sim, car, 6200)
   gaps = np.diff(car.pulses).tolist()                                # (the wait starts after the pulse's second frame)
   assert gaps[:3] == [151, 301, 601] and all(g == 1001 for g in gaps[3:])
@@ -139,7 +136,7 @@ def test_ignored_pulses_are_retried_with_backoff():
 
 
 def test_a_car_that_keeps_switching_it_on_makes_the_hold_off_pause():
-  sim, car = Sim(solo=True), FactoryLfa(state=2)
+  sim, car = Sim(), FactoryLfa(state=2)
   for _ in range(40):                                                # every time it is off, the car switches it on again
     run(sim, car, 160)
     if car.state == 0:
@@ -153,48 +150,18 @@ def test_a_car_that_keeps_switching_it_on_makes_the_hold_off_pause():
   assert len(car.pulses) > n
 
 
-def test_camera_button_bit_is_not_forwarded_in_solo_but_is_in_legacy():
-  solo, leg = Sim(solo=True), Sim(solo=False)
-  solo.step(lfa_state=0, cam_lfa_button=1); leg.step(lfa_state=0, cam_lfa_button=1)
-  assert solo.lkas_alt()["LFA_BUTTON"] == 0 and leg.lkas_alt()["LFA_BUTTON"] == 1
+def test_camera_button_bit_is_not_forwarded():
+  sim = Sim()
+  sim.step(lfa_state=0, cam_lfa_button=1)
+  assert sim.lkas_alt()["LFA_BUTTON"] == 0
 
 
-def test_mads_edges_send_no_pulse_in_solo_and_the_sync_pulse_in_legacy():
-  for solo, expect in ((True, 0), (False, ccmod.LFA_SYNC_PULSE_FRAMES)):
-    sim = Sim(solo=solo); bits = []
-    for i in range(300):
-      sim.cc._cc_sp.mads.enabled = i >= 100
-      sim.step(lfa_state=0); bits.append(int(sim.lkas_alt()["LFA_BUTTON"]))
-    assert sum(bits) == expect, solo
-    if not solo:
-      assert bits[100] == 1 and bits[101] == 1
-
-
-def test_legacy_ignores_the_factory_lfa_state():
-  sim, car = Sim(solo=False), FactoryLfa(state=2)
-  assert sum(run(sim, car, 2000, mads=False)) == 0 and car.state == 2 and not (sim.cc.gw_flags & ccmod.GW_SOLO)
-
-
-def test_kill_switch_is_legacy_whatever_the_toggle_says(params):
-  params.LFA_HOLD_OFF = False
-  sim, car = Sim(solo=True), FactoryLfa(state=2)
-  assert sum(run(sim, car, 1000, mads=False)) == 0 and sim.cc.solo_mode is False
-  sim.step(lfa_state=2, cam_lfa_button=1)
-  assert sim.lkas_alt()["LFA_BUTTON"] == 1                           # bit mirrored again
-
-
-def test_switching_profiles_brings_the_factory_lfa_in_step():
-  sim, car = Sim(solo=True), FactoryLfa(state=2)
-  run(sim, car, 500)
-  assert car.state == 0
-  sim.cc._cc_sp.stockLfaWithOp = True                                # Developer toggle: back to the old behaviour, MADS on
-  run(sim, car, 300)
-  assert car.state == 2 and len(car.pulses) == 2                     # switched on once, as the MADS-on edge used to
-  run(sim, car, 2000)
-  assert len(car.pulses) == 2
-  sim.cc._cc_sp.stockLfaWithOp = False                               # and solo again: held off
-  run(sim, car, 500)
-  assert car.state == 0
+def test_mads_edges_send_no_pulse():
+  sim = Sim(); bits = []
+  for i in range(300):
+    sim.cc._cc_sp.mads.enabled = i >= 100
+    sim.step(lfa_state=0); bits.append(int(sim.lkas_alt()["LFA_BUTTON"]))
+  assert sum(bits) == 0
 
 
 # ------------------------------------------------------------------ 72b direct profile (car controller)
@@ -206,61 +173,26 @@ def curve(sim, n=900, cmd=8.0, wheel_frac=0.6, v=20.0, **kw):
   return sim
 
 
-def test_no_trim_no_boost_no_exit_lead_in_solo():
-  solo, leg = curve(Sim(solo=True), lfa_state=0), curve(Sim(solo=False))
-  assert solo.cc.curve_trim == 0.0 and leg.cc.curve_trim > 0.5
-  assert abs(solo.tx_angle() - 8.0) <= 0.25 and leg.tx_angle() > 8.5  # the request IS the command in solo (hysteresis band 0.15)
-  assert not (solo.cc.steer_debug_flags & ccmod.SF_ENTRY_BOOST)
-
-
-def test_entry_boost_and_exit_lead_stay_zero_in_solo():
-  solo, leg = Sim(solo=True), Sim(solo=False)
-  mx = {id(solo): 0.0, id(leg): 0.0}
-  for i in range(600):
-    c = min(i * 0.08, 12.0)                                          # 8 deg/s corner entry, hands off, wheel lagging
-    for s_ in (solo, leg):
-      s_.step(v=15.0, cmd=c, wheel=max(c - 3.0, 0.0), lfa_state=0)
-      mx[id(s_)] = max(mx[id(s_)], abs(s_.cc.eb_off))
-  assert mx[id(solo)] == 0.0 and mx[id(leg)] > 0.2
-  for i in range(400):                                               # unwinding at 90 km/h with the wheel behind
-    c = max(6.0 - i * 0.03, 0.0)
-    solo.step(v=25.0, cmd=c, wheel=c + 2.0, lfa_state=0)
-    assert solo.cc.xl_off == 0.0
-
-
-def test_solo_request_tracks_a_moving_command_like_legacy_without_layers(params):
-  # with every layer killed the legacy chain and the solo chain are the same code path
-  for k, v in (("CURVE_TRIM_RATE_DPS", 0.0), ("ENTRY_BOOST_GAIN", 0.0), ("EXIT_LEAD_GAIN", 0.0)):
-    setattr(params, f"_saved_{k}", getattr(P, k)); setattr(P, k, v)
-  try:
-    solo, leg = Sim(solo=True), Sim(solo=False)
-    for i in range(800):
-      c = 5.0 * np.sin(i / 120.0)
-      solo.step(v=22.0, cmd=c, wheel=c * 0.9, lfa_state=0); leg.step(v=22.0, cmd=c, wheel=c * 0.9)
-      assert solo.tx_angle() == pytest.approx(leg.tx_angle(), abs=1e-9)
-  finally:
-    for k in ("CURVE_TRIM_RATE_DPS", "ENTRY_BOOST_GAIN", "EXIT_LEAD_GAIN"):
-      setattr(P, k, getattr(params, f"_saved_{k}"))
+def test_request_is_the_command():
+  sim = curve(Sim(), lfa_state=0)
+  assert abs(sim.tx_angle() - 8.0) <= 0.25                           # the request IS the command (hysteresis band 0.15)
+  assert not (sim.cc.steer_debug_flags & (ccmod.SF_ENTRY_BOOST | ccmod.SF_MDPS_COMP))
 
 
 # ------------------------------------------------------------------ 72c follow band
 def test_request_stays_with_the_wheel_while_the_factory_lfa_is_active():
-  sim = Sim(solo=True)
+  sim = Sim()
   for i in range(400):
     sim.step(v=25.0, cmd=7.0, wheel=1.0, lfa_state=2)
     if i > 50:
       assert abs(sim.tx_angle() - 1.0) <= P.GW_FOLLOW_BAND_DEG + 0.05
   assert sim.cc.gw_follow and sim.cc.gw_flags & ccmod.GW_FOLLOW and sim.cc.gw_flags & ccmod.GW_LFA_ACTIVE
-  legacy = Sim(solo=False)
-  for _ in range(400):
-    legacy.step(v=25.0, cmd=7.0, wheel=1.0, lfa_state=2)
-  assert legacy.tx_angle() > 5.0                                     # the pre-72 chain stores the whole difference
 
 
 def test_handover_has_no_stored_step():
   """factory LFA active with our command 6 deg away, then it releases (3) and is off (0): what the MDPS gets from us"""
-  def drive(solo):
-    sim = Sim(solo=solo); tx = []; wh = []
+  def drive():
+    sim = Sim(); tx = []; wh = []
     w = 1.0
     for i in range(900):
       st = 2 if i < 300 else (3 if i < 400 else 0)
@@ -269,8 +201,8 @@ def test_handover_has_no_stored_step():
       if st != 2 and i >= 350:                                       # relayed from 0.5 s after the release starts
         w += (tx[-1] - w) * 0.07                                     # the MDPS: ~0.13 s lag
     return np.array(tx), np.array(wh)
-  (solo, w_s), (leg, _) = drive(True), drive(False)
-  assert abs(solo[349] - 1.0) <= 1.05 and leg[349] - 1.0 > 4.0       # at the switch-over: within the band vs 4+ deg stored
+  solo, w_s = drive()
+  assert abs(solo[349] - 1.0) <= 1.05                                # at the switch-over: within the band
   assert np.all(np.abs(solo[300:400] - w_s[300:400]) <= P.GW_FOLLOW_BAND_DEG + 0.05)   # with the wheel while releasing
   assert solo[-1] == pytest.approx(7.0, abs=0.3)                     # and afterwards it does go to the command
   assert np.max(np.abs(w_s[360:] - w_s[350:-10])) <= 1.0             # the wheel never moves more than 1 deg in 0.1 s
@@ -278,12 +210,12 @@ def test_handover_has_no_stored_step():
 
 def test_follow_band_kill_switch_and_states_without_it(params):
   for st in (0, 1, -1):
-    sim = Sim(solo=True)
+    sim = Sim()
     for _ in range(400):
       sim.step(v=25.0, cmd=7.0, wheel=1.0, lfa_state=st)
     assert sim.tx_angle() > 5.0 and not sim.cc.gw_follow, st
   params.GW_FOLLOW_BAND_DEG = 0.0
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(400):
     sim.step(v=25.0, cmd=7.0, wheel=1.0, lfa_state=2)
   assert sim.tx_angle() > 5.0
@@ -291,7 +223,7 @@ def test_follow_band_kill_switch_and_states_without_it(params):
 
 # ------------------------------------------------------------------ relay check and telemetry
 def test_relay_flag_follows_the_controllers_request():
-  sim = Sim(solo=True); hist = [0.0] * 4
+  sim = Sim(); hist = [0.0] * 4
   for i in range(300):
     c = 3.0 * np.sin(i / 60.0)
     sim.step(v=25.0, cmd=c, wheel=c, lfa_state=0, gw_req_angle=hist[-3])       # the controller repeats us 30 ms later
@@ -312,9 +244,10 @@ def test_schema_and_plumbing():
   from openpilot.cereal import custom
   from openpilot.selfdrive.car.helpers import convert_carControlSP
   import openpilot.selfdrive.locationd.lagd as lagd
+  # the profile field is unused since Phase 89 (never written) but stays in the schema and the dataclass, in step
   assert structs.CarControlSP().stockLfaWithOp is False
   assert convert_carControlSP(custom.CarControlSP.new_message().as_reader()).stockLfaWithOp is False
-  m = custom.CarControlSP.new_message(); m.stockLfaWithOp = True
+  m = custom.CarControlSP.new_message(); m.stockLfaWithOp = True      # e.g. a log from before Phase 74
   assert convert_carControlSP(m.as_reader()).stockLfaWithOp is True
   s = custom.CarStateSP.new_message(); s.gatewayFlags = 0b10010101
   assert s.gatewayFlags == 0b10010101
@@ -325,7 +258,7 @@ def test_schema_and_plumbing():
   card = open(os.path.join(root, "openpilot/selfdrive/car/card.py")).read()
   assert "CS_SP.gatewayFlags = int(getattr(self.CI.CC, 'gw_flags', 0)) & 0xFF" in card
   ext = open(os.path.join(root, "openpilot/sunnypilot/selfdrive/controls/controlsd_ext.py")).read()
-  assert 'CC_SP.stockLfaWithOp = bool(getattr(self, "_steer_legacy", False))' in ext
+  assert "stockLfaWithOp" not in ext                                 # Phase 89: nothing writes it
 
 
 def test_carstate_reads_the_two_messages_without_gating_can_valid():
@@ -339,100 +272,59 @@ def test_carstate_reads_the_two_messages_without_gating_can_valid():
   assert CI.CS.lfa_state == -1 and CI.CS.gw_req_valid is False       # nothing received yet = unknown
 
 
-# ------------------------------------------------------------------ steering profile (toggle, latch)
-def test_profile_is_solo_and_the_constant_is_the_only_switch():
-  FakeParams.reset()
-  FakeParams().put_bool("StockLfaWithOp", True)                      # a value left over from before Phase 74 changes nothing
-  assert sp.legacy_requested(FakeParams()) is False and sp.legacy_requested() is False
-  old = sp.SOLO_DEFAULT
-  try:
-    sp.SOLO_DEFAULT = False
-    assert sp.legacy_requested(FakeParams()) is True                 # the kill switch
-  finally:
-    sp.SOLO_DEFAULT = old
-    FakeParams.reset()
-
-
-def test_profile_changes_only_while_lateral_is_off():
-  old = sp.SOLO_DEFAULT
-  try:
-    latch = sp.ProfileLatch(None, period=10)
-    assert latch.legacy is False
-    sp.SOLO_DEFAULT = False
-    for _ in range(25):
-      assert latch.update(True) is False                             # steering: stays solo, though the request is seen
-    assert latch.requested is True
-    assert latch.update(False) is True                               # steering off: now legacy
-    sp.SOLO_DEFAULT = True
-    for _ in range(9):
-      latch.update(True)
-    assert latch.update(False) is False
-  finally:
-    sp.SOLO_DEFAULT = old
-
-
 # ------------------------------------------------------------------ 72b controlsd direct path
 def test_direct_path_is_the_models_action():
-  v = 60 * KPH
-  m = ramp_plan(0.001, 0.005, v=v)                                   # a corner the plan sees coming
-  leg = settled(v); leg._model_lat_delay = 0.76
-  out_leg = call(leg, m, v=v)
-  solo = settled(v); solo._steer_legacy = False; solo._model_lat_delay = 0.32
-  out_solo = call(solo, m, v=v)
-  assert out_solo == pytest.approx(float(m.action.desiredCurvature))
-  assert out_leg > out_solo + 1e-5                                   # the legacy chain adds its leads
-  assert solo._delay_extra_eff == 0.0 and solo._delay_match == 0.0 and solo._lookahead_flags == 0
-
-
-def test_direct_state_control_has_no_lowpass_no_entry_assist_and_sets_the_flag():
   from phase_tests import test_noncontrol_controlsd_state as H
-  def drive(legacy):
-    s = H.mk_controls(); s._steer_legacy = legacy
-    s.sm['carState'].vEgo = 8.0                                      # 29 km/h: the legacy low-pass is 0.30 s here
-    s.sm['modelV2'] = H.mk_model()
-    outs = []
-    for i in range(60):
-      s.sm['modelV2'].action.desiredCurvature = 0.0 if i < 5 else 0.004
-      s.sm.logMonoTime['modelV2'] = i                                # a new model frame (per-frame values are cached)
-      CC, _ = cd.Controls.state_control(s)
-      outs.append(float(CC.actuators.curvature))
-    return s, np.array(outs)
-  solo, o_s = drive(False)
-  leg, o_l = drive(True)
-  assert solo.steer_flags & cd.STEER_FLAG_DIRECT and not leg.steer_flags & cd.STEER_FLAG_DIRECT
-  assert not solo.steer_flags & cd.STEER_FLAG_ENTRY_ASSIST
-  assert o_s[20] > o_l[20] + 2e-4                                    # no 0.3 s low-pass: only clip_curvature's rate limit
-  assert o_s[-1] == pytest.approx(0.004, abs=2e-4)
+  s = H.mk_controls(); s._model_lat_delay = 0.32
+  m = H.mk_model(fallback=0.0031)
+  assert cd.Controls._lookahead_curvature(s, m) == float(m.action.desiredCurvature)
 
 
-def test_latcontrol_trim_is_off_in_direct():
+def test_direct_state_control_has_no_lowpass_and_sets_the_flag():
+  from phase_tests import test_noncontrol_controlsd_state as H
+  s = H.mk_controls()
+  s.sm['carState'].vEgo = 8.0                                        # 29 km/h (below the lane-centre term's speed)
+  s.sm['modelV2'] = H.mk_model()
+  outs = []
+  for i in range(60):
+    s.sm['modelV2'].action.desiredCurvature = 0.0 if i < 5 else 0.004
+    s.sm.logMonoTime['modelV2'] = i                                  # a new model frame (per-frame values are cached)
+    CC, _ = cd.Controls.state_control(s)
+    outs.append(float(CC.actuators.curvature))
+  assert s.steer_flags & cd.STEER_FLAG_DIRECT
+  assert not s.steer_flags & (cd.STEER_FLAG_ENTRY_ASSIST | cd.STEER_FLAG_LOOKAHEAD_CAP | cd.STEER_FLAG_LOOKAHEAD_ORIENT
+                              | cd.STEER_FLAG_LOOKAHEAD_BUDGET)
+  # no low-pass: only clip_curvature's rate limit (MAX_LATERAL_JERK / v^2 per second) between the action and the command
+  from openpilot.selfdrive.controls.lib.drive_helpers import MAX_LATERAL_JERK
+  step = MAX_LATERAL_JERK / 8.0 ** 2 * 0.01
+  assert outs[5] == pytest.approx(min(step, 0.004), rel=1e-6) and outs[20] == pytest.approx(min(16 * step, 0.004), rel=1e-6)
+  assert outs[-1] == pytest.approx(0.004, abs=2e-4)
+
+
+def test_latcontrol_is_pure_feed_forward():
   from openpilot.selfdrive.controls.lib import latcontrol_angle as la
   CP = types.SimpleNamespace(brand="hyundai", steerControlType="angle", steerLimitTimer=1.0)
-  def run_lac(direct):
-    lac = la.LatControlAngle(CP, None, None, 0.01)
-    assert lac.direct is False                                       # the default: controlsd sets it every frame
-    lac.direct = direct
-    VM = types.SimpleNamespace(calc_curvature=lambda a, v, r: a / 2.7 / 15.0,
-                               get_steer_from_curvature=lambda k, v, r: k * 2.7 * 15.0)
-    CS = types.SimpleNamespace(steeringAngleDeg=0.0, vEgo=20.0, steeringPressed=False)
-    prm = types.SimpleNamespace(roll=0.0, angleOffsetDeg=0.0)
-    for _ in range(300):                                             # the wheel does not deliver the desired curvature
-      lac.update(True, CS, VM, prm, False, 0.0005, None, False, 0.3)
-    return lac._fb_integ
-  assert run_lac(True) == 0.0 and abs(run_lac(False)) > 1e-5
+  lac = la.LatControlAngle(CP, None, None, 0.01)
+  VM = types.SimpleNamespace(calc_curvature=lambda a, v, r: a / 2.7 / 15.0,
+                             get_steer_from_curvature=lambda k, v, r: k * 2.7 * 15.0)
+  CS = types.SimpleNamespace(steeringAngleDeg=0.0, vEgo=20.0, steeringPressed=False)
+  prm = types.SimpleNamespace(roll=0.0, angleOffsetDeg=0.0)
+  outs = [lac.update(True, CS, VM, prm, False, 0.0005, None, False, 0.3)[1] for _ in range(300)]
+  assert len(set(outs)) == 1                                         # the wheel never delivers it: nothing winds up
+  assert outs[0] == pytest.approx(np.degrees(-0.0005 * 2.7 * 15.0))
 
 
 # ------------------------------------------------------------------ 72b lagd
 def test_lagd_solo_profile():
   import openpilot.selfdrive.locationd.lagd as lagd
   CP = types.SimpleNamespace(brand="hyundai", steerControlType="angle")
-  leg, solo = lagd.lagd_profile(CP), lagd.lagd_profile(CP, solo=True)
-  assert leg["initial_lag_seed"] == 0.65 and leg["max_lag"] == 1.0 and leg["publish_max"] == 0.80   # unchanged
+  solo = lagd.lagd_profile(CP)
   assert solo["initial_lag_seed"] == lagd.LAGD_SOLO_SEED_S == 0.32
   assert solo["max_lag"] == lagd.MAX_LAG and solo["publish_max"] == lagd.LAGD_SOLO_PUBLISH_MAX_S == 0.50
-  for k in ("min_vego", "min_ncc", "min_confidence", "min_press_sec", "press_free_sec"):
-    assert solo[k] == leg[k]
-  assert lagd.lagd_profile(types.SimpleNamespace(brand="toyota", steerControlType="torque"), solo=True) == {}
+  assert solo["min_vego"] == pytest.approx(60 * KPH) and solo["min_ncc"] == 0.9 and solo["min_confidence"] == 0.5
+  assert solo["min_press_sec"] == 0.5 and solo["press_free_sec"] == lagd.LAGD_PRESS_FREE_S == 60.0
+  assert solo["min_recovery_buffer_sec"] == 1.0 and len(solo) == 9
+  assert lagd.lagd_profile(types.SimpleNamespace(brand="toyota", steerControlType="torque")) == {}
 
 
 def _cached_lag(lag):
@@ -468,7 +360,7 @@ def test_cached_delay_of_the_other_profile_is_not_carried_over(lag, solo, kept):
 def test_lagd_does_not_learn_from_factory_lfa_windows():
   import openpilot.selfdrive.locationd.lagd as lagd
   CP = types.SimpleNamespace(brand="hyundai", steerControlType="angle", steerActuatorDelay=0.1)
-  est = lagd.LateralLagEstimator(CP, 0.05, **lagd.lagd_profile(CP, solo=True))
+  est = lagd.LateralLagEstimator(CP, 0.05, **lagd.lagd_profile(CP))
   assert est.initial_lag == pytest.approx(0.32)
   assert "carStateSP" in est.inputs
   est.handle_log(1.0, "carStateSP", types.SimpleNamespace(gatewayFlags=lagd.GW_LFA_ACTIVE | 1))
@@ -487,7 +379,7 @@ def test_lagd_does_not_learn_from_factory_lfa_windows():
 def test_published_delay_is_capped_in_solo():
   import openpilot.selfdrive.locationd.lagd as lagd
   CP = types.SimpleNamespace(brand="hyundai", steerControlType="angle", steerActuatorDelay=0.1)
-  est = lagd.LateralLagEstimator(CP, 0.05, **lagd.lagd_profile(CP, solo=True))
+  est = lagd.LateralLagEstimator(CP, 0.05, **lagd.lagd_profile(CP))
   assert est.publish_max == 0.50 and est.max_lag == lagd.MAX_LAG
   est.reset(0.62, est.min_valid_block_count)                         # a drive where the factory LFA could not be held off
   assert est.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.50)

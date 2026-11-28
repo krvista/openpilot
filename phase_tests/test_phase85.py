@@ -18,8 +18,8 @@ def keep():
     setattr(P, k, v)
 
 
-def in_curve(solo):
-  sim = Sim(solo=solo); settle(sim, v=V)
+def in_curve():
+  sim = Sim(); settle(sim, v=V)
   run_signal(sim, 300, v=V, wheel=-17.3, cmd=-17.3, tq=0.0, mdps_angle_2=-17.3)
   a, g = _frame_active(sim); assert a and g >= 0.8, (a, g)
   return sim
@@ -41,22 +41,20 @@ def test_shipped_values():
   assert (P.WHEEL_OUTRUN_DRIVER_RECENT_FRAMES, P.WHEEL_OUTRUN_DRIVER_NM, P.WHEEL_OUTRUN_DRIVER_NM_FRAMES) == (10, 150.0, 8)
 
 
-@pytest.mark.parametrize("solo", [False, True])
-def test_impact_with_hands_off_keeps_the_frame_active(keep, solo):
-  out = impact(in_curve(solo))
+def test_impact_with_hands_off_keeps_the_frame_active(keep):
+  out = impact(in_curve())
   assert all(a for a, _ in out), out
   assert min(g for _, g in out) >= 0.6, out                          # authority stays: the wheel is held in the curve
 
 
-@pytest.mark.parametrize("solo", [False, True])
-def test_kill_switch_restores_the_passive_frames(keep, solo):
+def test_kill_switch_restores_the_passive_frames(keep):
   P.WHEEL_OUTRUN_NEEDS_DRIVER = False
-  out = impact(in_curve(solo))
+  out = impact(in_curve())
   assert any(not a and g == 0.0 for a, g in out), out
 
 
 def test_driver_torque_of_one_sign_qualifies_after_80_ms(keep):
-  sim = in_curve(False); dmax = _panda_delta(sim, V); w = -17.3; first = None
+  sim = in_curve(); dmax = _panda_delta(sim, V); w = -17.3; first = None
   for i in range(20):
     w += dmax + 0.35
     sim.step(v=V, wheel=w, cmd=-17.3, tq=190.0, pressed=False, mdps_angle_2=w)
@@ -66,7 +64,7 @@ def test_driver_torque_of_one_sign_qualifies_after_80_ms(keep):
 
 
 def test_pressed_flag_qualifies_at_once(keep):
-  sim = in_curve(False); dmax = _panda_delta(sim, V); w = -17.3; act = []
+  sim = in_curve(); dmax = _panda_delta(sim, V); w = -17.3; act = []
   for i in range(4):
     w += dmax + 0.35
     sim.step(v=V, wheel=w, cmd=-17.3, tq=400.0, pressed=True, mdps_angle_2=w)
@@ -75,7 +73,7 @@ def test_pressed_flag_qualifies_at_once(keep):
 
 
 def test_yielded_authority_qualifies(keep):
-  sim = in_curve(False)
+  sim = in_curve()
   sim.cc.aci_gain_last = 0.3                                         # authority already given up (blinker, grip, ramp)
   sim.cc.wheel_outrun_driver_age = 0
   dmax = _panda_delta(sim, V); w = -17.3; act = []

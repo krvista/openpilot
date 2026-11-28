@@ -42,7 +42,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
                              apply_angle=0.0, lkas_alt_cam_msg=None,
                              mads_lka_icon=None, effective_aci_gain=None,
                              mads_force_assist=False, cam_invalid=False,
-                             lfa_sync_pulse=False, meas_angle=None, wire_active=None, lfa_button_mirror=True):
+                             lfa_sync_pulse=False, meas_angle=None, wire_active=None):
   """
   Create LKAS_ALT message for the HDA2-ALT + CCNC angle-control platform
   (any Hyundai/Kia with `CCNC | CANFD_LKA_STEER_MSG_ALT` flags; Ioniq 6 N
@@ -57,8 +57,8 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     packer just forwards it.
   mads_lka_icon: MADS-driven LKA_ICON override (2 = green / 0 = off-but-visible /
     None = mirror camera).
-  lfa_sync_pulse: short LFA_BUTTON high pulse emitted on every MADS
-    enabled-state edge so the stock gateway toggles the cluster LFA icon.
+  lfa_sync_pulse: short LFA_BUTTON high pulse from the car controller's
+    hold-off loop (switches the factory LFA off while it is on).
   cam_invalid: cam_stale or fault_lfa from carcontroller — forces
     LKA_ASSIST=0 and LKAS_ANGLE_ACTIVE=1 even when MADS would otherwise
     keep the icon green.
@@ -156,18 +156,10 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
         "FCA_SYSWARN":               fca_syswarn_out,
         "TORQUE_REQUEST":            0,
         "STEER_REQ":                 0,
-        # LFA_BUTTON drives the stock gateway ECU's internal LFA toggle which in
-        # turn controls the cluster's LFA green icon on bus 1's CCNC_0x161/0x162
-        # (we don't publish those addresses — see carcontroller's note on the
-        # dual-publisher hazard, c6a33de). To keep cluster green in lockstep
-        # with MADS, the carcontroller emits a synthetic one-frame `lfa_sync_pulse`
-        # on every MADS enabled-state edge. When that pulse is active we force
-        # the bit high; otherwise we mirror the camera's bit so any direct
-        # press the camera still observes also propagates to the gateway.
-        # Phase 72a (lfa_button_mirror False): the camera's bit is NOT forwarded - the ADAS controller switches the
-        # factory LFA on that bit, and while openpilot is in charge the factory LFA stays off (only our own pulse
-        # toggles it). The press still reaches MADS through carstate (lfa_button_oem).
-        "LFA_BUTTON":                1 if lfa_sync_pulse else (lkas_alt_cam_msg["LFA_BUTTON"] if lfa_button_mirror else 0),
+        # LFA_BUTTON drives the ADAS controller's factory-LFA toggle. The camera's bit is NOT forwarded - while openpilot
+        # is in charge the factory LFA stays off, and only the car controller's own pulse (`lfa_sync_pulse`, the
+        # Phase 72a hold-off loop) toggles it. The press still reaches MADS through carstate (lfa_button_oem).
+        "LFA_BUTTON":                1 if lfa_sync_pulse else 0,
         # Force LKA_ASSIST=1 when MADS is enabled, even during transient
         # passive states (in_passthrough, was_in_reverse, VM rate-limit
         # hold). Without this the cluster's green steering icon falls off

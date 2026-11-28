@@ -393,8 +393,8 @@ struct CarControlSP @0xa5cd762cd951a455 {
   # Phase 45: min(inner-left, inner-right) model lane-line probability. Lets the car controller release the
   # parking-mode latch once the car is plainly on a marked road. 0.0 when absent (old logs) = never releases.
   laneLineProbMin @6 :Float32;
-  # i6n Phase 72: True = keep the pre-72 behaviour (factory LFA switched on with MADS, Phase 6-69 stack);
-  # False (default) = openpilot steers alone (common/steer_profile.py: the SOLO_DEFAULT kill switch).
+  # i6n Phase 72: True = the pre-72 behaviour (factory LFA switched on with MADS, Phase 6-69 stack); False (default) =
+  # openpilot steers alone. Phase 89: that behaviour was removed - never written (always False), kept for old logs.
   stockLfaWithOp @7 :Bool;
   # i6n Phase 75: the panda currently allows lateral control (controlsd, from pandaStates). While False with latActive
   # the car controller sends passive frames and keeps its request on the wheel. Default true: a message without the

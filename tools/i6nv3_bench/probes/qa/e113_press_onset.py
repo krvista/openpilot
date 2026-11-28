@@ -21,7 +21,7 @@ class _CP: steerActuatorDelay = 0.1; carFingerprint = "HYUNDAI_IONIQ_6_N"
 
 
 def run(retro):
-  vb, lag0 = 0, L.LAGD_SEED_S
+  vb, lag0 = 0, L.CCNC_PROFILE_KW["initial_lag_seed"]
   presses = leaked = accepted = 0; ests = []
   for r in ROUTES:
     ev = pickle.load(open(f"{S}/lagd/{r}.pkl", "rb"))

@@ -16,6 +16,8 @@ import opendbc.car.hyundai.carcontroller as ccmod
 from opendbc.car import structs
 from opendbc.car.structs import car
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 KPH = 1 / 3.6
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)

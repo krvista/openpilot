@@ -1,10 +1,13 @@
-"""Phase 41: low-lane-confidence steering-rate cap (lowconf_rate_cap.py) + 41-2 lookahead cap step.
+"""Phase 41: low-lane-confidence steering-rate cap (lowconf_rate_cap.py). (41-2, the lookahead cap step, was removed
+with the lookahead lead in Phase 89.)
 
 Unit tests drive LowConfRateCap directly; the integration tests drive the real Controls.state_control() through the
 manual fixture of test_noncontrol_controlsd_state so the cap is proven in its place in the lateral chain (after the
-6g blend / 39-2 hold, before the departure and BSM guards and the 6h-1 LP).
+6g blend / 39-2 hold, before the departure and BSM guards).
 """
 import math
+
+import pytest
 
 from phase_tests.harness_noncontrol import FakeParams  # noqa: F401 (stub install side effect)
 from phase_tests.test_noncontrol_controlsd_state import mk_controls, mk_model, run
@@ -85,7 +88,6 @@ class TestUnit:
   def test_shipped_defaults(self):
     assert lc.LOWCONF_CAP_DPS == 6.0 and lc.LOWCONF_LANE_MIN == 0.3 and lc.LOWCONF_RELEASE_DPS == 30.0
     assert abs(lc.LOWCONF_MIN_SPEED - 30.0 / 3.6) < 1e-9
-    assert cd.LOOKAHEAD_T_AHEAD_CAP == 0.32      # 41-2
 
 
 def _model(k, probs):
@@ -109,11 +111,13 @@ class TestIntegration:
   def _rate_capped_in_state_control(self):
     s = mk_controls(); s.sm['carState'].vEgo = V
     self._settle(s)
+    start = s.desired_curvature                               # (not 0: the lane terms act on the fixture's lane lines)
     k_step = 0.006                                            # ~15 deg at the nominal ratio
     curv, _ = run(s, 50, _model(k_step, [0.9, 0.2, 0.95, 0.9]))   # weaker inner line at 0.2 for 0.5 s
     assert s.lowconf_cap.active
-    assert abs(curv) <= (0.5 * lc.LOWCONF_CAP_DPS + 0.3) * KPD    # <= ~3.3 deg worth, not 15 (Phase 57: own-state ramp, not the LP-anchored crawl)
-    assert abs(curv) >= 0.5 * 0.5 * lc.LOWCONF_CAP_DPS * KPD     # ... but at least half the designed 6 deg/s ramp (the LP takes the rest)
+    assert abs(curv - start) <= (0.5 * lc.LOWCONF_CAP_DPS + 0.3) * KPD   # <= ~3.3 deg worth, not 15
+    # ... and the whole designed 6 deg/s ramp (Phase 57 own-state ramp; no low-pass behind it since Phase 89)
+    assert abs(curv - start) == pytest.approx(0.5 * lc.LOWCONF_CAP_DPS * KPD, rel=1e-3)
     # same step with confident lines is (nearly) through after 0.5 s
     s2 = mk_controls(); s2.sm['carState'].vEgo = V
     self._settle(s2)

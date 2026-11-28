@@ -109,7 +109,7 @@ def test_shipped_values():
 def nan_run(n_nan):
   """76 km/h, car 25 cm left of the lane centre until the term has settled (integral at its cap), then n_nan frames of
   a non-finite action, then the model is back. Returns (command before, commands during, commands after, states)."""
-  s = H.mk_controls(); s._steer_legacy = False
+  s = H.mk_controls()
   s.sm['carState'].vEgo = 21.0
   good = model(centre=0.25)
   bad = model(centre=0.25); bad.action.desiredCurvature = float('nan')
@@ -156,7 +156,7 @@ def test_nan_guard_kill_switch_reproduces_the_runaway(cdk):
 
 # ------------------------------------------------------------------ 75n: minimum steer speed hysteresis
 def lat_trace(v_kph_list, standstill_at=()):
-  s = H.mk_controls(); s._steer_legacy = False
+  s = H.mk_controls()
   s.CP.minSteerSpeed = 5.0 / 3.6; s.CP.steerAtStandstill = False
   out = []
   for i, v in enumerate(v_kph_list):
@@ -195,9 +195,9 @@ def test_standstill_flag_still_switches_lateral_off_and_the_low_floor_is_kept():
 def make_lac():
   CP = make_cp()
   lac = lca.LatControlAngle.__new__(lca.LatControlAngle)
-  lac.sat_check_min_speed = 5.0; lac._trim_7a6 = False; lac.use_steer_limited_by_safety = True; lac.dt = 0.01
-  lac._roll_lp = 0.0; lac._roll_lp_init = False; lac._fb_integ = 0.0; lac._des_slow = 0.0; lac._fb_err_lp = 0.0
-  lac.sat_time = 0.0; lac.sat_limit = 0.4; lac.direct = True; lac.request_paused = False
+  lac.sat_check_min_speed = 5.0; lac.use_steer_limited_by_safety = True; lac.dt = 0.01
+  lac._roll_lp = 0.0; lac._roll_lp_init = False
+  lac.sat_time = 0.0; lac.sat_limit = 0.4; lac.request_paused = False
   return lac, VehicleModel(CP)
 
 
@@ -222,8 +222,6 @@ def test_undelivered_command_raises_saturation_after_the_limit_time(lak):
   assert not any(sat_frames(300))
   assert all(sat_frames(100, limited=False, curv_limited=True)[41:])  # (the curvature-limit path worked before as well)
   lak.SAT_CHECK_UPSTREAM = True
-  leg = make_lac(); leg[0].direct = False                             # legacy profile: unchanged
-  assert not any(sat_frames(300, lac_vm=leg))
 
 
 def test_no_saturation_while_the_driver_steers_or_at_low_speed():
@@ -270,7 +268,7 @@ def cs_sp(paused=False, reason=0, gw=0):
 @pytest.mark.parametrize("kw,want", [(dict(), False), (dict(paused=True), True), (dict(reason=ccmod.PR_NOT_GRANTED), True),
                                      (dict(reason=ccmod.PR_WHEEL_OUTRUN), True),
                                      (dict(gw=ccmod.GW_LFA_ACTIVE | ccmod.GW_SOLO), True),
-                                     (dict(gw=ccmod.GW_LFA_ACTIVE | ccmod.GW_LFA_ON | ccmod.GW_VALID), False),   # legacy profile: it is meant to steer
+                                     (dict(gw=ccmod.GW_LFA_ACTIVE | ccmod.GW_LFA_ON | ccmod.GW_VALID), False),   # no solo bit (a log from before Phase 89): it was meant to steer
                                      (dict(gw=ccmod.GW_LFA_ON | ccmod.GW_VALID | ccmod.GW_SOLO), False),
                                      (dict(gw=ccmod.GW_LFA_ON | ccmod.GW_FOLLOW | ccmod.GW_SOLO), True),          # icon 3, band binding
                                      (dict(gw=ccmod.GW_LFA_ON | ccmod.GW_FOLLOW), False)])
@@ -281,7 +279,7 @@ def test_request_paused_from_car_state_sp(kw, want):
 def test_follow_band_while_the_factory_lfa_releases_does_not_fill_the_saturation_timer(cxk):
   # real car controller: 79 km/h, command 6 deg, wheel 1 deg, icon 2 for 0.8 s, releasing (3) for 1.0 s, then off
   def worst_timer():
-    sim = Sim(solo=True); lac, VM = make_lac(); worst = 0.0; flags = set()
+    sim = Sim(); lac, VM = make_lac(); worst = 0.0; flags = set()
     for i in range(500):
       st = 2 if 100 <= i < 180 else (3 if 180 <= i < 280 else 0)
       cmd = 6.0 if i >= 100 else 1.0
@@ -324,7 +322,7 @@ def test_controlsd_hands_the_paused_flag_to_the_lateral_controller():
 
 def test_car_controller_passive_states_reach_the_saturation_gate():
   """the real car controller under the parking latch on the road -> card's mirror -> controlsd's gate"""
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(400):
     sim.step(v=6.0 * KPH, wheel=305.0, cmd=305.0, lfa_state=0)        # tight turn at low speed: parking latch
   for _ in range(250):
@@ -370,8 +368,7 @@ def ext_sm(panda_states, stale=()):
 
 def test_state_control_ext_fills_the_field_and_it_reaches_the_car_controller():
   from openpilot.selfdrive.car.helpers import convert_carControlSP
-  ext = types.SimpleNamespace(get_lead_data=cx.ControlsExt.get_lead_data, get_lat_granted=cx.ControlsExt.get_lat_granted,
-                              _steer_legacy=False)
+  ext = types.SimpleNamespace(get_lead_data=cx.ControlsExt.get_lead_data, get_lat_granted=cx.ControlsExt.get_lat_granted)
   for lat, stale, want in ((True, (), True), (False, (), False), (False, ('pandaStates',), True)):
     msg = cx.ControlsExt.state_control_ext(ext, ext_sm([ps(lat)], stale=stale))
     assert msg.latGranted is want
@@ -428,7 +425,7 @@ def panda_chain(panda, mads_on, main_on, n, v=60.0 * KPH, cmd=6.0, lat_fn=None):
   lat_fn(mads, main): what controlsd requests (default: MADS on and main on)."""
   S, packer, init = panda
   init()
-  sim = Sim(solo=True)
+  sim = Sim()
   t = 0; wheel = 0.0; rej_last = False; published = [ps(True)]; out = []
   for i in range(-300, n):
     j = max(i, 0)
@@ -827,7 +824,7 @@ def test_factory_lfa_active_and_hold_off_paused(lik):
   f = [i for i, e in ev if e == EventNameSP.factoryLfaActive]
   assert f == list(range(99, 300))                                    # shown from 1.0 s until it ends
   assert info_run([(300, dict(act, lat=False))])[0] == []             # lateral off: not openpilot's turn anyway
-  assert info_run([(300, dict(gw=act["gw"] & ~ccmod.GW_SOLO))])[0] == []   # legacy profile: it is meant to steer
+  assert info_run([(300, dict(gw=act["gw"] & ~ccmod.GW_SOLO))])[0] == []   # no solo bit (a log from before Phase 89): it was meant to steer
   ev, _ = info_run([(100, dict()), (1200, dict(gw=ccmod.GW_GAVE_UP)), (100, dict()), (50, dict(gw=ccmod.GW_GAVE_UP))])
   assert [i for i, e in ev if e == EventNameSP.lfaHoldOffPaused] == [100, 1400]   # once per pause
   lik.FACTORY_LFA_INFO = False
@@ -885,7 +882,7 @@ def test_real_car_controller_parking_latch_on_the_road_with_cruise_prompts():
 
 
 def _latch_on_the_road_with_cruise():
-  sim = Sim(solo=True); L = li.LateralInfo(); ev = []
+  sim = Sim(); L = li.LateralInfo(); ev = []
 
   def go(n, v_kph, cruise, wheel=0.0, cmd=None):
     for _ in range(n):
@@ -991,7 +988,7 @@ def test_ui_shows_the_paused_presentation_while_the_factory_lfa_steers(ui):
   assert status(0) == "lat_only"
   assert status(ccmod.GW_LFA_ON | ccmod.GW_VALID | ccmod.GW_SOLO | ccmod.GW_GAVE_UP) == "lat_only"   # on / hold-off paused: openpilot still steers
   assert status(ccmod.GW_LFA_ACTIVE | ccmod.GW_LFA_ON | ccmod.GW_SOLO) == "override"
-  assert status(ccmod.GW_LFA_ACTIVE | ccmod.GW_LFA_ON) == "lat_only"  # legacy profile: the factory LFA is meant to steer
+  assert status(ccmod.GW_LFA_ACTIVE | ccmod.GW_LFA_ON) == "lat_only"  # no solo bit (a log from before Phase 89): the factory LFA was meant to steer
   assert status(ccmod.GW_LFA_ACTIVE | ccmod.GW_SOLO, mads_enabled=False) == "disengaged"
   assert status(0, paused=True) == "override"                         # (the Phase 27 flag as before)
   sp = types.SimpleNamespace(mads=types.SimpleNamespace(state=State.enabled, available=True, enabled=True))

@@ -4,7 +4,7 @@ env REPLAY_SCRATCH (inputs), REPLAY_OUT (output dir)
 variants: head | nofit (LANE_FIT_GAIN 0 + Phase 79 KE) | noavoid | nolead | noexempt
 | f4560 (lane-fit gate of Phase 82) | f3550 | f4055 (gates tried for Phase 88)"""
 import os, sys, types, time
-os.environ.setdefault("REPLAY_PROFILE", "solo"); os.environ.setdefault("REPLAY_MODEL_DELAY", "log")
+os.environ.setdefault("REPLAY_MODEL_DELAY", "log")
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import replay_state_control as R
@@ -51,7 +51,7 @@ def run(route, variant, t0=None, t1=None):
   setvar(variant)
   import openpilot.selfdrive.controls.lib.lowconf_rate_cap as lrc
   lrc.LOWCONF_CAP_OWN_STATE = True
-  s = R.H.mk_controls(); s.VM = R.VM(); s._steer_legacy = False
+  s = R.H.mk_controls(); s.VM = R.VM()
   rec = {}
   o_lc, o_el = cd.Controls._lane_center, cd.Controls._entry_lead
   def lc(self, mf, CS, k, ok):
@@ -61,7 +61,7 @@ def run(route, variant, t0=None, t1=None):
     r = o_el(self, mf, CS, k, ok); rec['el'] = r; return r
   cd.Controls._lane_center, cd.Controls._entry_lead = lc, el
   Tr = d['T']; a0 = 0 if t0 is None else np.searchsorted(Tr, t0); a1 = len(Tr) if t1 is None else np.searchsorted(Tr, t1)
-  cs = s.sm['carState']; s.desired_curvature = float(d['k_ctrl'][a0]); s._lat_cmd_lp = s.desired_curvature
+  cs = s.sm['carState']; s.desired_curvature = float(d['k_ctrl'][a0])
   out = np.full((a1 - a0, 13), np.nan, dtype=np.float32); cur = -1; m = None
   PT = P['T']; pi = np.maximum(np.searchsorted(PT, Tr, side='right') - 1, 0)
   ldi = np.maximum(np.searchsorted(LD[:, 0], Tr, side='right') - 1, 0) if LD is not None else None

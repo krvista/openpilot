@@ -5,6 +5,8 @@ from opendbc.car.hyundai.values import CarControllerParams as P
 from opendbc.car.lateral import get_max_angle_delta_vm, get_max_angle_vm
 import contextlib
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 
 @contextlib.contextmanager
 def no_outrun_passive():

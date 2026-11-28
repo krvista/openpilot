@@ -12,7 +12,6 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
-from openpilot.common.steer_profile import legacy_requested
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose, fft_next_good_size, parabolic_peak_interp
 from openpilot.sunnypilot.livedelay.lagd_toggle import LagdToggle
@@ -53,65 +52,41 @@ VERSION = 2  # bump this to invalidate old parameter caches (i6n Phase 66: cache
 # e95 replay 7a-7f: estimated within drive 7c after ~12 min at >= 60 km/h (42-84 accepted / min), learned 0.57 s
 # (stock-accepted delays 0.59), block std 0.07 < MAX_LAG_STD. Kill: CCNC_PROFILE = False.
 CCNC_PROFILE = True
-# i6n Phase 64d (report §82): the learned lateral delay on this car is 0.56-0.60 s (e95/e111, the 7a-7f data run as one
-# stream reaches 26/5 valid blocks and 0.60 s), but until lagd is estimated modeld is told steerActuatorDelay + 0.2 =
-# 0.30 s. Seed the pre-learning (and no-cache) value to the measured LAGD_SEED_S so the model plans for the real delay
-# from the first frame; learning still runs and, once estimated, the learned block average overrides the seed (adaptive).
-# Total timing is unchanged: Phase 64b makes controlsd add 0.3 + 0.3 - model_delay, so a 0.55 s seed just moves the
-# compensation from controlsd's shift into the model's own planning (the Phase 64b intent), from boot. Kill:
-# LAGD_SEED_S = None (back to steerActuatorDelay + 0.2).
-LAGD_SEED_S: float | None = 0.65
-# i6n Phase 66 (report §85): the lag search only looked at [MIN_LAG, MAX_LAG) = 0.15..0.60 s in 0.05 s steps, and a peak
-# at the last sample is returned un-interpolated, so on this car 76 % of the accepted estimates were exactly 0.600 — the
-# "learned 0.56-0.60 s" of §76/§82 was the search edge, not the car. With the search widened the command -> yaw peak sits
-# at 0.65-0.75 s (median 0.70, in line with the 639 ms of Phase 60). The spread that then shows up (block means 0.48-0.85,
-# std > MAX_LAG_STD -> status invalid -> cache dropped at the next boot) comes from windows that contain a driver press:
-# 87 % of the low (< 0.45 s) estimates have a < 0.5 s press inside their 60 s window, 2-3 % of the press-free ones do.
-# So an estimate is only accepted when no press (of any length) happened within the last LAGD_PRESS_FREE_S — the whole
-# correlation window — and the search runs to LAGD_MAX_LAG_S. 7a-7f replay: 16-17 / 5 blocks, learned 0.69 s, block std
-# <= 0.072 (never invalid), done within drive 7c as before. The seed follows (0.65). Kill: LAGD_MAX_LAG_S = MAX_LAG,
-# LAGD_PRESS_FREE_S = 0.0.
-LAGD_MAX_LAG_S = 1.0
+# i6n Phase 64d (report §82): until lagd is estimated modeld would be told steerActuatorDelay + 0.2 = 0.30 s. The
+# pre-learning (and no-cache) value is seeded with the measured delay instead (initial_lag_seed) so the model plans for
+# the real delay from the first frame; learning still runs and, once estimated, the learned block average overrides
+# the seed.
+# i6n Phase 66 (report §85): estimates from windows that contain a driver press scatter (87 % of the low, < 0.45 s,
+# estimates had a < 0.5 s press inside their 60 s window, 2-3 % of the press-free ones), so an estimate is only accepted
+# when no press (of any length) happened within the last LAGD_PRESS_FREE_S - the whole correlation window.
+# Kill: LAGD_PRESS_FREE_S = 0.0.
 LAGD_PRESS_FREE_S = MOVING_WINDOW_SEC
-# i6n Phase 67a (report §88-89): what is PUBLISHED to modeld stays inside the stock range. lateralDelay is a network
-# input of the driving model (lateral_control_params) and its action time; stock lagd never hands it more than MAX_LAG
-# (0.65 s), and Phase 66 would have handed it the learned 0.69 s. Steering timing does not need it: controlsd (Phase
-# 64b) keeps model delay + its own shift at 0.6 s whatever is published. So the published value is capped at
-# LAGD_PUBLISH_MAX_S while the search, the blocks, the cache and lateralDelayEstimate keep the real learned value.
-# Kill: LAGD_PUBLISH_MAX_S = None (publish up to the search end).
-# i6n Phase 68 (report §90): the cap is raised from the stock MAX_LAG (0.65) to 0.80 s so the learned 0.69 s reaches
-# modeld and, with controlsd no longer pinning the total at 0.6 s, the steering timing. 0.80 = learned block mean
-# 0.69 + ~1.7 block sigma (0.064): room for the learned value to move, a bound on an outlier. Back to the stock
-# range: LAGD_PUBLISH_MAX_S = MAX_LAG.
-LAGD_PUBLISH_MAX_S: float | None = 0.80
-CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
-                       min_press_sec=0.5, initial_lag_seed=LAGD_SEED_S, max_lag=LAGD_MAX_LAG_S, press_free_sec=LAGD_PRESS_FREE_S,
-                       publish_max=LAGD_PUBLISH_MAX_S)
-
-
-# i6n Phase 72 (report §96-97, common/steer_profile.py): the SOLO profile. What Phases 64-68 learned as this car's
-# lateral delay (0.57 -> 0.69 -> 0.76 s) was the time the FACTORY LFA steered after our command - the ADAS controller did
-# not relay our request while the factory LFA was active. With the factory LFA held off the request is relayed and the
-# measured request -> yaw delay is 0.32 s (route a0, 4 s windows; request -> wheel 0.18 s, wheel -> yaw 0.14 s). In that
-# stretch the old profile's blocks went invalid within 5 min (a 0.3 s plant against 0.76 s blocks) and the published
-# value fell back to the 0.65 s seed for the rest of the drive. Solo: seed LAGD_SOLO_SEED_S, the stock search range,
+# i6n Phase 67a (report §88-89): what is PUBLISHED to modeld is capped (publish_max) - lateralDelay is a network input of
+# the driving model and its action time - while the search, the blocks, the cache and lateralDelayEstimate keep the
+# real learned value.
+# i6n Phase 72 (report §96-97): what Phases 64-68 learned as this car's lateral delay (0.57 -> 0.69 -> 0.76 s) was the
+# time the FACTORY LFA steered after our command - the ADAS controller did not relay our request while the factory LFA
+# was active. With the factory LFA held off the request is relayed and the measured request -> yaw delay is 0.32 s
+# (route a0, 4 s windows; request -> wheel 0.18 s, wheel -> yaw 0.14 s). Seed LAGD_SOLO_SEED_S, the stock search range,
 # what is published capped at LAGD_SOLO_PUBLISH_MAX_S (a drive in which the factory LFA could not be held off must not
-# talk the model back into 0.7 s), a cached estimate from the other profile is not carried over (the two differ by
-# 0.4 s; LAGD_MODE_SPLIT_S separates them), and windows in which the factory LFA was active (carStateSP.gatewayFlags)
-# do not count. Legacy profile: unchanged.
+# talk the model back into 0.7 s), a cached estimate learned while the factory LFA steered is not carried over (the two
+# differ by 0.4 s; LAGD_MODE_SPLIT_S separates them), and windows in which the factory LFA was active
+# (carStateSP.gatewayFlags) do not count.
+# Phase 89: these are the only settings - the profile for the factory LFA steering along (seed 0.65 s, search to 1.0 s,
+# published up to 0.80 s) was removed together with that steering profile.
 LAGD_SOLO_SEED_S = 0.32
 LAGD_SOLO_PUBLISH_MAX_S = 0.50
 LAGD_MODE_SPLIT_S = 0.50
-LAGD_PROFILE_PARAM_FRAMES = 60     # the profile is re-evaluated every 3 s (20 Hz deviceMotion)
 GW_LFA_ACTIVE = 1 << 2             # carStateSP.gatewayFlags bit (opendbc hyundai carcontroller.py GW_LFA_ACTIVE)
-CCNC_SOLO_PROFILE_KW = dict(CCNC_PROFILE_KW, initial_lag_seed=LAGD_SOLO_SEED_S, max_lag=MAX_LAG, publish_max=LAGD_SOLO_PUBLISH_MAX_S)
+CCNC_PROFILE_KW = dict(min_vego=60.0 * CV.KPH_TO_MS, min_ncc=0.9, min_confidence=0.5, min_recovery_buffer_sec=1.0,
+                       min_press_sec=0.5, initial_lag_seed=LAGD_SOLO_SEED_S, max_lag=MAX_LAG, press_free_sec=LAGD_PRESS_FREE_S,
+                       publish_max=LAGD_SOLO_PUBLISH_MAX_S)
 
 
-def lagd_profile(CP, solo: bool = False) -> dict:
-  """Estimator settings for this car: the CCNC profile for Hyundai angle-steering (CCNC) cars (solo: Phase 72),
-  stock otherwise."""
+def lagd_profile(CP) -> dict:
+  """Estimator settings for this car: the CCNC profile for Hyundai angle-steering (CCNC) cars, stock otherwise."""
   if CCNC_PROFILE and CP.brand == "hyundai" and str(CP.steerControlType) == "angle":
-    return dict(CCNC_SOLO_PROFILE_KW if solo else CCNC_PROFILE_KW)
+    return dict(CCNC_PROFILE_KW)
   return {}
 
 
@@ -464,8 +439,8 @@ class LateralLagEstimator:
 
 
 def retrieve_initial_lag(params: Params, CP: car.CarParams, solo: bool | None = None):
-  """solo (Phase 72): True / False = the cached estimate must belong to that steering profile (solo < LAGD_MODE_SPLIT_S
-  <= legacy), otherwise it is dropped; None = no such check (the pre-72 call)."""
+  """solo (Phase 72): True = the cached estimate must be below LAGD_MODE_SPLIT_S (one learned while the factory LFA
+  steered is at or above it and is dropped; False = the opposite); None = no such check (the pre-72 call)."""
   last_lag_data = params.get("LiveDelay")
   last_carparams_data = params.get("CarParamsPrevRoute")
 
@@ -501,9 +476,8 @@ def main():
   params = Params()
   CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
 
-  solo = not legacy_requested(params)   # i6n Phase 72: steering profile (common/steer_profile.py)
-  lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP, solo))
-  if (initial_lag_params := retrieve_initial_lag(params, CP, solo)) is not None:
+  lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP))
+  if (initial_lag_params := retrieve_initial_lag(params, CP, True)) is not None:   # i6n Phase 72
     lag, valid_blocks = initial_lag_params
     lag_learner.reset(lag, valid_blocks)
 
@@ -530,9 +504,3 @@ def main():
 
       if sm.frame % 60 == 0:  # read from and write to params every 3 seconds
         lagd_toggle.update(lag_msg)
-
-    # i6n Phase 72: the steering profile was switched -> the plant is a different one: start over
-    # from that profile's seed (the two delays differ by 0.4 s; blocks of one are noise for the other)
-    if sm.frame % LAGD_PROFILE_PARAM_FRAMES == 0 and (not legacy_requested(params)) != solo:
-      solo = not solo
-      lag_learner = LateralLagEstimator(CP, 1. / SERVICE_LIST['deviceMotion'].frequency, **lagd_profile(CP, solo))

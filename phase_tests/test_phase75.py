@@ -12,7 +12,8 @@
 75h  low speed: 0.3 s re-engage dwell when the scenario gate opens because the creep zone was left; hands-off gain
      ceiling at least 0.45 (0-10 km/h) / 0.60 (20 km/h).
 75i  camera stale / LFA fault are indicated; carStateSP.lateralPausedReason carries the cause.
-All behaviour changes in the solo profile only; every one has a kill switch in CarControllerParams."""
+Every behaviour change has a kill switch in CarControllerParams. (Written as 'solo profile only': the comparisons
+against the legacy profile went with that profile in Phase 89.)"""
 import math
 import os
 import shutil
@@ -77,9 +78,9 @@ def panda_units(sim, v):
   return int(np.float32(d) * np.float32(10.0) + np.float32(1.0))
 
 
-def wire_steps(v_kph, solo=True, amp=12.0, n=500):
+def wire_steps(v_kph, amp=12.0, n=500):
   """hands off, the wheel following: a command step up and back; returns the wire angle per frame (CAN units)"""
-  sim = Sim(solo=solo); v = v_kph * KPH; w = 0.0; tx = []
+  sim = Sim(); v = v_kph * KPH; w = 0.0; tx = []
   for i in range(-500, n):
     cmd = amp if 0 <= i < n // 2 else 0.0
     sim.step(v=max(v, 50.0 * KPH) if i < -250 else v, cmd=cmd, wheel=w, lfa_state=0, lead_dist=6.0)   # (on the road first)
@@ -113,7 +114,7 @@ def test_governor_keeps_the_one_unit_floor_at_high_speed(params):
       params.TX_GOVERNOR_MIRROR = True
 
 
-def test_governor_kill_switch_and_legacy_keep_the_old_allowance(params):
+def test_governor_kill_switch_keeps_the_old_allowance(params):
   params.TX_GOVERNOR_RESYNC_FRAMES = 10**9                             # (the 1 s saturation resync would add its own jump)
   _, new = wire_steps(80)
   params.TX_GOVERNOR_MIRROR = False
@@ -121,9 +122,6 @@ def test_governor_kill_switch_and_legacy_keep_the_old_allowance(params):
     _, tx = wire_steps(kph)
     assert int(np.max(np.abs(np.diff(tx)))) == old_units, kph
   _, killed = wire_steps(80)
-  params.TX_GOVERNOR_MIRROR = True
-  _, legacy = wire_steps(80, solo=False)
-  assert int(np.max(np.abs(np.diff(legacy)))) == 1                    # the legacy profile is not touched
   assert np.argmax(new >= 110) < np.argmax(killed >= 110) - 30        # 11 of 12 deg: 0.6 s instead of 1.1 s
 
 
@@ -140,7 +138,7 @@ def test_a1_ramp_is_followed_instead_of_falling_12_deg_behind(params):
   # route a1, 990.8 s: 72 km/h, hands off, the command went +9 -> -19.5 deg at 17 deg/s; the wire moved 10 deg/s
   def gap(mirror):
     params.TX_GOVERNOR_MIRROR = mirror
-    sim = Sim(solo=True); w = 9.0; worst = 0.0
+    sim = Sim(); w = 9.0; worst = 0.0
     for i in range(-250, 400):
       cmd = float(np.clip(9.0 - 17.0 * max(i - 50, 0) * 0.01, -19.5, 9.0))
       sim.step(v=20.0, cmd=cmd, wheel=w, lfa_state=0, lead_dist=6.0)
@@ -152,7 +150,7 @@ def test_a1_ramp_is_followed_instead_of_falling_12_deg_behind(params):
 
 
 def outrun(v_kph, step_can, n=40):
-  sim = Sim(solo=True); v = v_kph * KPH
+  sim = Sim(); v = v_kph * KPH
   for _ in range(250):
     sim.step(v=v, lfa_state=0, lead_dist=6.0)
   for _ in range(n):
@@ -162,10 +160,10 @@ def outrun(v_kph, step_can, n=40):
 
 def test_wheel_outrun_threshold_sits_on_the_pandas_allowance(params):
   for kph in (60, 80, 100):
-    allow = panda_units(Sim(solo=True), kph * KPH)
+    allow = panda_units(Sim(), kph * KPH)
     assert not outrun(kph, allow), kph                                # an active frame can still follow this step
     assert outrun(kph, allow + 1), kph
-  assert panda_units(Sim(solo=True), 60 * KPH) == 5
+  assert panda_units(Sim(), 60 * KPH) == 5
   params.TX_GOVERNOR_MIRROR = False                                   # old pair: allowance 2 + margin 2 at 60 km/h
   assert outrun(60, 5) and not outrun(60, 4)
 
@@ -226,7 +224,7 @@ def panda_run(panda, vfun, cmdfun, n, lag=3):
   """the real car controller's frames into the real panda checks; the wheel follows the accepted wire `lag` frames later.
   Returns (rejected frames, active frames) after the warm-up."""
   init, rx, tx = panda
-  sim = Sim(solo=True); init()
+  sim = Sim(); init()
   wheel = cmdfun(0); hist = [wheel] * (lag + 1); rej = act = 0; rej_last = False
   road = 250 if vfun(0) < 34.0 * KPH else 0                            # on the road first, so that the low speeds are steered
   for i in range(-200 - road, n):
@@ -264,7 +262,7 @@ def test_real_panda_accepts_every_frame_5_to_130_kph(params, panda):
 def test_real_panda_rejects_what_exceeds_its_limit(panda):
   # the check is live: a jump of the request is dropped
   init, rx, tx = panda
-  sim = Sim(solo=True); init(); oks = []
+  sim = Sim(); init(); oks = []
   for i in range(300):
     rx(20.0, 0.0)
     sim.step(v=20.0, cmd=0.0, wheel=0.0, lfa_state=0, lead_dist=6.0)
@@ -290,7 +288,7 @@ class Car(FactoryLfa):
 def answer_time(lost, gap, to=2):
   """standby LFA switched off after `lost` ignored pulses; `gap` frames after it reads off the car switches it on
   again. Returns (wait left when it was seen off, frames from the switch-on to our pulse)."""
-  sim, car = Sim(solo=True), Car(state=1, ignore=lost > 0)
+  sim, car = Sim(), Car(state=1, ignore=lost > 0)
   while len(car.pulses) < lost:
     run(sim, car, 1)
   car.ignore = False
@@ -316,7 +314,7 @@ def test_switch_on_after_a_seen_off_is_answered_after_the_confirm_time(params):
 
 def test_a_short_off_or_an_unknown_icon_does_not_clear_the_wait():
   assert answer_time(0, 10)[1] == 131                                 # off for 0.1 s only: the wait stays (141 - 10)
-  sim = Sim(solo=True)
+  sim = Sim()
   sim.cc.lfa_hold_wait = 500
   for _ in range(100):
     sim.step(lfa_state=-1)                                            # stale / not received: nothing is known to be off
@@ -331,7 +329,7 @@ def test_a_short_off_or_an_unknown_icon_does_not_clear_the_wait():
 
 def dense(delay, frames=2000):
   """a car that switches the LFA back on (standby) `delay` frames after every switch-off"""
-  sim, car = Sim(solo=True), Car(state=1); off = 0; pause_at = None
+  sim, car = Sim(), Car(state=1); off = 0; pause_at = None
   for i in range(frames):
     run(sim, car, 1)
     off = off + 1 if car.state == 0 else 0
@@ -365,7 +363,7 @@ def test_cleared_wait_never_puts_a_pulse_on_an_lfa_that_is_off():
   # random switch-ons, 10 % of our pulses lost: no pulse may ever arrive while the car's LFA is off or releasing
   rng = np.random.default_rng(75)
   for seed in range(3):
-    sim, car = Sim(solo=True), Car(state=0); nxt = 100; wrong = 0; prev = 0
+    sim, car = Sim(), Car(state=0); nxt = 100; wrong = 0; prev = 0
     for i in range(9000):
       if i >= nxt and car.state == 0:
         car.state = int(rng.choice([1, 2])); nxt = i + int(rng.choice([40, 120, 400, 2500]))
@@ -379,10 +377,10 @@ def test_cleared_wait_never_puts_a_pulse_on_an_lfa_that_is_off():
 
 
 # ------------------------------------------------------------------ 75c stale parking signature
-def boot_through_30(solo=True):
+def boot_through_30():
   """the controller starts while the car accelerates through 30 km/h (signature set at frame 50, never armed), 20 s on
   the road, then a stop behind a lead and the launch"""
-  sim = Sim(solo=solo)
+  sim = Sim()
   for i in range(150):
     sim.step(v=(26.0 + 8.0 * i / 149.0) * KPH, lfa_state=0)
   for _ in range(2000):
@@ -405,13 +403,11 @@ def test_signature_that_never_armed_the_latch_is_dropped_on_the_road(params):
   params.PARKING_STALE_SIGNATURE_CLEAR = False
   sim, on_road = boot_through_30()
   assert on_road is True and sim.cc.parking_mode_active               # the old behaviour: latched at a later stop
-  params.PARKING_STALE_SIGNATURE_CLEAR = True
-  assert boot_through_30(solo=False)[0].cc.parking_mode_active        # legacy profile untouched
 
 
 @pytest.mark.usefixtures("old_parking")
 def test_real_signatures_still_arm_and_release_as_before():
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(400):
     sim.step(v=8.0 * KPH, wheel=300.0, lfa_state=0)                   # a parking turn
   assert sim.cc.parking_mode_active
@@ -425,8 +421,8 @@ def test_real_signatures_still_arm_and_release_as_before():
 
 # ------------------------------------------------------------------ 75d first control frame
 def test_first_frame_with_lateral_on_starts_at_the_wheel(params):
-  def first(solo=True):
-    sim = Sim(solo=solo); tx = []
+  def first():
+    sim = Sim(); tx = []
     for _ in range(60):
       sim.step(v=80.0 * KPH, wheel=5.0, mdps_angle_2=5.2, cmd=5.0, lfa_state=0)
       tx.append(sim.tx_angle())
@@ -435,12 +431,10 @@ def test_first_frame_with_lateral_on_starts_at_the_wheel(params):
   assert tx[0] == pytest.approx(5.0, abs=0.06) and min(tx) > 4.7      # (the 0.15 deg command band)
   params.FIRST_FRAME_ANCHOR = False
   assert first()[1][0] == pytest.approx(0.2, abs=0.11)                # the old behaviour: from 0 deg
-  params.FIRST_FRAME_ANCHOR = True
-  assert first(solo=False)[1][0] < 1.0                                # legacy profile untouched
 
 
 def test_first_frame_starts_the_engage_taper_and_the_wire_reference():
-  sim = Sim(solo=True); tx = []
+  sim = Sim(); tx = []
   sim.step(v=80.0 * KPH, wheel=5.0, mdps_angle_2=5.2, cmd=9.0, lfa_state=0)
   assert sim.cc.frames_since_apply_anchor == 0 and sim.cc.apply_angle_last == pytest.approx(5.04, abs=0.011)
   tx.append(sim.tx_angle())
@@ -451,14 +445,14 @@ def test_first_frame_starts_the_engage_taper_and_the_wire_reference():
   assert 4.9 <= tx[0] <= 5.3                                          # the wire starts from the MDPS angle, not from 0
   assert np.max(np.abs(d[:20])) <= 0.1 + 1e-6 and tx[25] <= 6.7       # 4 deg/s at first, rising (the VM rate would be at 9 deg)
   assert tx[-1] == pytest.approx(9.0, abs=0.3)
-  sim2 = Sim(solo=True)                                               # a first frame with lateral off: as before
+  sim2 = Sim()                                               # a first frame with lateral off: as before
   sim2.step(v=80.0 * KPH, wheel=5.0, cmd=9.0, lat_active=False, lfa_state=0)
   assert sim2.tx_angle() == pytest.approx(5.0) and sim2.cc.first_ctrl_frame is False
 
 
 # ------------------------------------------------------------------ 75e gain while nobody receives it, lateral grant
 def gain_trace(seq, **kw):
-  sim = Sim(solo=kw.pop("solo", True)); g = []
+  sim = Sim(); g = []
   for st in seq:
     sim.step(v=80.0 * KPH, wheel=0.0, cmd=0.5, **st, **kw)
     g.append((sim.tx_gain(), sim.cc.aci_gain_last))
@@ -475,9 +469,6 @@ def test_gain_is_held_at_zero_while_the_factory_lfa_is_active(params):
   params.ACI_HOLD_ZERO_UNRELAYED = False
   old = gain_trace(seq)
   assert old[199, 1] >= 0.8 and old[200, 0] >= 0.8                    # the old behaviour: it kept ramping behind the factory LFA
-  params.ACI_HOLD_ZERO_UNRELAYED = True
-  leg = gain_trace(seq, solo=False)
-  assert leg[199, 1] >= 0.8                                           # legacy profile untouched
 
 
 def test_gain_is_held_at_zero_after_rejected_frames(params):
@@ -496,7 +487,7 @@ def test_gain_is_held_at_zero_after_rejected_frames(params):
 def test_one_or_two_rejected_frames_leave_the_gain_alone(params):
   # an isolated reject while steering (the 38-2 resync frame, route a1 885.96 s / 992.30 s) is not "nobody receives it"
   def trace(nrej, v_kph, off):
-    sim = Sim(solo=True); g = []; w = 0.0
+    sim = Sim(); g = []; w = 0.0
     for i in range(500):
       cmd = min(5.0 * i * 0.01, 8.0)                                  # curve entry, hands off, the wheel `off` deg behind
       sim.step(v=v_kph * KPH, cmd=cmd, wheel=w, lfa_state=0, lead_dist=6.0, tx_rejected=200 <= i < 200 + nrej)
@@ -518,7 +509,7 @@ def test_blind_resync_frame_does_not_drop_the_gain(params, panda):
   # the real panda; the gain on the wire goes on as with the kill switch
   def loop():
     init, rx, tx = panda
-    sim = Sim(solo=True); init()
+    sim = Sim(); init()
     wheel = 10.0; hist = [wheel] * 4; rej_last = False; g = []; rej = []
     for i in range(-300, 500):
       cmd = float(np.clip(10.0 - 16.0 * max(i - 100, 0) * 0.01, -10.0, 10.0))
@@ -541,7 +532,7 @@ def test_blind_resync_frame_does_not_drop_the_gain(params, panda):
 def test_yield_to_the_driver_is_unaffected_by_the_gain_hold(params):
   # no factory LFA, no rejects: hands-off, a resting hand, a press, a blinker - the gain trace is bit-identical
   def trace():
-    sim = Sim(solo=True); g = []
+    sim = Sim(); g = []
     for i in range(1200):
       tq = 0.0 if i < 300 else (150.0 if i < 600 else (500.0 if i < 900 else 0.0))
       sim.step(v=70.0 * KPH, cmd=2.0, wheel=2.0, tq=tq, blinker=1000 <= i < 1100, lfa_state=0)
@@ -553,10 +544,10 @@ def test_yield_to_the_driver_is_unaffected_by_the_gain_hold(params):
   assert new[290] > 0.7 and new[890] < 0.1                            # and it does yield
 
 
-def grant(gate=True, solo=True):
+def grant(gate=True):
   if not gate:
     P.LAT_GRANT_GATE = False
-  sim = Sim(solo=solo); out = []
+  sim = Sim(); out = []
   for i in range(320):
     sim.step(v=60.0 * KPH, wheel=2.0, mdps_angle_2=2.2, cmd=8.0 if i >= 100 else 2.0, lfa_state=0,
              lat_granted=not (100 <= i < 160))
@@ -578,18 +569,16 @@ def test_ungranted_lateral_sends_passive_frames_on_the_wheel_and_tapers_in(param
   assert np.all(np.diff([o[2] for o in out[160:200]]) <= 0.04 + 1e-9)
 
 
-def test_grant_kill_switch_legacy_and_absent_field(params):
+def test_grant_kill_switch_and_absent_field(params):
   _, out = grant(gate=False)
   assert all(o[0] for o in out[100:160]) and out[159][1] > 7.0        # kill switch: active frames as before
   params.LAT_GRANT_GATE = True
-  _, leg = grant(solo=False)
-  assert all(o[0] for o in leg[100:160])                              # legacy profile untouched
 
   class NoField(types.SimpleNamespace):                               # a CarControlSP object without the field = granted
     def __setattr__(self, k, v):
       if k != "latGranted":
         super().__setattr__(k, v)
-  sim = Sim(solo=True)
+  sim = Sim()
   sim.cc._cc_sp = NoField(**vars(sim.cc._cc_sp))
   for _ in range(50):
     sim.step(v=60.0 * KPH, lfa_state=0, lat_granted=False)
@@ -615,7 +604,7 @@ def test_lat_granted_schema():
 def cruise_case(edge_at, on_at, n=500, to=2):
   """cruise engaged at frame edge_at (None = never, 0 = already on at the controller's first frame); the car switches
   the LFA on at on_at. Returns the pulse times relative to the switch-on and the final LFA state."""
-  sim, car = Sim(solo=True), FactoryLfa(state=0)
+  sim, car = Sim(), FactoryLfa(state=0)
   for i in range(n):
     if i == on_at:
       car.state = to
@@ -645,12 +634,12 @@ def test_fast_confirm_never_in_the_controllers_first_half_second():
 
 
 def test_fast_confirm_needs_two_icon_samples_and_is_used_once_per_edge():
-  sim = Sim(solo=True); bits = []
+  sim = Sim(); bits = []
   for i in range(400):                                                # one 20 Hz sample of 'on' (5 frames) is not enough
     st = 2 if 107 <= i < 112 else 0
     sim.step(v=20.0, lfa_state=st, cruise_enabled=i >= 100); bits.append(int(sim.lkas_alt()["LFA_BUTTON"]))
   assert sum(bits) == 0
-  sim, car = Sim(solo=True), FactoryLfa(state=0, ignore=True)         # the car ignores the pulse: the retry is the normal one
+  sim, car = Sim(), FactoryLfa(state=0, ignore=True)         # the car ignores the pulse: the retry is the normal one
   for i in range(400):
     if i == 107:
       car.state = 1
@@ -659,7 +648,7 @@ def test_fast_confirm_needs_two_icon_samples_and_is_used_once_per_edge():
   assert car.pulses[0] in (117, 118) and car.pulses[1] - car.pulses[0] == 151 and sim.cc.lfa_fast_left == 0
   # the first pulse switches the LFA off, 0.2 s of icon 0 clears the wait and the car switches it on again inside the
   # 1.5 s window: the second answer takes the normal confirm time
-  sim, car = Sim(solo=True), Car(state=0)
+  sim, car = Sim(), Car(state=0)
   for i in range(400):
     if i in (107, 160):
       car.state = 1
@@ -668,25 +657,10 @@ def test_fast_confirm_needs_two_icon_samples_and_is_used_once_per_edge():
   assert car.pulses == [117, 160 + P.LFA_HOLD_OFF_CONFIRM_FRAMES]
 
 
-def test_no_cruise_edge_is_taken_from_before_a_profile_change():
-  # solo with cruise off, legacy frames during which cruise is engaged, solo again: not an edge, the normal confirm
-  def pulse_after(legacy_from, legacy_to):
-    sim, car = Sim(solo=True), FactoryLfa(state=0)
-    for i in range(500):
-      sim.cc._cc_sp.stockLfaWithOp = legacy_from <= i < legacy_to
-      if i == 207:
-        car.state = 2
-      sim.step(v=20.0, lfa_state=car.state, cruise_enabled=i >= 150)
-      car.step(int(sim.lkas_alt()["LFA_BUTTON"]))
-    return [p - 207 for p in car.pulses]
-  assert pulse_after(100, 200) == [30]
-  assert pulse_after(100, 140) == [10] and pulse_after(0, 0) == [10]  # (in solo at the edge: the fast confirm)
-
-
 # ------------------------------------------------------------------ 75g follow band
 def test_follow_band_is_taken_around_the_mdps_angle(params):
   def band(**kw):
-    sim = Sim(solo=True)
+    sim = Sim()
     for _ in range(300):
       sim.step(v=25.0, cmd=7.0, wheel=1.0, lfa_state=2, **kw)
     return sim.tx_angle()
@@ -699,7 +673,7 @@ def test_follow_band_is_taken_around_the_mdps_angle(params):
 
 def handover(v=15.0, cmd=30.0):
   """the factory LFA moves the wheel 10 deg/s for 2 s with our command far away, releases (1 s), is off"""
-  sim = Sim(solo=True); tx = []; wh = []; w = 1.0
+  sim = Sim(); tx = []; wh = []; w = 1.0
   for i in range(700):
     st = 2 if i < 300 else (3 if i < 400 else 0)
     if 100 <= i < 300:
@@ -721,7 +695,7 @@ def test_engage_taper_restarts_once_when_a_binding_band_ends(params):
 
 
 def test_no_taper_restart_when_the_band_was_not_binding():
-  sim = Sim(solo=True)
+  sim = Sim()
   for i in range(500):
     st = 2 if i < 300 else (3 if i < 400 else 0)
     sim.step(v=25.0, cmd=1.3, wheel=1.0, lfa_state=st)                # the command is inside the band
@@ -729,10 +703,10 @@ def test_no_taper_restart_when_the_band_was_not_binding():
 
 
 # ------------------------------------------------------------------ 75h low speed: scenario gate dwell
-def launch(solo=True, **kw):
+def launch(**kw):
   """on the road, a stop as first car, then the launch at 2 m/s2; returns frames from leaving the creep zone
   (12 km/h) to the first steered frame, and the speed there"""
-  sim = Sim(solo=solo)
+  sim = Sim()
   for _ in range(600):
     sim.step(v=50.0 * KPH, lfa_state=0)
   for _ in range(300):
@@ -756,8 +730,6 @@ def test_first_car_launch_is_steered_0p3_s_after_the_creep_zone(params):
   params.LOW_SPEED_SCEN_CREEP_EXIT_FRAMES = P.LOW_SPEED_SCEN_TO_ACTIVE_FRAMES   # kill switch
   dt, v = launch()
   assert dt == 99 and v > 18.5
-  params.LOW_SPEED_SCEN_CREEP_EXIT_FRAMES = 30
-  assert launch(solo=False)[0] == 99                                  # legacy profile untouched
 
 
 def test_other_openings_of_the_gate_keep_the_1_s_dwell():
@@ -767,7 +739,7 @@ def test_other_openings_of_the_gate_keep_the_1_s_dwell():
   t12 = int(P.CREEP_GATE_EXIT_MS / 0.02) + 1
   assert dt == (200 - t12) + 99
   # a lead comes into the follow window inside the creep zone: that opening has its own 1.0 s running
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(600):
     sim.step(v=50.0 * KPH, lfa_state=0)
   for _ in range(300):
@@ -780,7 +752,7 @@ def test_other_openings_of_the_gate_keep_the_1_s_dwell():
 
 
 def test_going_passive_still_takes_0p3_s():
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(600):
     sim.step(v=50.0 * KPH, lfa_state=0)
   for _ in range(200):
@@ -793,8 +765,8 @@ def test_going_passive_still_takes_0p3_s():
 
 
 # ------------------------------------------------------------------ 75h low speed: hands-off gain ceiling
-def settled_gain(v_kph, solo=True, **kw):
-  sim = Sim(solo=solo)
+def settled_gain(v_kph, **kw):
+  sim = Sim()
   for _ in range(600):
     sim.step(v=50.0 * KPH, cmd=1.0, wheel=1.0, lfa_state=0, lead_dist=6.0)
   for _ in range(800):
@@ -812,8 +784,6 @@ def test_low_speed_hands_off_ceiling_is_one_rung_up(params):
   params.ACIGAIN_LOWSPEED_RAISE_V = [0.0, 0.0, 0.0]                   # kill switch = the old table
   for kph in (6, 10, 15, 20, 25, 30):
     assert settled_gain(kph) == pytest.approx(float(np.interp(kph, [0, 20, 40, 120], [0.18, 0.30, 0.75, 0.95])), abs=0.0041), kph
-  params.ACIGAIN_LOWSPEED_RAISE_V = [0.45, 0.45, 0.60]
-  assert settled_gain(15, solo=False) == pytest.approx(0.27, abs=0.0041)   # legacy profile untouched
 
 
 def test_low_speed_raise_leaves_blinker_and_driver_paths_alone(params):
@@ -853,7 +823,7 @@ def test_low_speed_raise_leaves_blinker_and_driver_paths_alone(params):
 def test_low_speed_raise_keeps_the_yield_in_the_harness(params):
   # driver torque at 15 km/h in a queue: the gain still drops to the same floor at the same rate; blinker as before
   def trace(**kw):
-    sim = Sim(solo=True); g = []
+    sim = Sim(); g = []
     for _ in range(600):
       sim.step(v=50.0 * KPH, cmd=1.0, wheel=1.0, lfa_state=0, lead_dist=6.0)
     for i in range(900):
@@ -874,8 +844,8 @@ def test_low_speed_raise_keeps_the_yield_in_the_harness(params):
 
 # ------------------------------------------------------------------ 75i indication
 def test_camera_stale_and_lfa_fault_are_indicated(params):
-  def frozen(solo=True):
-    sim = Sim(solo=solo)
+  def frozen():
+    sim = Sim()
     for _ in range(300):
       sim.step(v=50.0 * KPH, lfa_state=0)
     assert not sim.cc.lat_passive_indicated and sim.cc.lat_passive_reason == ccmod.PR_NONE
@@ -889,15 +859,13 @@ def test_camera_stale_and_lfa_fault_are_indicated(params):
   for _ in range(60):
     sim.step(v=50.0 * KPH, lfa_state=0)
   assert sim.effective_lat_active() and not sim.cc.lat_passive_indicated and sim.cc.lat_passive_reason == ccmod.PR_NONE
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(100):
     sim.step(v=50.0 * KPH, lfa_state=0, fault_lfa=1)
   assert sim.cc.lat_passive_indicated and sim.cc.lat_passive_reason == ccmod.PR_LFA_FAULT
   params.PASSIVE_INDICATE_CAM_FAULT = False                           # kill switch: not shown (the reason code stays)
   sim = frozen()
   assert not sim.cc.lat_passive_indicated and sim.cc.lat_passive_reason == ccmod.PR_CAM_STALE
-  params.PASSIVE_INDICATE_CAM_FAULT = True
-  assert not frozen(solo=False).cc.lat_passive_indicated              # legacy profile untouched
 
 
 def test_reason_codes():
@@ -905,7 +873,7 @@ def test_reason_codes():
            ccmod.PR_LOWSPEED_GRIP, ccmod.PR_SCENARIO, ccmod.PR_VM_REJECT, ccmod.PR_NOT_GRANTED, ccmod.PR_WHEEL_OUTRUN]
   assert codes == list(range(11))
   def road():
-    sim = Sim(solo=True)
+    sim = Sim()
     for _ in range(600):
       sim.step(v=50.0 * KPH, lfa_state=0)
     return sim
@@ -937,15 +905,15 @@ def test_reason_codes():
   assert not sim.cc.lat_passive_indicated                             # not a 'paused' state for the display, as before
   sim.step(v=80.0 * KPH, lfa_state=0, lat_active=False)
   assert sim.cc.lat_passive_reason == ccmod.PR_NONE                   # lateral off: nothing to explain
-  leg = Sim(solo=False)
+  park = Sim()
   for _ in range(400):
-    leg.step(v=8.0 * KPH, wheel=300.0)
-  assert leg.cc.lat_passive_reason == ccmod.PR_PARKING                # telemetry in both profiles
+    park.step(v=8.0 * KPH, wheel=300.0)
+  assert park.cc.lat_passive_reason == ccmod.PR_PARKING
 
 
 def test_factory_lfa_active_and_hold_off_pause_reach_car_state_sp():
   from openpilot.cereal import custom
-  sim = Sim(solo=True)
+  sim = Sim()
   sim.step(v=25.0, lfa_state=2)
   assert sim.cc.gw_flags & ccmod.GW_LFA_ACTIVE and not sim.cc.gw_flags & ccmod.GW_GAVE_UP
   sim.cc.lfa_hold_give_up = 500
@@ -968,7 +936,7 @@ def test_card_mirrors_the_reason_code_into_the_message():
   from openpilot.cereal import custom
   from openpilot.selfdrive.car.helpers import convert_to_capnp
   import types
-  sim = Sim(solo=True)
+  sim = Sim()
   for _ in range(400):
     sim.step(v=8.0 * KPH, wheel=300.0, lfa_state=2)
   root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

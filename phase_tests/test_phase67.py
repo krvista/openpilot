@@ -1,7 +1,7 @@
 """Phase 67 (report §88-89).
-67a: lagd publishes at most LAGD_PUBLISH_MAX_S (the stock 0.65 s) to modeld on the CCNC profile; the learned value stays
-in lateralDelayEstimate / the blocks / the cache.
-67b: the orient-lead jerk budget no longer grows with the model delay (Phase 64b ref_shift).
+67a: lagd publishes at most its cap to modeld on the CCNC profile (publish_max; LAGD_SOLO_PUBLISH_MAX_S = 0.50 s on the
+only profile left since Phase 89); the learned value stays in lateralDelayEstimate / the blocks / the cache.
+67b: (the orient-lead jerk budget; removed with the lead in Phase 89.)
 67c: the stock modeld runner feeds the model the toggle-aware delay (model.lat_delay), like modeld_v2."""
 import pathlib
 import re
@@ -13,15 +13,6 @@ from phase_tests.harness_noncontrol import FakeParams  # noqa: F401 (stub instal
 
 import openpilot.selfdrive.controls.controlsd as cd
 import openpilot.selfdrive.locationd.lagd as lagd
-from phase_tests.test_phase55 import model, call, settled
-
-
-@pytest.fixture(autouse=True)
-def _restore():
-  saved = {nm: getattr(cd, nm) for nm in ("LOOKAHEAD_DELAY_EXTRA_S", "LOOKAHEAD_BUDGET_EXCLUDES_SHIFT")}
-  yield
-  for nm, val in saved.items():
-    setattr(cd, nm, val)
 
 
 def cp():
@@ -30,8 +21,7 @@ def cp():
 
 # ---------------------------------------------------------------- 67a
 def test_published_delay_is_capped():
-  # Phase 68 raised the cap from the stock 0.65 to 0.80 s (the learned 0.69 s is published as is)
-  cap = lagd.LAGD_PUBLISH_MAX_S
+  cap = lagd.LAGD_SOLO_PUBLISH_MAX_S
   e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
   e.reset(cap + 0.1, lagd.BLOCK_NUM_NEEDED + 2)
   m = e.get_msg(True).lateralDelay
@@ -49,12 +39,12 @@ def test_stock_range_cap_still_selectable():
 
 def test_learned_value_below_the_cap_is_published_as_is():
   e = lagd.LateralLagEstimator(cp(), 0.05, **lagd.lagd_profile(cp()))
-  e.reset(0.58, lagd.BLOCK_NUM_NEEDED + 2)
-  assert e.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.58)
+  e.reset(0.41, lagd.BLOCK_NUM_NEEDED + 2)
+  assert e.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.41)
 
 
 def test_publish_cap_kill_switch_and_stock():
-  kw = {**lagd.lagd_profile(cp()), "publish_max": None}
+  kw = {**lagd.lagd_profile(cp()), "publish_max": None, "max_lag": 1.0}
   e = lagd.LateralLagEstimator(cp(), 0.05, **kw); e.reset(0.90, lagd.BLOCK_NUM_NEEDED + 2)
   assert e.get_msg(True).lateralDelay.lateralDelay == pytest.approx(0.90)       # up to the search end
   s = lagd.LateralLagEstimator(cp(), 0.05); s.reset(0.90, lagd.BLOCK_NUM_NEEDED + 2)
@@ -62,36 +52,7 @@ def test_publish_cap_kill_switch_and_stock():
 
 
 def test_seed_is_inside_the_cap():
-  assert lagd.LAGD_SEED_S <= lagd.LAGD_PUBLISH_MAX_S
-
-
-# ---------------------------------------------------------------- 67b
-def lead_out(delay, k_far=0.012, t_step=0.8):
-  """A plan step far larger than the budget, inside the lead window for either delay: the output is budget-bound."""
-  cd.LOOKAHEAD_DELAY_EXTRA_S = [0.3] * 5
-  s = settled(20.0); s._model_lat_delay = delay
-  return call(s, model(0.002, k_far, t_step=t_step)), s
-
-
-def test_budget_does_not_grow_with_the_model_delay():
-  base, _ = lead_out(0.3)
-  seeded, _ = lead_out(0.65)
-  assert seeded == pytest.approx(base, rel=1e-6)               # same clip whatever delay the model is told
-
-
-def test_budget_kill_switch_restores_the_looser_clip():
-  cd.LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = False
-  base, _ = lead_out(0.3)
-  seeded, _ = lead_out(0.65)
-  lead_base, lead_seeded = base - 0.002, seeded - 0.002
-  assert lead_seeded > lead_base * 1.2                         # the pre-67b behaviour: ~36 % more lead allowed
-
-
-def test_untold_delay_is_unchanged():
-  a, _ = lead_out(0.3)
-  cd.LOOKAHEAD_BUDGET_EXCLUDES_SHIFT = False
-  b, _ = lead_out(0.3)
-  assert a == pytest.approx(b, abs=1e-12)
+  assert lagd.LAGD_SOLO_SEED_S <= lagd.LAGD_SOLO_PUBLISH_MAX_S
 
 
 # ---------------------------------------------------------------- 67c

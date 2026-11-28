@@ -48,7 +48,7 @@ for r in ROUTES:
   vm, vs, cm, cs = e.block_avg.get(); msg = e.get_msg(True).lateralDelay
   print(f"  {r}: accepted {n_acc:4d}  gate-refused {n_gate:4d}  blocks {e.block_avg.valid_blocks:2d}  mean {vm:.3f} std {vs:.3f}  status {msg.status}  modeld gets {msg.lateralDelay:.3f}")
   vb = e.block_avg.valid_blocks; lag0 = cm if np.isfinite(cm) else lag0
-a = np.array(acc_lags); edge = L.LAGD_MAX_LAG_S - 0.05
+a = np.array(acc_lags); edge = prof["max_lag"] - 0.05
 print(f"accepted total {len(a)}: median {np.median(a):.3f} IQR {np.percentile(a,25):.3f}-{np.percentile(a,75):.3f}  <0.45 {np.mean(a<0.45)*100:.1f}%  at search edge ({edge:.2f}) {np.mean(np.isclose(a, edge))*100:.1f}%")
-h, ed = np.histogram(a, bins=np.arange(0.15, L.LAGD_MAX_LAG_S + 1e-9, 0.05)); print("  hist:", [(round(x, 2), int(c)) for x, c in zip(ed[:-1], h)])
+h, ed = np.histogram(a, bins=np.arange(0.15, prof["max_lag"] + 1e-9, 0.05)); print("  hist:", [(round(x, 2), int(c)) for x, c in zip(ed[:-1], h)])
 print(f"invalid samples while >= 5 blocks: {inv_n}/{est_n}; first estimated: {first_est}")

@@ -6,7 +6,7 @@
      now follows a relayed request at once.
 73c  lane-centre term on the direct path: the plan is steered through the lane centre at the preview distance
      (proportional) and a slow integral removes a steady offset.
-All three in the solo profile only."""
+(Written as 'solo profile only'; since Phase 89 that is the only profile.)"""
 import math
 import types
 
@@ -58,9 +58,9 @@ def drive(sim, n, v_kph, **kw):
     sim.step(v=v_kph * KPH, lfa_state=0, **kw)
 
 
-def road_then_stop(solo, stop_frames=1500):
+def road_then_stop(stop_frames=1500):
   """leave the lot, drive on the road at 50 km/h, then stop at a light as first car (no lead, no lane lines)"""
-  sim = Sim(solo=solo)
+  sim = Sim()
   drive(sim, 600, 50.0)
   assert not sim.cc.parking_mode_active
   drive(sim, 300, 20.0); drive(sim, stop_frames, 0.0)
@@ -73,31 +73,30 @@ def test_shipped_values():
   assert cd.LANE_CENTER_ACC == 0.4 and cd.LANE_CENTER_BIAS_M == -0.034
 
 
-def test_traffic_light_stop_does_not_arm_the_parking_latch_in_solo():
-  solo, leg = road_then_stop(True), road_then_stop(False)
-  assert solo.cc.road_context and not solo.cc.parking_mode_active
-  assert leg.cc.parking_mode_active                                  # the pre-73 behaviour: latched at the light
-  # launch through the junction (no lane lines): solo steers again from the low-speed exit, legacy only after 33 km/h + 2 s
-  for sim in (solo, leg):
-    for i in range(500):
-      sim.step(v=min(i * 0.03, 30.0 * KPH), cmd=2.0, wheel=0.0, lfa_state=0)
-  assert solo.effective_lat_active() and not leg.effective_lat_active()
+def test_traffic_light_stop_does_not_arm_the_parking_latch():
+  sim = road_then_stop()
+  assert sim.cc.road_context and not sim.cc.parking_mode_active
+  # launch through the junction (no lane lines): steered again from the low-speed exit (pre-73: only after 33 km/h + 2 s,
+  # see test_road_stop_kill_switch for the latch)
+  for i in range(500):
+    sim.step(v=min(i * 0.03, 30.0 * KPH), cmd=2.0, wheel=0.0, lfa_state=0)
+  assert sim.effective_lat_active()
 
 
 @pytest.mark.usefixtures("old_parking")
 def test_a_real_parking_signature_clears_the_road_context():
-  sim = road_then_stop(True, stop_frames=100)
+  sim = road_then_stop(stop_frames=100)
   assert sim.cc.road_context
   drive(sim, 400, 8.0, wheel=300.0)                                  # a parking turn
   assert not sim.cc.road_context and sim.cc.parking_mode_active
-  sim2 = road_then_stop(True, stop_frames=100)
+  sim2 = road_then_stop(stop_frames=100)
   drive(sim2, 400, 3.0, gear='reverse')
   assert not sim2.cc.road_context and sim2.cc.parking_mode_active
 
 
 @pytest.mark.usefixtures("old_parking")
 def test_from_boot_the_lot_crawl_still_arms():
-  sim = Sim(solo=True)
+  sim = Sim()
   drive(sim, 1500, 6.0)                                              # never been on the road: lot crawl as before
   assert not sim.cc.road_context and sim.cc.parking_mode_active
 
@@ -105,13 +104,13 @@ def test_from_boot_the_lot_crawl_still_arms():
 @pytest.mark.usefixtures("old_parking")
 def test_road_stop_kill_switch(params):
   params.ROAD_STOP_NO_PARKING = False
-  assert road_then_stop(True).cc.parking_mode_active
+  assert road_then_stop().cc.parking_mode_active
 
 
 # ------------------------------------------------------------------ 73b
-def release(solo, v_kph=42.0, cmd=8.0):
+def release(v_kph=42.0, cmd=8.0):
   """the request is passive (driver holding the wheel in a big turn) and then resumes with the command 8 deg from the wheel"""
-  sim = Sim(solo=solo); w = 0.0; tx = []
+  sim = Sim(); w = 0.0; tx = []
   for _ in range(300):
     sim.step(v=v_kph * KPH, cmd=cmd, wheel=0.0, lat_active=False, lfa_state=0)
   for i in range(300):
@@ -122,16 +121,16 @@ def release(solo, v_kph=42.0, cmd=8.0):
 
 
 def test_engage_taper_caps_the_first_moves():
-  solo, leg = release(True), release(False)
+  solo = release()
   assert np.abs(solo[20] - solo[0]) <= 1.3                           # 0.2 s after resuming: about 1 deg
-  assert np.abs(leg[20] - leg[0]) >= 2.5                             # pre-73: the VM rate limit only
   assert np.max(np.abs(np.diff(solo[:150]))) <= 0.31                 # never above 30 deg/s inside the taper
   assert solo[-1] == pytest.approx(8.0, abs=0.3) and np.argmax(solo >= 7.0) <= 160   # and it does get there, within ~1.6 s
 
 
 def test_engage_taper_kill_switch(params):
   params.ENGAGE_TAPER_FRAMES = 0
-  assert release(True) == pytest.approx(release(False), abs=1e-9)
+  tx = release()
+  assert np.abs(tx[20] - tx[0]) >= 2.5                               # pre-73: the VM rate limit only
 
 
 # ------------------------------------------------------------------ 73c
@@ -226,25 +225,24 @@ def test_proportional_part_is_capped():
   assert s._lc_p == pytest.approx(cd.LANE_CENTER_ACC / 12.5 ** 2, rel=0.02)
 
 
-def test_state_control_adds_it_on_the_direct_path_only(cdk):
-  def run(legacy):
-    s = H.mk_controls(); s._steer_legacy = legacy
+def test_state_control_adds_it(cdk):
+  def run():
+    s = H.mk_controls()
     s.sm['carState'].vEgo = 21.0
     s.sm['modelV2'] = model(centre=0.25)
     for i in range(300):
       s.sm.logMonoTime['modelV2'] = i
       CC, _ = cd.Controls.state_control(s)
     return s, float(CC.actuators.curvature)
-  solo, k_s = run(False); leg, k_l = run(True)
+  solo, k_s = run()
   assert k_s > 5e-5 and solo.steer_flags & cd.STEER_FLAG_LANE_CENTER
-  assert abs(k_l) < 1e-6 and not leg.steer_flags & cd.STEER_FLAG_LANE_CENTER
   solo.sm['carState'].steeringPressed = True                          # a driver press: the term fades
   for i in range(300, 500):
     solo.sm.logMonoTime['modelV2'] = i
     cd.Controls.state_control(solo)
   assert abs(solo._lc_p) < 1e-6
   cdk.LANE_CENTER_WEIGHT = 0.0; cdk.LANE_CENTER_KI = 0.0              # kill
-  s2, k2 = run(False)
+  s2, k2 = run()
   assert abs(k2) < 1e-9 and not s2.steer_flags & cd.STEER_FLAG_LANE_CENTER
 
 

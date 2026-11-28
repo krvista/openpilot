@@ -4,6 +4,11 @@ frame-by-frame with synthetic CS/CC, without the full openpilot stack.
 Only CANPacker is stubbed (returns (name, bus, values) tuples); everything else
 (CarControllerParams, VehicleModel, apply_steer_angle_limits_vm, all Phase 5..14
 state machines) is the real code under test.
+
+PRE73_RULES: the car-controller switches of the phases that changed the rules the older suites were written against
+(parking v2, engage taper, first-frame anchor, TX governor, grant gate, ...) at their kill values. A test module that
+imports the autouse fixture pre73_rules runs with them - it keeps testing the older layer, which is still reachable
+through those switches; every other module runs the shipped configuration.
 """
 import os
 import sys
@@ -15,6 +20,7 @@ for p in (os.path.join(REPO, 'opendbc_repo'), REPO):
     sys.path.insert(0, p)
 
 import numpy as np
+import pytest
 
 from opendbc.car import structs, Bus
 import opendbc.car.hyundai.carcontroller as ccmod
@@ -22,6 +28,25 @@ from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.values import HyundaiFlags
 
 DT = 0.01  # 100 Hz
+
+PRE73_RULES = dict(PARKING_V2=False, ENGAGE_TAPER_FRAMES=0, TX_GOVERNOR_MIRROR=False, FIRST_FRAME_ANCHOR=False,
+                   ACIGAIN_LOWSPEED_RAISE_V=[0.0, 0.0, 0.0], ROAD_STOP_NO_PARKING=False,
+                   PARKING_STALE_SIGNATURE_CLEAR=False, PASSIVE_INDICATE_CAM_FAULT=False, LAT_GRANT_GATE=False,
+                   ACI_HOLD_ZERO_UNRELAYED=False)
+
+
+@pytest.fixture(autouse=True)
+def pre73_rules():
+  """Autouse in every test module that imports it: CarControllerParams switches at harness.PRE73_RULES for the test."""
+  P = ccmod.CarControllerParams
+  old = {k: getattr(P, k) for k in PRE73_RULES}
+  for k, v in PRE73_RULES.items():
+    setattr(P, k, v)
+  try:
+    yield
+  finally:
+    for k, v in old.items():
+      setattr(P, k, v)
 
 
 class FakePacker:
@@ -56,10 +81,7 @@ PRESS_DEBOUNCE_FRAMES = 5
 
 
 class Sim:
-  def __init__(self, solo=False):
-    """solo=False: the pre-72 behaviour (CarControlSP.stockLfaWithOp True) that the Phase 5..70 suites exercise;
-    solo=True: the Phase 72 profile (factory LFA held off, direct request, follow band)."""
-    self._solo = bool(solo)
+  def __init__(self):
     self._mdps_can_prev = None   # Phase 38-3
     self._orig_packer = ccmod.CANPacker
     ccmod.CANPacker = FakePacker
@@ -69,7 +91,7 @@ class Sim:
       self.cc = ccmod.CarController({Bus.pt: 'hyundai_canfd_generated'}, CP, CP_SP)
     finally:
       ccmod.CANPacker = self._orig_packer
-    self.cc._cc_sp = types.SimpleNamespace(mads=types.SimpleNamespace(enabled=False), stockLfaWithOp=not self._solo)
+    self.cc._cc_sp = types.SimpleNamespace(mads=types.SimpleNamespace(enabled=False))
     self.cam_counter = 0
     self._press_frames = 0
     self.last_msgs = []
@@ -182,7 +204,7 @@ def run_signal(sim, n, tq_fn=None, **fixed):
   """Step n frames; tq_fn(i)->Nm. Returns dict of traces."""
   traces = {k: [] for k in ('low_speed_cam_latched', 'low_speed_scen_ok', 'in_low_speed_zone',
                             'angle_passive_active', 'blinker_anchor_on', 'parking_mode_active',
-                            'traffic_following', 'eff_active', 'apply', 'trim', 'gain', 'kick')}
+                            'traffic_following', 'eff_active', 'apply', 'gain')}
   for i in range(n):
     kw = dict(fixed)
     if tq_fn is not None:
@@ -201,7 +223,5 @@ def run_signal(sim, n, tq_fn=None, **fixed):
     traces['traffic_following'].append(s.traffic_following)
     traces['eff_active'].append(sim.effective_lat_active())
     traces['apply'].append(s.apply_angle_last)
-    traces['trim'].append(s.curve_trim)
     traces['gain'].append(s.aci_gain_last)
-    traces['kick'].append(getattr(s, 'stall_kick_deg', 0.0))
   return traces

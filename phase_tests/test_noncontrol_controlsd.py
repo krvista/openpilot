@@ -1,6 +1,7 @@
-"""Phase 6h-2 / 7c controlsd helpers — _lookahead_curvature (bounded-additive
-lookahead) and _predicted_lat_accel_excess, exercised as the real unbound
-methods on a minimal stub self."""
+"""controlsd helpers — _lookahead_curvature (the model's action with the non-finite
+hold; its bounded-additive lookahead lead was removed in Phase 89) and
+_predicted_lat_accel_excess, exercised as the real unbound methods on a minimal
+stub self."""
 import math
 import types
 
@@ -36,14 +37,14 @@ def parabola_model(k=0.01, n=15, dx=2.0, fallback=0.002):
   return mk_model(xs, ys, fallback=fallback)
 
 
-def lookahead(s, m, v, extra=0.1):
-  return cd.Controls._lookahead_curvature(s, m, v, extra)
+def lookahead(s, m, v=None):
+  return cd.Controls._lookahead_curvature(s, m)
 
 
 class TestLookaheadCurvature:
   def test_nan_fallback_holds_last_command(self):
     # a non-finite model action must not propagate — it would poison the
-    # 6h-1 low-pass EMA permanently (defect fixed in controlsd.py)
+    # recursive command state permanently (defect fixed in controlsd.py)
     s = StubSelf(desired_curvature=0.0042)
     m = parabola_model(fallback=float('nan'))
     out = lookahead(s, m, 15.0)
@@ -80,54 +81,15 @@ class TestLookaheadCurvature:
     assert s._model_nonfinite_frames == 0
     assert lookahead(s, parabola_model(fallback=float('nan')), 20.0) == pytest.approx(0.006)
 
-  def test_empty_position_returns_fallback(self):
-    m = mk_model([], [], fallback=0.003)
-    assert lookahead(StubSelf(), m, 15.0) == pytest.approx(0.003)
-
-  def test_short_position_returns_fallback(self):
-    m = mk_model([0, 1, 2, 3], [0, 0, 0, 0], fallback=0.003)
-    assert lookahead(StubSelf(), m, 15.0) == pytest.approx(0.003)
-
-  def test_v_zero_no_division_error(self):
-    m = parabola_model(fallback=0.003)
-    # v=0 -> dist_ahead=0 < 0.3 -> fallback, and dk_max denominator is
-    # floored at 5 m/s so no ZeroDivisionError anywhere
-    assert lookahead(StubSelf(), m, 0.0) == pytest.approx(0.003)
-
-  def test_nan_trajectory_returns_fallback(self):
+  def test_the_action_is_returned_whatever_the_plan_trajectory(self):
+    for m in (mk_model([], [], fallback=0.003), mk_model([0, 1, 2, 3], [0, 0, 0, 0], fallback=0.003),
+              parabola_model(k=0.05, fallback=0.003), parabola_model(k=-0.05, fallback=0.003),
+              parabola_model(k=0.01, n=15, dx=0.05, fallback=0.003)):
+      assert lookahead(StubSelf(), m) == 0.003
     m = parabola_model(fallback=0.003)
     m.position.y[7] = float('nan')
-    assert lookahead(StubSelf(), m, 15.0) == pytest.approx(0.003)
-
-  def test_straight_gate_passthrough(self):
-    m = parabola_model(k=0.01, fallback=0.0005)  # |fb| < 0.0008 gate
-    assert lookahead(StubSelf(), m, 15.0) == pytest.approx(0.0005)
-
-  def test_additive_bound_dk_max(self):
-    # strongly curved trajectory vs small fallback: lead must clip at dk_max
-    fb = 0.002
-    v = 15.0
-    m = parabola_model(k=0.05, fallback=fb)
-    out = lookahead(StubSelf(), m, v, extra=0.1)
-    # recompute the bound exactly as the code does
-    base_s = float(np.interp(v, [5.6, 13.9, 27.8, 38.9], [0.08, 0.10, 0.13, 0.18]))
-    boost_s = float(np.interp(abs(fb), [0.0008, 0.005], [0.0, 0.20]))
-    t_ahead = min(base_s + boost_s + 0.1, cd.LOOKAHEAD_T_AHEAD_CAP + 0.1)
-    dk_max = cd.LOOKAHEAD_JERK_BUDGET * max(t_ahead, 0.05) / max(v, 5.0) ** 2
-    assert out == pytest.approx(fb + dk_max)  # clipped, positive direction
-    assert abs(out - fb) <= dk_max + 1e-12
-
-  def test_additive_bound_negative_direction(self):
-    fb = -0.002
-    m = parabola_model(k=-0.05, fallback=fb)
-    out = lookahead(StubSelf(), m, 15.0)
-    assert out < fb  # lead pushes further negative...
-    assert abs(out - fb) <= cd.LOOKAHEAD_JERK_BUDGET * (cd.LOOKAHEAD_T_AHEAD_CAP + 0.1) / 25.0 + 1e-12
-
-  def test_trajectory_shorter_than_lookahead_falls_back(self):
-    # x range shorter than dist_ahead -> no extrapolation, fallback
-    m = parabola_model(k=0.01, n=15, dx=0.05, fallback=0.003)
-    assert lookahead(StubSelf(), m, 30.0) == pytest.approx(0.003)
+    assert lookahead(StubSelf(), m) == 0.003
+    assert lookahead(StubSelf(), parabola_model(k=-0.05, fallback=-0.002)) == -0.002
 
 
 class TestPredictedLatAccelExcess:

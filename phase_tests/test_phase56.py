@@ -108,7 +108,7 @@ def _blend_test():
     if turned:
       for _ in range(100):
         s._turn_exit_update(0.03, 0.03)                              # ... and the car really turned
-    s.desired_curvature = s._lat_cmd_lp = 0.02
+    s.desired_curvature = 0.02
     flags = 0
     for _ in range(30):                                              # lines weak (blend, no dropout), model unwound
       run(s, 1, mk_lanes(0.004, 0.2, 0.2))
@@ -118,14 +118,6 @@ def _blend_test():
   k_plain, f_plain = unwind(False)
   assert f_plain & cd.STEER_FLAG_CONF_BLEND and not f_turn & cd.STEER_FLAG_CONF_BLEND
   assert abs(k_turn) < abs(k_plain)                                  # the blend held the plain case nearer the turn
-
-
-def test_turn_exit_unwinding_lead_gets_the_full_weight():
-  from phase_tests.test_phase55 import call, model, settled, DB
-  s = settled(); s._turn_exit = True
-  assert call(s, model(0.003, 0.002, t_step=0.95)) == pytest.approx(0.003 - 0.5 * (0.001 - DB), rel=1e-6)
-  s = settled(); s._turn_exit = False
-  assert call(s, model(0.003, 0.002, t_step=0.95)) == pytest.approx(0.003 - 0.2 * (0.001 - DB), rel=1e-6)
 
 
 def test_phase57_curve_fades_the_low_confidence_restraints():
@@ -149,7 +141,8 @@ def test_phase57_curve_fades_the_low_confidence_restraints():
 
 def test_phase57_cap_ramps_from_its_own_output():
   """The cap used to re-anchor to the low-passed command every frame (effective rate alpha * cap). Own-state: the
-  pre-LP command advances by the full step each frame."""
+  command advances by the full step each frame. (Phase 89: with the command low-pass gone the previous command IS the
+  cap's last output, so the kill value LOWCONF_CAP_OWN_STATE = False now ramps at the same rate.)"""
   from phase_tests.test_phase41 import _model
   import openpilot.selfdrive.controls.lib.lowconf_rate_cap as lrc
   s = mk_controls(); s.sm['carState'].vEgo = 12.0
@@ -161,7 +154,7 @@ def test_phase57_cap_ramps_from_its_own_output():
   step = 6.0 * lrc.NOMINAL_K_PER_DEG * cd.DT_CTRL          # the harness VM gives no k/deg -> nominal
   assert hist[20] - hist[10] == pytest.approx(10 * step, rel=0.05)
   saved = lrc.LOWCONF_CAP_OWN_STATE
-  lrc.LOWCONF_CAP_OWN_STATE = False                        # kill: the old crawl (a few % of the step per frame)
+  lrc.LOWCONF_CAP_OWN_STATE = False                        # kill: anchored to the previous command - the same ramp now
   try:
     s = mk_controls(); s.sm['carState'].vEgo = 12.0
     run(s, 200, _model(0.0, [0.9, 0.95, 0.95, 0.9]))
@@ -169,6 +162,6 @@ def test_phase57_cap_ramps_from_its_own_output():
     for _ in range(30):
       run(s, 1, _model(0.0012, [0.9, 0.2, 0.95, 0.9]))
       h2.append(s.desired_curvature)
-    assert h2[20] - h2[10] < 0.3 * 10 * step
+    assert h2[20] - h2[10] == pytest.approx(10 * step, rel=0.05)
   finally:
     lrc.LOWCONF_CAP_OWN_STATE = saved

@@ -1,5 +1,6 @@
-"""Phase 7a/7b curvature-trim integrator in latcontrol_angle: NaN robustness and
-trim invariants (bounded, bleeds on press/inactive)."""
+"""latcontrol_angle: pure feed-forward angle from the desired curvature (the Phase 7a/7b closed-loop curvature trim and
+its tests were removed in Phase 89). What stays: the output is a function of this frame's inputs and the roll low-pass
+only - nothing winds up, a non-finite frame does not poison later frames, left and right are symmetric."""
 import math
 import types
 
@@ -22,20 +23,7 @@ class FakeCS:
 
 def make_lac():
   CP = make_cp()
-  lac = lca.LatControlAngle.__new__(lca.LatControlAngle)
-  # minimal base state used by update()
-  lac.sat_check_min_speed = 5.0
-  lac._trim_7a6 = False
-  lac.use_steer_limited_by_safety = True
-  lac.dt = DT
-  lac._roll_lp = 0.0
-  lac._roll_lp_init = False
-  lac._fb_integ = 0.0
-  lac._des_slow = 0.0
-  lac._fb_err_lp = 0.0
-  lac.sat_time = 0.0
-  lac.sat_limit = getattr(CP, 'steerLimitTimer', 0.4)
-  return lac, VehicleModel(CP)
+  return lca.LatControlAngle(CP, None, None, DT), VehicleModel(CP)
 
 
 def step(lac, VM, active=True, v=15.0, angle=0.0, pressed=False, desired=0.0, roll=0.0):
@@ -45,48 +33,38 @@ def step(lac, VM, active=True, v=15.0, angle=0.0, pressed=False, desired=0.0, ro
   return out
 
 
-class TestLatFbInteg:
-  def test_trim_bounded_by_cap(self):
+class TestFeedForward:
+  def test_output_is_the_vehicle_model_angle_and_nothing_winds_up(self):
     lac, VM = make_lac()
-    for _ in range(5000):
-      step(lac, VM, v=20.0, angle=0.0, desired=8e-4)
-      cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / max(20.0, 5.0) ** 2)
-      assert abs(lac._fb_integ) <= cap + 1e-12
+    want = math.degrees(VM.get_steer_from_curvature(-8e-4, 20.0, 0.0))
+    outs = [step(lac, VM, v=20.0, angle=0.0, desired=8e-4) for _ in range(3000)]   # the wheel never delivers it
+    assert outs[0] == pytest.approx(want) and len(set(outs)) == 1
+    assert not any(hasattr(lac, name) for name in ("_fb_integ", "_des_slow", "_fb_err_lp", "_trim_7a6", "direct"))
 
-  def test_trim_bleeds_while_pressed(self):
+  def test_inactive_returns_the_wheel_angle(self):
     lac, VM = make_lac()
-    for _ in range(2000):
-      step(lac, VM, v=20.0, desired=8e-4)
-    t0 = abs(lac._fb_integ)
-    assert t0 > 0
-    for _ in range(100):
-      step(lac, VM, v=20.0, desired=8e-4, pressed=True)
-      assert abs(lac._fb_integ) <= t0
-    assert abs(lac._fb_integ) < t0
+    assert step(lac, VM, active=False, v=20.0, angle=3.7, desired=8e-4) == 3.7
 
   def test_nan_wheel_angle_single_frame_does_not_poison(self):
     lac, VM = make_lac()
     for _ in range(500):
       step(lac, VM, v=20.0, desired=6e-4, angle=1.0)
-    # one NaN CAN frame on the measured angle
-    out = step(lac, VM, v=20.0, desired=6e-4, angle=float('nan'))
-    # recovery frames: integrator state and output must return to finite
-    for _ in range(50):
-      out = step(lac, VM, v=20.0, desired=6e-4, angle=1.0)
-    assert np.isfinite(lac._fb_integ), "fb integrator permanently poisoned by one NaN frame"
-    assert np.isfinite(lac._fb_err_lp)
+    step(lac, VM, v=20.0, desired=6e-4, angle=float('nan'))      # one NaN CAN frame on the measured angle
+    out = step(lac, VM, v=20.0, desired=6e-4, angle=1.0)
     assert np.isfinite(out), "TX angle stuck non-finite after NaN frame passed"
 
   def test_nan_desired_curvature_does_not_poison(self):
     lac, VM = make_lac()
     for _ in range(500):
       step(lac, VM, v=20.0, desired=6e-4, angle=1.0)
-    step(lac, VM, v=20.0, desired=float('nan'), angle=1.0)
-    for _ in range(50):
-      out = step(lac, VM, v=20.0, desired=6e-4, angle=1.0)
-    assert np.isfinite(lac._fb_integ)
-    assert np.isfinite(lac._des_slow)
-    assert np.isfinite(out)
+    assert not np.isfinite(step(lac, VM, v=20.0, desired=float('nan'), angle=1.0))   # (controlsd zeroes a non-finite actuator)
+    assert np.isfinite(step(lac, VM, v=20.0, desired=6e-4, angle=1.0))
+
+  def test_nan_roll_holds_the_last_filtered_roll(self):
+    lac, VM = make_lac()
+    for _ in range(300):
+      a = step(lac, VM, v=20.0, desired=6e-4, roll=0.03)
+    assert step(lac, VM, v=20.0, desired=6e-4, roll=float('nan')) == a
 
   def test_sign_symmetry(self):
     lp, VMp = make_lac()
@@ -94,84 +72,4 @@ class TestLatFbInteg:
     for i in range(1000):
       d = 6e-4 * math.sin(0.01 * i)
       a = 3.0 * math.sin(0.008 * i)
-      step(lp, VMp, v=20.0, desired=d, angle=a)
-      step(ln, VMn, v=20.0, desired=-d, angle=-a)
-    assert lp._fb_integ == pytest.approx(-ln._fb_integ, abs=1e-15)
-
-
-def make_lac_7a6():
-  lac, VM = make_lac(); lac._trim_7a6 = True   # Params LatFbTrimDeadband on
-  return lac, VM
-
-
-class TestLatFbInteg7a6:
-  def test_default_is_7a5(self):
-    lac, VM = make_lac()
-    assert lac._trim_7a6 is False
-    for _ in range(3000):
-      step(lac, VM, v=14.0, desired=1e-4)
-    cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / 14.0 ** 2)
-    assert abs(lac._fb_integ) >= 0.95 * cap                 # 7a-5 behaviour: a constant bias winds to the cap
-
-  def test_sub_deadband_bias_does_not_wind_up(self):
-    if True:
-      lac, VM = make_lac_7a6()
-      for _ in range(3000):
-        step(lac, VM, v=14.0, desired=1e-4)
-      assert abs(lac._fb_integ) < 0.05e-3, lac._fb_integ
-
-  def test_corner_deficit_still_reaches_cap(self):
-    if True:
-      lac, VM = make_lac_7a6()
-      for _ in range(300):
-        step(lac, VM, v=14.0, desired=8e-4)
-      cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / 14.0 ** 2)
-      assert abs(lac._fb_integ) >= 0.95 * cap, (lac._fb_integ, cap)
-
-  def test_leak_settles_below_cap_for_moderate_bias(self):
-    if True:
-      lac, VM = make_lac_7a6()
-      for _ in range(6000):
-        step(lac, VM, v=14.0, desired=4e-4)
-      expected = lca.LAT_FB_KI * lca.LAT_FB_LEAK_TAU * (4e-4 - lca.LAT_FB_ERR_DEADBAND)
-      assert abs(abs(lac._fb_integ) - expected) < 0.1e-3, (lac._fb_integ, expected)
-
-  def test_leak_scales_with_cap_so_highway_does_not_saturate_on_a_small_bias(self):
-    if True:
-      for v in (14.0, 30.0, 36.0):
-        lac, VM = make_lac_7a6()
-        for _ in range(6000):
-          step(lac, VM, v=v, desired=3e-4)
-        cap = min(lca.LAT_FB_CAP, lca.LAT_FB_ACCEL_CAP / v ** 2)
-        assert abs(lac._fb_integ) < 0.9 * cap, (v, lac._fb_integ, cap)
-
-
-class TestLatFbMinSpeed7a7:
-  """Phase 7a-7: no trim below 8.3 m/s (the EPS deadband region), full trim just above."""
-
-  def test_no_windup_below_min_speed(self):
-    lac, VM = make_lac_7a6()
-    for _ in range(300):   # 3 s of a 1e-3 deficit at 27 km/h (7.5 m/s), wheel straight
-      step(lac, VM, v=7.5, angle=0.0, desired=1.0e-3)
-    assert abs(lac._fb_integ) < 1e-6
-
-  def test_trim_bleeds_when_slowing_into_passthrough(self):
-    lac, VM = make_lac_7a6()
-    for _ in range(300):
-      step(lac, VM, v=10.0, angle=0.0, desired=1.0e-3)
-    assert lac._fb_integ > 0.5e-3       # wound up at 36 km/h
-    for _ in range(200):                # 2 s below the threshold: bleed tau 0.5 s -> e^-4
-      step(lac, VM, v=7.5, angle=0.0, desired=1.0e-3)
-    assert abs(lac._fb_integ) < 0.05e-3
-
-  def test_trim_still_integrates_just_above_min_speed(self):
-    lac, VM = make_lac_7a6()
-    for _ in range(300):
-      step(lac, VM, v=8.5, angle=0.0, desired=1.0e-3)
-    assert lac._fb_integ > 0.3e-3
-
-
-def test_entry_assist_never_runs_without_the_trim():
-  """7c open-loop entry assist must not run in a band where the 7a closed-loop trim is off (7a-7 alignment)."""
-  import openpilot.selfdrive.controls.controlsd as controlsd
-  assert controlsd.ENTRY_ASSIST_MIN_SPEED >= lca.LAT_FB_MIN_SPEED
+      assert step(lp, VMp, v=20.0, desired=d, angle=a) == pytest.approx(-step(ln, VMn, v=20.0, desired=-d, angle=-a), abs=1e-12)

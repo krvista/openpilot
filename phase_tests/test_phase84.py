@@ -24,7 +24,7 @@ def keep():
 
 
 def solo(active=True):
-  s = mk_controls(); s._steer_legacy = False
+  s = mk_controls()
   s.get_lat_active = lambda sm: s._on
   s._on = active
   return s
@@ -111,5 +111,3 @@ def test_telemetry_bits(keep):
   cd.LANE_FIT_GAIN = 0.0; cd.LANE_AVOID_RELEASE = False
   s = solo(); run(s, 600, model(centre=0.30)); run(s, 20, model(centre=0.30, plan_shift=-0.60))
   assert not s.steer_flags & (cd.STEER_FLAG_LANE_FIT | cd.STEER_FLAG_LANE_AVOID)
-  legacy = mk_controls(); legacy._steer_legacy = True; run(legacy, 600, model(centre=0.30))
-  assert not legacy.steer_flags & (cd.STEER_FLAG_LANE_FIT | cd.STEER_FLAG_LANE_AVOID | cd.STEER_FLAG_LANE_CENTER)

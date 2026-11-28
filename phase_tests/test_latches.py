@@ -6,6 +6,8 @@ import random
 
 from phase_tests.harness import Sim, count_transitions, run_signal
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 DT = 0.01
 
 
@@ -113,9 +115,7 @@ class TestSignSymmetry:
 
   def _assert_mirror(self, simp, simn):
     assert simp.s.apply_angle_last == -simn.s.apply_angle_last
-    assert simp.s.curve_trim == -simn.s.curve_trim
     assert simp.s.cmd_hyst == -simn.s.cmd_hyst
-    assert simp.s.trim_resid_lp == -simn.s.trim_resid_lp
     assert simp.s.low_speed_cam_latched == simn.s.low_speed_cam_latched
     assert simp.s.low_speed_scen_ok == simn.s.low_speed_scen_ok
     assert simp.s.angle_passive_active == simn.s.angle_passive_active
@@ -123,7 +123,7 @@ class TestSignSymmetry:
     assert simp.s.parking_mode_active == simn.s.parking_mode_active
     assert simp.s.aci_gain_last == simn.s.aci_gain_last
 
-  def test_curve_trim_and_hyst_symmetry(self):
+  def test_curve_and_hyst_symmetry(self):
     kw = dict(v=15.0, cmd=lambda i: 8.0 + 0.5 * math.sin(0.05 * i),
               wheel=lambda i: 5.0 + 0.3 * math.sin(0.04 * i), tq=lambda i: 50.0 * math.sin(0.03 * i))
     self._assert_mirror(*self._run_pair(2000, **kw))
@@ -159,13 +159,6 @@ class TestFunctionalAndKillSwitches:
     sim = Sim()
     tr = run_signal(sim, 500, v=5.0, cmd=0.0, tq=340.0, blinker=True)
     assert not any(tr['blinker_anchor_on'])
-
-  def test_kill_switch_curve_trim_off(self, monkeypatch):
-    from opendbc.car.hyundai.values import CarControllerParams
-    monkeypatch.setattr(CarControllerParams, 'CURVE_TRIM_RATE_DPS', 0.0)
-    sim = Sim()
-    tr = run_signal(sim, 2000, v=15.0, cmd=10.0, wheel=5.0)
-    assert all(t == 0.0 for t in tr['trim'])
 
   def test_kill_switch_scenario_gate_open(self, monkeypatch):
     from opendbc.car.hyundai.values import CarControllerParams

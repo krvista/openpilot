@@ -199,48 +199,6 @@ class CarControllerParams:
   # unchanged at 0.100. Kill switch: restore [45.0, 100.0].
   ACIGAIN_BLINKER_GATE_START_NM = 100.0   # Phase 22: driver-torque domain (was raw 220)
   ACIGAIN_BLINKER_GATE_FULL_NM  = 180.0   # Phase 22: driver-torque domain (was raw 300)
-  # Phase 12a (P1): TX-layer steady-curve trim. Routes 0x10-0x28 (24 routes,
-  # 214 sustained-curve windows) measured TX/cmd = 1.00 but wheel/TX = 0.55-0.63:
-  # this MDPS realizes only ~60% of a sustained angle command under tire
-  # self-aligning load (|TX-wheel| p50 = 3.7°), independent of ACIGain (delivery
-  # 0.58 even at gain 0.8-1.0, corr 0.15) and not an offset/steer-ratio artifact
-  # (L/R symmetric 0.587/0.622, straight-line residual -0.44°). The model's
-  # visual loop hides the deficit by inflating cmd ~1.6x, which is why curves
-  # start shallow and progressively tighten (entry one-shot rate 41-54%,
-  # city overshoot tail p90 +36%). This trim closes the residual at the TX
-  # layer instead: slow (rate-limited), capped, gated on a sustained curve and
-  # hands-off, bled on exit/grip. It stacks safely with latcontrol's Phase 7a
-  # curvature integrator (cap ~1° equivalent): both are driven by the same
-  # residual, so as the residual closes both stop growing — no double count.
-  # The trimmed command still passes VM + BASELINE_VM limiters and panda safety.
-  # Kill switch: CURVE_TRIM_RATE_DPS = 0.0.
-  CURVE_TRIM_MIN_CMD_DEG    = 4.0     # curve gate: |desired| must exceed this
-  CURVE_TRIM_SUSTAIN_FRAMES = 100     # ... for 1 s before the trim starts
-  # Phase 15: slew restored 1.0 -> 2.0 deg/s and cap widened. 13b halved the
-  # slew fearing weave feed-through, but the tau=1.5 s residual LP owns that
-  # defense: 0x30-0x33 replay shows 2.0 deg/s doubles the in-curve trim reach
-  # (p50 0.72 -> 1.44 deg, p90 2.35 -> 4.69) at the SAME trim 2-8 Hz content
-  # as 1.5 deg/s (0.035 vs 0.036 deg — LP-dominated), while the on-road
-  # tracking gap sat unchanged at |cmd-wheel| p50 = 5.45 deg because the slew
-  # x curve-duration product was too small to matter (median trim +0.88 deg).
-  CURVE_TRIM_RATE_DPS       = 2.0
-  # Phase 69c (report §91.4, §92): the 2 deg/s ramp is the slow regime this MDPS answers least (measured: a trim-like
-  # ramp moved the wheel 6-34 % of the request change within 1 s, 0.8-2.5 deg/s ramps transfer 0.11-0.45 at 30-70 km/h
-  # against 0.42-0.64 at 4-12 deg/s). Up to CURVE_TRIM_FAST_SPEEDS_KPH[0] the integrator runs up to
-  # CURVE_TRIM_FAST_RATE_DPS while the residual (beyond the deadband) is large — linear from the base rate at
-  # CURVE_TRIM_FAST_RESID_DEG[0] to the fast rate at [1] — and keeps 2 deg/s for small residuals (no hunting) and from
-  # CURVE_TRIM_FAST_SPEEDS_KPH[1] (chain sim: 4 deg/s everywhere cost +23 % jerk at 70-90 km/h). Same caps (speed cap,
-  # 63c command bound). Kill: CURVE_TRIM_FAST_RATE_DPS = 0.0.
-  CURVE_TRIM_FAST_RATE_DPS   = 4.0
-  CURVE_TRIM_FAST_SPEEDS_KPH = [70.0, 80.0]
-  CURVE_TRIM_FAST_RESID_DEG  = [0.5, 2.0]
-  # Phase 63a: unchanged up to 70 km/h (6 -> 4.86°), then 2.5° at 90 and 1.5° from 108 km/h — with the 1.5° gate the
-  # trim now runs on highway curves, where 13-21 % of a 2-6° command is all it has to add (chain sim: 90+ km/h jerk
-  # +43 % with the old 4° cap, +13-29 % with this one, curve delivery 0.93 either way).
-  CURVE_TRIM_CAP_SPEEDS_MS  = [8.3, 19.4, 25.0, 30.0]   # 30 / 70 / 90 / 108 km/h
-  CURVE_TRIM_CAP_DEG        = [6.0, 4.86, 2.5, 1.5]
-  CURVE_TRIM_BLEED_TAU_S    = 0.5     # decay when gate drops (grip/straight/inactive)
-  CURVE_TRIM_FLIP_TAU_S     = 0.15    # fast decay of trim opposing the curve direction (S-curve flip)
   # Phase 12b (P2): hysteresis deadband on the desired angle. Model replan churn
   # reverses the command direction 6.5-7.7x/10s in sustained curves and the wheel
   # follows 4.3-5.8 of those (routes 0x10-0x28). A +/-0.15° backlash band absorbs
@@ -347,42 +305,6 @@ class CarControllerParams:
   # measured quiet. Kill switch: CREEP_GATE_ENTER_MS = 0.0.
   CREEP_GATE_ENTER_MS = 10.0 / 3.6
   CREEP_GATE_EXIT_MS  = 12.0 / 3.6
-  # Phase 13b: 12a trim repair + noise hardening. As shipped, 12a armed almost
-  # never (sustained-curve TX-cmd p50 = +0.02° on 0x2a-0x2d) because its gate
-  # reused the offset-corrupted `hands_off`, whose torque test flaps in the
-  # p50=156/p90=284 Nm hands-off band (see 13a note). Repair: gate on the
-  # debounced steeringPressed only — real grip still cuts the trim (and bleeds
-  # it), while sensor-offset torque can no longer reset the 1 s sustain.
-  # Hardening: the residual consumes the RAW wheel angle whose dominant motion
-  # is a 0.6-1.2 Hz weave — a tau=0.3 s LP passed it nearly unattenuated
-  # (replayed trim 1-8 Hz RMS 0.093°, the size of the whole v2 jitter budget).
-  # tau=1.5 s + slew 1°/s put the trim two octaves below the weave; the
-  # deadband keeps residual noise out of the integrator and sets the closure
-  # floor (~0.7° of the 3.7° deficit). The angle gate holds with hysteresis
-  # (arm >= CURVE_TRIM_MIN_CMD_DEG 4°, hold >= 3°) so it cannot flap at the
-  # curve threshold (53 re-arms/min in replay pre-fix).
-  CURVE_TRIM_HOLD_CMD_DEG       = 3.0
-  CURVE_TRIM_RESID_LP_TAU_S     = 1.5
-  CURVE_TRIM_RESID_DEADBAND_DEG = 0.7
-  # Phase 63a (routes 7a-7f, ROUTE8_REPORT §74-75): highway curves need small wheel angles — at >= 70 km/h 67-74 % of
-  # sustained-curve time had the command under the 4° arm gate, so the trim never armed there and the car turned 13-21 %
-  # less than the plan (yaw / model 0.79-0.87, outside drift +14-18 cm). Speed-schedule the arm / hold gates and the
-  # residual deadband (the 0.6-1.2 Hz weave it was sized against is 0.64° at >= 70 km/h now, was 1.65-2.6°).
-  # Kill: CURVE_TRIM_GATE_V = [4.0, 4.0], CURVE_TRIM_HOLD_V = [3.0, 3.0], CURVE_TRIM_DEADBAND_V = [0.7, 0.7] (and the
-  # cap above back to [8.3, 27.8] / [6.0, 4.0]). CURVE_TRIM_MIN_CMD_DEG / _HOLD_CMD_DEG / _RESID_DEADBAND_DEG are the
-  # pre-63a flat values, kept for reference only.
-  CURVE_TRIM_GATE_SPEEDS_KPH = [55.0, 70.0]
-  CURVE_TRIM_GATE_V          = [4.0, 1.5]    # arm: |desired| >= this for CURVE_TRIM_SUSTAIN_FRAMES
-  CURVE_TRIM_HOLD_V          = [3.0, 1.0]    # hold once armed
-  CURVE_TRIM_DEADBAND_V      = [0.7, 0.35]   # residual deadband
-  # Phase 63c (report §86-87): with the 63a gate at 1.5° the speed cap (4.86° to 70 km/h, 2.9° at 87 km/h) let the trim
-  # wind up to 2-3.5 x a 1.6-4° request on the real 7a-7f drives (open-loop replay: 70-90 km/h request >= 2 x command on
-  # 57 % of the trim time, TX 5.9° on a 1.6° command, 10.6° on 3.9°) — the wheel there followed 60-75 % of the command,
-  # so ~0.5-1° of trim was all it could use. The trim may now not exceed CURVE_TRIM_CMD_CAP_K x |pre-trim request|
-  # (floor CURVE_TRIM_CMD_CAP_FLOOR_DEG): 1.6 x still closes the whole identified MDPS gain range (Kf 0.44-0.78 needs
-  # 0.28-1.27 x) and clips 5 / 23 / 7 % of the replayed trim time at 90+ / 70-90 / 55-70 km/h. Kill: CURVE_TRIM_CMD_CAP_K = 0.0.
-  CURVE_TRIM_CMD_CAP_K         = 1.6
-  CURVE_TRIM_CMD_CAP_FLOOR_DEG = 1.5
 
   # Phase 9: yield-by-authority. The driver yield is done entirely on the ACIGain
   # authority axis (reduce how hard MDPS follows op, not WHERE op points), NOT a
@@ -525,49 +447,6 @@ class CarControllerParams:
   HAND_GAP_UP_DPS           = 10.0     # cap widening rate after the hand leaves
   HAND_GAP_RELEASE_DEG      = 30.0     # cap at/above this = inactive
   HAND_GAP_MIN_KPH          = 15.0
-  # Phase 63b (routes 7a-7f + 50-73, ROUTE8_REPORT §75): corner-entry boost. Hands-off entries at >= 55 km/h: the
-  # car's yaw reached 50 % of the model's curvature 618 ms after it (98e912d 512 ms) although TX already led the
-  # model by 0.6-0.7 s — the wheel started 0.56-0.76 s after TX (e87/e89). The CCNC MDPS follows the request RATE
-  # (wheel ~ Kf 0.6-0.7 x TX motion above a 0.7-2.2 deg/s floor, e89 plant RF), so an entry ramp reaches the wheel
-  # at ~2/3 size. While the clean command moves AWAY from centre faster than its own slow reference (tau
-  # ENTRY_BOOST_REF_TAU_S) by more than ENTRY_BOOST_DEADBAND_DEG, add ENTRY_BOOST_GAIN x the excess (rises with
-  # the command); when the command settles the offset bleeds at ENTRY_BOOST_BLEED_DPS, under the MDPS rate floor,
-  # so the wheel keeps what it gained. Never on unwinding (exit) — an offset opposing the command collapses in
-  # ENTRY_BOOST_FLIP_TAU_S. Hands off only (driver-domain < ENTRY_BOOST_HANDS_OFF_NM, no press, no hand-gap cap,
-  # gain >= 0.9), no blinker / passthrough; otherwise it decays in ENTRY_BOOST_ABORT_TAU_S. Capped per speed.
-  # steerFlags bit 31. Kill: ENTRY_BOOST_GAIN = 0.
-  ENTRY_BOOST_GAIN           = 0.4
-  ENTRY_BOOST_REF_TAU_S      = 1.0
-  ENTRY_BOOST_DEADBAND_DEG   = 1.0
-  ENTRY_BOOST_BLEED_DPS      = 0.5
-  ENTRY_BOOST_FLIP_TAU_S     = 0.15
-  ENTRY_BOOST_ABORT_TAU_S    = 0.2
-  ENTRY_BOOST_HANDS_OFF_NM   = 60.0
-  ENTRY_BOOST_SPEEDS_KPH     = [45.0, 55.0, 90.0, 120.0]
-  ENTRY_BOOST_CAP_DEG        = [0.0, 3.0, 2.5, 2.0]
-  # Phase 69b (report §92): corner EXIT, above 70 km/h. On the road the car comes out of a curve 125-205 ms after the
-  # model at 30-70 km/h and ~235 ms after it at 70-90 km/h (model action -> car curvature half-way point, on time = 375 ms:
-  # measured 500-580 / 610 ms). Up to 70 km/h Phase 69a's earlier timing covers it (chain sim: exits 395 / 310 -> 305 / 230
-  # ms, an exit term on top made them early and added intent error); from 70 km/h there is no extra advance, and the
-  # standing 63a trim makes exits later still (sim 530 -> 595 ms). EXIT LEAD: while the clean command has come back toward
-  # centre from its slow reference (tau EXIT_LEAD_REF_TAU_S) by more than EXIT_LEAD_DEADBAND_DEG, move the request
-  # EXIT_LEAD_GAIN x the excess further toward centre — but never more than the wheel is measured still out beyond the
-  # command (minus EXIT_LEAD_WHEEL_MARGIN_DEG: a wheel that has caught up gets nothing; in the logs the wheel is >= 1 deg
-  # beyond the command 1-2 s into 29-48 % of exits), than EXIT_LEAD_MAX_FRAC of the command itself (the request cannot
-  # cross centre and fades with the command) or than the speed cap (0 up to 70 km/h, half the entry boost's from 80).
-  # Bleeds at EXIT_LEAD_BLEED_DPS, under the MDPS rate floor, and is dropped (tau ENTRY_BOOST_FLIP_TAU_S) as soon as the
-  # command grows past its reference again. Same hands-off / blinker / passthrough gates as the entry boost; steerFlags
-  # bit 31 covers both. Unlike the plan-based early unwinding of Phase 55b (which ran curve ends 6-10 cm wide) it only
-  # follows a command that is ALREADY unwinding and a wheel that is measured behind it. Chain sim 70-90 km/h: exits
-  # 525 -> 480 ms, intent error and jerk unchanged. Kill: EXIT_LEAD_GAIN = 0.
-  EXIT_LEAD_GAIN             = 0.2
-  EXIT_LEAD_REF_TAU_S        = 1.0
-  EXIT_LEAD_DEADBAND_DEG     = 1.0
-  EXIT_LEAD_BLEED_DPS        = 0.5
-  EXIT_LEAD_WHEEL_MARGIN_DEG = 0.5
-  EXIT_LEAD_MAX_FRAC         = 0.5
-  EXIT_LEAD_SPEEDS_KPH       = [70.0, 80.0, 90.0, 120.0]
-  EXIT_LEAD_CAP_DEG          = [0.0, 1.5, 1.25, 1.0]
   # Phase 72 (report §96-97): the MDPS is not commanded by our LKAS_ALT but by the vehicle's ADAS controller
   # (ADAS_CMD_35_10ms, 0xCB on the ECAN). That controller relays our request 1:1 (30 ms later) only while the factory LFA
   # is NOT active (LFAHDA_CLUSTER.LFA_ICON != 2); with the factory LFA active it sends its own request and ours is
@@ -581,18 +460,17 @@ class CarControllerParams:
   #      e.g. at standstill) before the next; icon 3 (releasing) and an unknown state never pulse. More than
   #      LFA_HOLD_OFF_MAX_PULSES within LFA_HOLD_OFF_WINDOW_FRAMES (the car keeps switching it back on) -> stop for
   #      LFA_HOLD_OFF_GIVE_UP_FRAMES. The camera's own button bit is not forwarded to the controller any more (the press
-  #      still toggles MADS through carstate). Kill: LFA_HOLD_OFF = False (the old sync pulse and bit mirroring).
-  # 72b  DIRECT PROFILE: the stages built for a wheel that does not follow - curve trim (12a / 63a / 63c / 69c), stall
-  #      kick (40), entry boost (63b), exit lead (69b), compensator (59) - are skipped; the request is the commanded
-  #      angle through the hysteresis band, the low-speed smoothing, the hand-gap cap and the VM limits.
+  #      still toggles MADS through carstate).
+  # 72b  DIRECT PROFILE: the request is the commanded angle through the hysteresis band, the low-speed smoothing, the
+  #      hand-gap cap and the VM limits. (The stages built for a wheel that did not follow - curve trim 12a / 63a / 63c /
+  #      69c, stall kick 40, entry boost 63b, exit lead 69b, compensator 59 - were removed in Phase 89.)
   # 72c  FOLLOW: while the factory LFA is active or releasing (icon 2 / 3) our request has no authority, so it is kept
   #      within GW_FOLLOW_BAND_DEG of the wheel - nothing is stored that could be released as a step when the controller
   #      switches over to relaying (logs: 266 switch-overs, 32 % with >= 3 deg stored, up to 11 deg hands off).
   #      Kill: GW_FOLLOW_BAND_DEG = 0.
-  # All three apply in the 'solo' mode only (CarControlSP.stockLfaWithOp False, the default); with it True (controlsd sets
-  # it when common/steer_profile.SOLO_DEFAULT is False) the pre-72 behaviour is kept bit for bit. Telemetry:
-  # carStateSP.gatewayFlags (GW_* bits).
-  LFA_HOLD_OFF                = True
+  # Phase 89: this is the only mode. The pre-72 behaviour (factory LFA switched on together with MADS and steering along,
+  # selected by CarControlSP.stockLfaWithOp or LFA_HOLD_OFF = False) and with it the kill switch of Phase 72 as a whole
+  # were removed; 72c and the later phases keep their own switches. Telemetry: carStateSP.gatewayFlags (GW_* bits).
   LFA_HOLD_OFF_CONFIRM_FRAMES = 30                      # 0.3 s of 'on' before a pulse
   LFA_HOLD_OFF_WAIT_FRAMES    = [150, 300, 600, 1000]   # after the 1st / 2nd / 3rd / later pulse without reaching 'off'
   LFA_HOLD_OFF_MAX_PULSES     = 8
@@ -621,8 +499,7 @@ class CarControllerParams:
   # at 10 deg/s - the wheel is already moving with the driver, and the gain ramp limits the authority anyway
   # (a7: 2.3 deg median gap at release). Kill: ENGAGE_TAPER_DRIVER_START_DPS = 4.0.
   ENGAGE_TAPER_DRIVER_START_DPS = 10.0
-  # Phase 75 (report §103, audit of who commands the MDPS), car-controller side. All of it in the solo profile only;
-  # the legacy profile is unchanged.
+  # Phase 75 (report §103, audit of who commands the MDPS), car-controller side.
   # 75a  TX GOVERNOR = THE PANDA'S LIMIT, ONE UNIT INSIDE: the governor allowed int(delta(v) * 10) - 1 CAN units per
   #      frame, the panda int(delta(v - 1 m/s) * 10) + 1 - two units apart, which left 10 deg/s from 67 km/h (panda
   #      30-40; a1: 22 s saturated, the wire up to 17.7 deg behind). From TX_GOVERNOR_MIRROR_MIN_KPH the allowance is
@@ -697,54 +574,6 @@ class CarControllerParams:
   ACIGAIN_LOWSPEED_RAISE_SPEEDS_KPH = [0.0, 10.0, 20.0]
   ACIGAIN_LOWSPEED_RAISE_V          = [0.45, 0.45, 0.60]
   PASSIVE_INDICATE_CAM_FAULT     = True
-  # Phase 59 (report §65-66): MDPS inverse-model compensator — ONE layer for what the curve trim (12a) and the stall kick
-  # (40) patched separately. Identified from hands-off driving (output-error fit, route-held-out validation):
-  #   d wheel/dt = Kf * dTX(t-d)/dt + Kp * (TX(t-d) - wheel) - Kc * wheel
-  # i.e. the MDPS passes ~55-60 % of a request CHANGE, closes the remaining error slowly (Kp, ~0 at town speed) and the
-  # wheel self-centres (Kc). The compensator inverts it with wheel feedback and a preview of the plant delay:
-  #   TX' = ( ref' + LAMBDA * (ref - wheel) - Kp * (TX(t-d) - wheel) + Kc * wheel ) / Kf,   ref = cmd + d * cmd'
-  # |TX - ref| <= GMAX_DEG, integrated from the last sent angle (anti-windup: the VM / panda limiters bound each step).
-  # With a hand detected (Phase 58), a debounced press or the ACI gain below HOLD_GAIN the feedback stops and TX
-  # returns to the command at RETURN_RATE (no wind-up against a hand). Active from MIN_KPH (cruise floor 30 km/h).
-  # While active the curve trim and the stall kick are off. Kill: MDPS_COMP_LAMBDA = 0.
-  # Phase 61 (report §69, routes 76-79): OFF by default. On the road the compensator wound up against a wheel that did
-  # not follow (clamp 15-31 % of the time vs <= 1 %, weave 1.9 -> 2.4 deg at 55-90 km/h). The 59b redesign below (leak,
-  # freeze, per-speed GMAX) removes the wind-up (open-loop replay of 76-79: windups 2.2 -> 0.1 /min) but even then the
-  # full-chain sim shows more 70-90 km/h weave and lateral jerk than the trim / kick layers (jerk p95 0.57 vs 0.35), so
-  # the curve trim and stall kick are back and Phase 60's plan lookahead carries the timing. Set 2.0 to enable 59 + 59b.
-  MDPS_COMP_LAMBDA          = 0.0      # 1/s
-  # all-data output-error fits (report §66-67: 91 routes, 125 min hands-off at gain >= 0.95; band centres 30-40 / 40-55 /
-  # 55-70 / 70-90 / 90+ km/h). §67: the delay is weakly identified (free per band / one common / linear in speed:
-  # cross-validated RMS 1.547 / 1.568 / 1.572 deg), so one common 0.20 s replaces the uneven per-band values.
-  MDPS_COMP_SPEEDS_KPH      = [35.0, 47.5, 62.5, 80.0, 100.0]
-  MDPS_COMP_KF              = [0.435, 0.676, 0.559, 0.520, 0.466]
-  MDPS_COMP_KP              = [0.059, 0.077, 0.180, 0.086, 0.301]
-  MDPS_COMP_KC              = [0.052, 0.029, 0.150, 0.091, 0.277]
-  MDPS_COMP_DELAY_S         = [0.20, 0.20, 0.20, 0.20, 0.20]
-  MDPS_COMP_PREVIEW         = 0.0      # cmd' * d preview scale. §67: off — controlsd's plan-based delay match (Phase 60)
-                                       # does the time advance (full-chain sim: intent RMS 0.802 -> 0.773e-3, jerk p95 0.74 -> 0.62)
-  MDPS_COMP_KF_MIN          = 0.30
-  MDPS_COMP_GMAX_DEG        = 6.0      # 8 -> 6: time with |TX - wheel| > 8 deg 6.7 -> 4.2 % for RMS 2.08 -> 2.14 deg
-  # Phase 59b (report §69, routes 76-79): the 31520b9 drives sat at the GMAX clamp 15-31 % of the time (old builds <= 1 %
-  # at >= 55 km/h): the feedback integrates whenever the wheel does not follow — a light resting hand below the hand
-  # detection, the MDPS ignoring sub-degree requests — and the stored request is released at once (0.15-0.35 Hz weave,
-  # wheel swing 1.9 -> 2.4 deg at 55-90 km/h). The request is kept as cmd + delta; delta (the compensator's own share)
-  #   * leaks toward 0 with LEAK_TAU_S,
-  #   * stops integrating the feedback further in the same direction while the wheel is not moving
-  #     (|wheel rate| < FREEZE_RATE_DPS, |ref - wheel| > FREEZE_ERR_DEG, |delta| > FREEZE_MIN_DEG),
-  #   * is bounded by GMAX_V(speed) instead of the single GMAX_DEG.
-  # Kill (back to 59): LEAK_TAU_S = 1e9, FREEZE = False, GMAX_V = [GMAX_DEG] * 5.
-  MDPS_COMP_LEAK_TAU_S      = 2.0
-  MDPS_COMP_FREEZE          = True
-  MDPS_COMP_FREEZE_RATE_DPS = 1.5
-  MDPS_COMP_FREEZE_ERR_DEG  = 1.0
-  MDPS_COMP_FREEZE_MIN_DEG  = 1.0
-  MDPS_COMP_GMAX_V          = [6.0, 5.0, 4.0, 3.0, 3.0]   # at MDPS_COMP_SPEEDS_KPH (35 / 47.5 / 62.5 / 80 / 100 km/h)
-  MDPS_COMP_WHEEL_RATE_TAU_S = 0.2
-  MDPS_COMP_MIN_KPH         = 30.0     # on at >= MIN, off below MIN - 2
-  MDPS_COMP_RATE_TAU_S      = 0.10     # command-rate low-pass
-  MDPS_COMP_RETURN_RATE     = 2.0      # 1/s, TX back to the command while held
-  MDPS_COMP_HOLD_GAIN       = 0.5      # below this the yield dominates (hands-off ceilings sit at 0.8-0.9)
   # Phase 36: low-speed CURVE-conditional ceiling with a continuous ramp.
   # The 24a hands-off ceiling (0.18 @0 -> 0.30 @20 -> 0.75 @40 km/h) is the
   # measured shake/authority balance on STRAIGHTS, where model churn lives;
@@ -928,60 +757,6 @@ class CarControllerParams:
   CITY_RELEASE_SPEED_KPH       = 45.0
   CITY_RELEASE_HANDS_OFF_NM    = 30.0   # driver-domain
   CITY_RELEASE_RATE_UP         = 0.012  # per frame, post-grip tail beyond 2 deg (was 0.004)
-  # Phase 40 (i6nv3 routes 00000013/e, ROUTE8_REPORT §14-16): stall kick. probes/wire_response.py
-  # (transmitted ADAS_StrAnglReqVal vs measured wheel, hands off, sent gain >= 0.9, 30-60 km/h):
-  # the CCNC MDPS is a RATE follower with almost no position stiffness — the wheel rate is 0.0
-  # deg/s at every error from 0 to 10 deg while the request moves slower than 1 deg/s, 0-0.5
-  # at 1-3 deg/s (the 7a / curve-trim ramp regime), and 3-8 deg/s once the request moves faster
-  # than 6 deg/s; a request moving TOWARD the wheel drags the wheel the same way. MDPS reports
-  # angle mode active, no fault, gain 1.0. So the trims, ramping at 1.8-2 deg/s, never move a
-  # stuck wheel (route 13 seg 13 860-864 s: wire 5.8 -> 8.9 deg at 2 deg/s, wheel 0.6-1.2 for 3 s;
-  # 12-18 s of this per drive, all in moderate curves).
-  # 40 (route 14, 50 kicks): a 1.5 deg / 0.1 s STEP with a 1 deg/s decay was under the MDPS's
-  # threshold — first kick +0.3 deg at 0.5 s / +0.8 at 1 s, follow-ups 0, 25-45 km/h 0 (-0.4 at
-  # 1.5 s: the decay dragged it back); the 9 steps that happened to reach >= 1.8 deg gave +3.4 at
-  # 0.5 s, and a plan-driven SUSTAINED rise (>= 6 deg/s for >= 0.3 s) gave +2.9 (25-45 km/h:
-  # +4.1) at 0.5 s and +7.5 at 1.5 s. Cost: plan-quiet 1-s command swing p95 1.3 -> 2.3 deg.
-  # 40b: RAMP instead of step. On a stall (hands really off, gain >= 0.9, 25-60 km/h,
-  # |apply-wheel| > 2.5 deg, wheel and request quiet for 0.3 s) the request ramps away from the
-  # wheel at STALL_KICK_RAMP_DPS until the wheel has moved STALL_KICK_WHEEL_MOVED_DEG from where the
-  # ramp started (only as much as needed) or STALL_KICK_AMPLITUDE_DEG is reached, holds
-  # STALL_KICK_HOLD_FRAMES, then decays at STALL_KICK_DECAY_DPS (well under the response floor so the
-  # wheel keeps what it gained). A new ramp may start once the offset is below
-  # STALL_KICK_RETRIGGER_DEG and STALL_KICK_MIN_GAP_FRAMES have passed, up to STALL_KICK_MAX_PULSES
-  # per stall episode; the total offset never exceeds STALL_KICK_ENVELOPE_DEG. Nothing is stored:
-  # the offset always decays to 0. Abort (STALL_KICK_ABORT_DECAY_DPS) on a hand (>=
-  # STALL_KICK_ABORT_NM), blinker, lat inactive or a VM-limiter reject; the ramp also stops when the
-  # gap closes below STALL_KICK_RELEASE_DEG. Not replay-verifiable (no MDPS model): judged with
-  # probes/kick_detail.py (wheel trajectory after each kick vs natural rises), the 1-s command swing
-  # p95 and grabs within 2 s of a kick. Kill: STALL_KICK_AMPLITUDE_DEG = 0.0.
-  # 40b RESULT (routes 15/16, 09-14 commutes, 22 ramps of p50 3.6-4.0 deg at 10 deg/s): the wheel still did not
-  # follow (toward-request median +0.1..+0.7 deg at 1.0 s, <= 0 at 1.5 s; the gap 1.5 s later was LARGER,
-  # 5.5 -> 5.9 / 4.1 -> 4.7 deg), the driver answered 77-78 % of the ramps with > 100 Nm within 1 s (route 14
-  # steps: 43 %) and the plan-quiet 1-s command swing p95 went 1.3 (no kick) -> 2.3 (40) -> 3.9 deg (40b). A
-  # request moving on its own against a resting hand is felt as a push and resisted; the plan-driven rises the
-  # design was modelled on come with the road turning. OFF by default (0.0) — the state machine and tests stay
-  # for a hands-off-only controlled test. Re-enable: 3.0.
-  STALL_KICK_AMPLITUDE_DEG   = 0.0   # max excursion of one ramp (OFF, see above; 3.0 = 40b)
-  STALL_KICK_ENVELOPE_DEG    = 4.0   # hard cap on the total offset (ramp on top of a decaying one)
-  STALL_KICK_RAMP_DPS        = 10.0  # request rate while ramping (MDPS follows from ~6 deg/s)
-  STALL_KICK_HOLD_FRAMES     = 20    # 0.2 s hold after the ramp
-  STALL_KICK_DECAY_DPS       = 0.5   # return to the target (under the ~1 deg/s response floor)
-  STALL_KICK_ABORT_DECAY_DPS = 15.0  # hand / blinker / lat off / VM reject: gone in ~0.2 s
-  STALL_KICK_MAX_PULSES      = 3
-  STALL_KICK_RETRIGGER_DEG   = 1.0   # next ramp allowed once the offset has decayed to this
-  STALL_KICK_MIN_GAP_FRAMES  = 100   # ... and at least 1 s after the previous ramp started
-  STALL_KICK_SPEEDS_KPH      = [25.0, 60.0]
-  STALL_KICK_GAP_DEG         = 2.5   # |apply - wheel| to arm
-  STALL_KICK_RELEASE_DEG     = 1.5   # gap below this ends the ramp / episode
-  STALL_KICK_QUIET_FRAMES    = 30    # 0.3 s window for the wheel/request stillness test
-  STALL_KICK_WHEEL_STILL_DEG = 0.3   # wheel moved less than this in the window = stuck
-  STALL_KICK_WHEEL_MOVED_DEG = 0.5   # wheel moved this much since the ramp started = unstuck, stop ramping
-  STALL_KICK_REQ_STILL_DEG   = 1.0   # request moved less than this in the window = quiet (trim ramps qualify)
-  STALL_KICK_HANDS_OFF_NM    = 30.0  # driver-domain, to arm
-  STALL_KICK_ABORT_NM        = 50.0  # driver-domain, to abort
-  STALL_KICK_MIN_GAIN        = 0.9   # sent ACI gain (previous frame)
-  STALL_KICK_EPISODE_RESET_FRAMES = 100  # 1 s without the stall condition resets the ramp budget
   # Phase 31: hold-torque model refit. The Phase 22 linear fit
   # (0.8*(122 + 132*lat_acc), cap 240) had no speed term and a slope the
   # binned corpus contradicts — settling measurement (1.1M hands-off
@@ -1070,14 +845,13 @@ class CarControllerParams:
   # heavy_grip_anchor EPS arm needs override>=0.9 == raw >= 172, far below
   # the EPS-350 flag, so the arm is live (no repeat of the 31b highway
   # inversion); and 31b fix 3 put the EPS OR directly on the low-speed
-  # latch entry. Uncovered residue: real_grip yield depth and trim_gate —
-  # both minor.
+  # latch entry. Uncovered residue: real_grip yield depth — minor.
   # Arm-chain note (verification round): the +3.4pp arm-sustained time is
   # harmless ALONE (anchor_recent arms only on pressed), but driver_pressed
   # is ITSELF a pressed arm and rose 12x (0.05 -> 0.63% machine ON-time).
   # Accepted because the one-shot additionally needs div > 2 deg plus a
-  # release edge, and the crawl consequence (apply := wheel at <5 deg,
-  # curve_trim zeroed when already ~0) is bounded.
+  # release edge, and the crawl consequence (apply := wheel at <5 deg) is
+  # bounded.
   # Rate gate hysteresis (verification round, MANDATORY): the derived wheel
   # rate at 100 Hz with 0.1 deg resolution is quantized in 10 deg/s steps
   # and its still-straight p90 sits exactly ON 10.0 — a single-threshold
@@ -1156,8 +930,7 @@ class CarControllerParams:
   #    to the wheel. Covers the anchor's dropout gaps (pressed hysteresis /
   #    override_factor dips while still holding) where divergence builds.
   #    Fires keep the episode memory (F1 review fix) and are rate-limited
-  #    by a refractory instead of a disarm; each fire zeroes curve_trim so
-  #    the wound trim cannot recreate the dumped divergence (F5).
+  #    by a refractory instead of a disarm.
   #    The anchor_recent gate makes hands-off firing structurally rare:
   #    hands-off anchor engagement needs the EPS flag AND override >= 0.9
   #    simultaneously (hard-curve tail only).

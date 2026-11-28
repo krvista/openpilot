@@ -9,6 +9,8 @@ import pytest
 from phase_tests.harness import Sim
 import opendbc.car.hyundai.carcontroller as ccmod
 
+from phase_tests.harness import pre73_rules  # noqa: F401,E402  (autouse: this module is written against the pre-73 car-controller rules)
+
 KPH = 1 / 3.6
 
 

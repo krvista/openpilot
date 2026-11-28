@@ -124,7 +124,7 @@ def test_no_step_while_the_speed_crosses_the_ramp(fit_only):
 
 def test_state_control_telemetry_bit_and_kill_switch(keep):
   def drive(kph):
-    s = mk_controls(); s._steer_legacy = False
+    s = mk_controls()
     s.sm['carState'].vEgo = kph * KPH
     out = run(s, 400, model(centre=0.30))
     return out[0], bool(s.steer_flags & cd.STEER_FLAG_LANE_FIT), s._lc_f
@@ -137,13 +137,3 @@ def test_state_control_telemetry_bit_and_kill_switch(keep):
   assert old72 == new72 and old38 == new38                            # outside 40-60 km/h nothing changed
   cd.LANE_FIT_SPEED_MS = [40 * KPH, 55 * KPH]
   assert drive(44)[1]
-
-
-def test_legacy_profile_untouched(keep):
-  def drive():
-    s = mk_controls(); s._steer_legacy = True
-    s.sm['carState'].vEgo = 50 * KPH
-    return run(s, 300, model(centre=0.30)), getattr(s, "_lc_f", 0.0)
-  a = drive()
-  cd.LANE_FIT_SPEED_MS = OLD
-  assert drive() == a and a[1] == 0.0

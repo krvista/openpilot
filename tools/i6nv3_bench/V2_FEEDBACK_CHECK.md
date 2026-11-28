@@ -5,7 +5,6 @@
 | 항목 | 식별자 | 코드 | 테스트 |
 |---|---|---|---|
 | 31 유지토크 모델(hold comp: 속도 기준선+lat_acc 포화) | ACIGAIN_HOLD_BASE_SPEEDS_MS, ACIGAIN_HOLD_LAGAIN_V, ACIGAIN_HOLD_LA_BP | 있음 | test_driver_domain 있음 |
-| 34a 저속 명령 LP τ 0.30 | LAT_CMD_SMOOTH_TAU_V  = [0.30, 0.12, 0.08] | 있음 | test_noncontrol_controlsd 있음 |
 | 34b 정지-직진 크립 게이트 (파지 인식 원시 300 Nm) | ACIGAIN_CRAWL_STILL_COMP_NM, CRAWL_STILL_RATE_EXIT | 있음 | TestPhase34CrawlGate 있음 |
 | 34c LDW 깜빡이 쿨다운 5 s | last_blinker_frame) * DT_MDL < 5.0 | 있음 | TestBlinkerCooldownRate 있음 |
 | 35a 고속 파지 즉각·깊은 양보 (용산터널 그립 기준) | ACIGAIN_GRIP_FLOOR35_V, ACIGAIN_GRIP_FULL35_V, ACIGAIN_GRIP_RATE_DN_GATE_NM | 있음 | TestPhase35GripAtSpeed 있음 |

@@ -1,6 +1,6 @@
 """E162 (report §97-98): on the stock-LFA capture drives, what would openpilot's DIRECT path (Phase 72) have asked of the
 MDPS at the same moment on the same road - against what the factory LFA asked and did? Open loop ("shadow"): the real
-controlsd.state_control is replayed over the logged model outputs with lateral forced active (REPLAY_PROFILE=solo), the
+controlsd.state_control is replayed over the logged model outputs with lateral forced active (REPLAY_FORCE_LAT), the
 action re-timed to the solo delay (REPLAY_FORCE_TOLD, modeld's own formula), curvature -> wheel angle by the drives' own
 ratio; that command then runs through the REAL car controller in the solo profile (phase_tests harness: hysteresis band,
 low-speed smoothing, VM limits, TX governor) closed around the relayed MDPS as measured (request -> wheel: pure delay
@@ -9,10 +9,10 @@ The plan is the logged one - it was made while the FACTORY LFA held its own line
 so the shadow request carries a standing pull toward the model's centre; smoothness and timing are what this compares.
 Windows: factory LFA steering, hands off, no blinker within 3 s, >= 20 s long. Per speed band:
   band RMS (deg) at 0.1-0.3 / 0.3-0.6 / 0.6-1.2 / 1.2-2.5 / 2.5-5 Hz of: factory request (0xCB), factory wheel, shadow
-  command (controlsd direct path, as an angle), shadow TX, shadow wheel, and the legacy controlsd chain's command (told
-  delay as logged);
+  command (controlsd direct path, as an angle), shadow TX, shadow wheel;
   request rate p50 / p95 / p99 (deg/s); the shadow wheel's lead over the factory wheel (xcorr, 6 s windows with
   movement; + = openpilot earlier); mean (shadow request - factory wheel).
+(Phase 89: the legacy controlsd chain was removed, and with it this probe's 'legacy command' row.)
 argv: S route [route ...]   env: E162_TOLD (default 0.32)"""
 import os
 import sys
@@ -24,7 +24,7 @@ from phase_tests.harness import Sim  # noqa: E402
 S = sys.argv[1]; TOLD = os.environ.get("E162_TOLD", "0.32")
 MDPS_DELAY_S, MDPS_TAU_S = 0.05, 0.13
 BANDS = [(30, 55), (55, 70), (70, 90), (90, 200)]; FB = [(0.1, 0.3), (0.3, 0.6), (0.6, 1.2), (1.2, 2.5), (2.5, 5.0)]
-SIG = ["factory request", "factory wheel", "shadow command", "shadow TX", "shadow wheel", "legacy command"]
+SIG = ["factory request", "factory wheel", "shadow command", "shadow TX", "shadow wheel"]
 
 
 def band_power(x, lo, hi, W=1024):
@@ -38,7 +38,7 @@ def band_power(x, lo, hi, W=1024):
 
 def chain(cmd, v_kph, w0):
   """the real car controller (solo profile, factory LFA off) closed around the relayed MDPS -> (TX, wheel)"""
-  sim = Sim(solo=True); n = len(cmd); tx = np.empty(n); wh = np.empty(n); w = float(w0)
+  sim = Sim(); n = len(cmd); tx = np.empty(n); wh = np.empty(n); w = float(w0)
   a = 0.01 / (MDPS_TAU_S + 0.01); k = int(round(MDPS_DELAY_S / 0.01)); hist = [float(w0)] * (k + 1)
   for i in range(n):
     sim.step(v=float(v_kph[i]) / 3.6, tq=0.0, wheel=w, cmd=float(cmd[i]), lat_active=True, lfa_state=0, gw_req_angle=hist[-1])
@@ -70,17 +70,15 @@ for r in sys.argv[2:]:
       a = None
   for a, b in runs:
     os.environ['REPLAY_FORCE_LAT'] = '1'
-    os.environ['REPLAY_PROFILE'] = 'solo'; os.environ['REPLAY_FORCE_TOLD'] = TOLD
+    os.environ['REPLAY_FORCE_TOLD'] = TOLD
     D = R.replay("new", T[a], T[b - 1])
-    os.environ['REPLAY_PROFILE'] = 'legacy'; os.environ.pop('REPLAY_FORCE_TOLD'); os.environ['REPLAY_MODEL_DELAY'] = 'log'
-    L = R.replay("new", T[a], T[b - 1])
-    m = min(len(D), len(L), b - a)
+    m = min(len(D), b - a)
     sl = slice(a, a + m); dp = np.interp(v[sl], *R.DEG_PER) * 1e3
     off = float(np.median(d['mdps_ang'][sl] + dp * d['k_meas'][sl]))          # wheel = -dp * k + offset
-    req_d = -np.array([x[1] for x in D[:m]]) * dp + off; req_l = -np.array([x[1] for x in L[:m]]) * dp + off
+    req_d = -np.array([x[1] for x in D[:m]]) * dp + off
     tx_d, wh_d = chain(req_d, v[sl], d['mdps_ang'][a])
     sig = {"factory request": d['cb_req'][sl], "factory wheel": d['mdps_ang'][sl], "shadow command": req_d,
-           "shadow TX": tx_d, "shadow wheel": wh_d, "legacy command": req_l}
+           "shadow TX": tx_d, "shadow wheel": wh_d}
     for bi, (lo, hi) in enumerate(BANDS):
       W = 600
       for w0 in range(0, m - 1024, 512):

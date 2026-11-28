@@ -9,7 +9,7 @@ d = dict(np.load(f"{S}/r50/000000a7.npz", allow_pickle=True)); T = d['T']; n = l
 g = np.load(f"{S}/pk/000000a7.npy"); tg = g[:, 0] - g[0, 0] + T[0]; fixseen = np.maximum.accumulate(g[:, 3] > 0)
 fs = np.interp(T, tg, fixseen.astype(float)) > 0.5
 GEAR = {1: 'park', 2: 'drive', 3: 'neutral', 4: 'reverse'}
-s = Sim(solo=True); park = np.zeros(n, bool); act = np.zeros(n, bool)
+s = Sim(); park = np.zeros(n, bool); act = np.zeros(n, bool)
 for i in range(n):
     s.cc._cc_sp.mads.enabled = bool(lat[i])
     s.step(v=v[i] / 3.6, tq=float(d['tq_s'][i]), wheel=float(d['ang'][i]), cmd=float(d['apply'][i]), lat_active=bool(lat[i]),

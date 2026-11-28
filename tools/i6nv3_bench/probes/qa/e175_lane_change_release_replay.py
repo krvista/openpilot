@@ -5,7 +5,7 @@ from phase_tests.harness import Sim
 from opendbc.car.hyundai.values import CarControllerParams as P
 S='/tmp/claude-0/-home-user-openpilot/b24e552a-84af-537a-8cbb-81fda69ed9c1/scratchpad'
 def run(d,a,b,frames):
-  P.LC_RELEASE_FRAMES=frames; sim=Sim(solo=True); out=[]
+  P.LC_RELEASE_FRAMES=frames; sim=Sim(); out=[]
   for j in range(a,b):
     sim.step(v=d['v'][j]/3.6,tq=d['tq_s'][j],wheel=d['ang'][j],cmd=d['apply'][j],lat_active=bool(d['lat'][j]),pressed=bool(d['pressed'][j]),
              blinker=bool(d['lb'][j]),blinker_right=bool(d['rb'][j]),cc_blinker_left=bool(d['lcs'][j]>0 and d['lb'][j]),cc_blinker_right=bool(d['lcs'][j]>0 and d['rb'][j]),
