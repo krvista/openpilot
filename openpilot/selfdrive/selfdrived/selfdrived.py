@@ -54,6 +54,43 @@ SAFETY_MODE_GRACE_AFTER_INIT_S = 4.0
 # Phase 81b (report 112): the panda's 1 Hz RX check can land on the safety-mode switch at boot (a9 11.64-12.56 s) - same
 # grace as the mode mismatch. Kill: False.
 RX_CHECK_BOOT_GRACE = True
+# Phase 86 (routes b4 / b5 / aa / ac, report 118.2 / 119): 8 of the 15 "take control / turn exceeds limit" alerts came
+# while the driver was already steering across the lane with the blinker on. The lane change waits in preLaneChange
+# (the confirming nudge needs steeringPressed = 350, the driver pushes 150-349, so the 2 s "recent press" guard below
+# never starts), the model has no lane-change desire and asks to steer back (1-2 m/s2), the car controller yields
+# to the blinker (authority 0.15-0.45) and the unmet request counts as saturation. A driver who holds the column
+# torque toward the blinker side is steering: no steerSaturated while one blinker is on, the state is preLaneChange
+# and that torque was >= LC_PUSH_TORQUE for LC_PUSH_FRAMES frames in a row within the last LC_PUSH_HOLD_S (he eases
+# off or counter-steers once across while the request is still unmet: 0.29-1.12 s in the eight cases; 150 for 8 frames
+# is the "driver involved" measure of Phase 85, a road impact changes sign within 2-3 samples). Only the event: lane
+# change, steering and lac.saturated are untouched, and with hands off the alert fires as before. Kill: False.
+LC_PUSH_SAT_EXEMPT = True
+LC_PUSH_TORQUE = 150.0     # carState.steeringTorque (column torque, + = left)
+LC_PUSH_FRAMES = 8
+LC_PUSH_HOLD_S = 1.5
+
+
+class BlinkerPush:
+  """Phase 86: the driver pushed toward the blinker side during preLaneChange within the last LC_PUSH_HOLD_S."""
+  def __init__(self):
+    self.count = 0      # frames in a row with the torque toward the blinker side
+    self.age = -1       # frames since the last qualified push (-1 = none)
+    self.side = 0.0     # blinker side of the count (+ = left)
+
+  def update(self, left_blinker: bool, right_blinker: bool, steering_torque: float, pre_lane_change: bool) -> bool:
+    side = (1.0 if left_blinker else 0.0) - (1.0 if right_blinker else 0.0)   # both (hazard) or none -> 0
+    if not LC_PUSH_SAT_EXEMPT or side == 0.0 or side != self.side or not pre_lane_change:
+      self.count = 0
+      self.age = -1
+      self.side = side
+      if not LC_PUSH_SAT_EXEMPT or side == 0.0 or not pre_lane_change:
+        return False
+    self.count = self.count + 1 if steering_torque * side >= LC_PUSH_TORQUE else 0
+    if self.count >= LC_PUSH_FRAMES:
+      self.age = 0
+    elif self.age >= 0:
+      self.age += 1
+    return 0 <= self.age * DT_CTRL < LC_PUSH_HOLD_S
 
 
 def unused_lateral_services(CP) -> list[str]:
@@ -178,6 +215,7 @@ class SelfdriveD(CruiseHelper):
     self.mismatch_counter = 0
     self.cruise_mismatch_counter = 0
     self.last_steering_pressed_frame = 0
+    self.lc_push = BlinkerPush()   # Phase 86
     self.distance_traveled = 0
     self.last_functional_fan_frame = 0
     self.events_prev = []
@@ -553,6 +591,9 @@ class SelfdriveD(CruiseHelper):
     recent_steer_pressed = (self.sm.frame - self.last_steering_pressed_frame)*DT_CTRL < 2.0
     controlstate = self.sm['controlsState']
     lac = getattr(controlstate.lateralControlState, controlstate.lateralControlState.which())
+    # Phase 86: the driver is already steering toward the blinker side while the lane change waits for its nudge
+    lc_push = self.lc_push.update(CS.leftBlinker, CS.rightBlinker, CS.steeringTorque,
+                                  self.sm['modelV2'].meta.laneChangeState == LaneChangeState.preLaneChange)
     if lac.active and not recent_steer_pressed and not self.CP.notCar:
       clipped_speed = max(CS.vEgo, 0.3)
       actual_lateral_accel = controlstate.curvature * (clipped_speed**2)
@@ -560,7 +601,7 @@ class SelfdriveD(CruiseHelper):
       undershooting = abs(desired_lateral_accel) / abs(1e-3 + actual_lateral_accel) > 1.2
       turning = abs(desired_lateral_accel) > 1.0
       # TODO: lac.saturated includes speed and other checks, should be pulled out
-      if undershooting and turning and lac.saturated:
+      if undershooting and turning and lac.saturated and not lc_push:
         self.events.add(EventName.steerSaturated)
 
     # Check for FCW
