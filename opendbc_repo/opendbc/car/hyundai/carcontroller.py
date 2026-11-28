@@ -439,22 +439,16 @@ def sp_smooth_angle(v_ego_raw: float, apply_angle: float, apply_angle_last: floa
   grows past a jitter floor: small |gap| (oscillation) keeps the heavy speed-alpha
   (저속 떨림 absorption), a sustained/large |gap| (real maneuver) passes through.
 
-  Phase 6g-2: (a) cap the released alpha at SMOOTHING_ANGLE_RELEASE_MAX so a command
-  overshoot is not slammed to the wheel ("휙"); (b) a low-speed micro-deadband holds
-  the angle for sub-perceptible command changes, killing the ~25 km/h 5-7 Hz dither.
+  Phase 6g-2: cap the released alpha at SMOOTHING_ANGLE_RELEASE_MAX so a command
+  overshoot is not slammed to the wheel ("휙").
 
-  Phase 6h-1: jitter absorption moved upstream into controlsd's speed-dependent
-  curvature LP with matched lead. This EMA is now a light linear filter
-  (alpha >= 0.3) plus a CAN-LSB deadband (0.1 deg); the gap-release path is
-  disabled via SMOOTHING_ANGLE_RELEASE_HI_DEG = 1e6 (constants-only switch —
-  the code path is kept for rollback).
+  Phase 6h-1: the gap-release path is disabled via SMOOTHING_ANGLE_RELEASE_HI_DEG = 1e6
+  (constants-only switch), so this is a light linear filter (alpha >= 0.3).
+
+  Phase 91: the low-speed 0.1 deg hold (commands closer than 0.1 deg to the last one were not
+  sent below 40 km/h) is gone; every command change goes through the EMA.
   """
-  gap_signed = apply_angle - apply_angle_last
-  gap = abs(gap_signed)
-  # (6g-2c) low-speed micro-jitter deadband: ignore sub-threshold dither.
-  if (v_ego_raw < CarControllerParams.SMOOTHING_ANGLE_DEADBAND_MAX_VEGO
-      and gap < CarControllerParams.SMOOTHING_ANGLE_DEADBAND_DEG):
-    return apply_angle_last
+  gap = abs(apply_angle - apply_angle_last)
   adjusted_alpha = _interp(v_ego_raw, CarControllerParams.SMOOTHING_ANGLE_VEGO_MATRIX,
                               CarControllerParams.SMOOTHING_ANGLE_ALPHA_MATRIX)
   adjusted_alpha = float(min(float(adjusted_alpha), 1.))

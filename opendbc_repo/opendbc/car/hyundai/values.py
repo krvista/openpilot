@@ -78,13 +78,6 @@ class CarControllerParams:
   # grabbed) hit the wheel undamped. Cap the released alpha so a fast catch-up keeps
   # ~30% damping (firm, not a "휙"). Kill switch: RELEASE_MAX = 1.0 (= 6g-1).
   SMOOTHING_ANGLE_RELEASE_MAX = 0.7
-  # Phase 6g-2 introduced a low-speed micro-jitter deadband at 0.4 deg.
-  # Phase 6h-1: re-sim on the deployed 6g-1 streams measured the 0.4 deg deadband
-  # at +11% p95 tracking error / +44% bias for ZERO smoothness gain (2-8 Hz RMS
-  # unchanged) — the dither absorption now lives upstream in controlsd tau(v).
-  # Shrink to the CAN LSB (0.1 deg). Kill switch: 0.0 (off) / 0.4 (= 6g-2).
-  SMOOTHING_ANGLE_DEADBAND_DEG = 0.1
-  SMOOTHING_ANGLE_DEADBAND_MAX_VEGO = 11.0  # m/s (~40 km/h); deadband only below this
 
   # Phase 5: driver-override thresholds for CANFD_LKA_STEER_MSG_ALT angle-control.
   # Problem observed in routes 42/43: at ~30 km/h, driver turning wheel >90°

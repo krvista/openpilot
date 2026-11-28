@@ -94,8 +94,8 @@ class TestACIGain:
 
 
 class TestSmoothAngle:
-  def test_deadband_holds(self):
-    assert sp_smooth_angle(5.0, 10.05, 10.0) == 10.0
+  def test_small_change_moves(self):   # Phase 91: no 0.1 deg hold
+    assert 10.0 < sp_smooth_angle(5.0, 10.05, 10.0) < 10.05
 
   def test_output_between_last_and_target(self):
     rng = random.Random(2)
